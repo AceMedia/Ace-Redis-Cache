@@ -971,7 +971,7 @@ class AceRedisCache {
                     <tr><th>Redis Port</th>
                         <td>
                             <input type="number" name="ace_redis_cache_settings[port]" value="<?php echo esc_attr($opts['port']); ?>" placeholder="6379">
-                            <p class="description">Standard Redis: <code>6379</code>, AWS ElastiCache TLS: <code>6380</code></p>
+                            <p class="description">Standard Redis & AWS ElastiCache (TLS or plain): <code>6379</code></p>
                         </td>
                     </tr>
                     <tr><th>Redis Password</th><td><input type="password" name="ace_redis_cache_settings[password]" value="<?php echo esc_attr($opts['password']); ?>" placeholder="Optional - leave blank for no auth"></td></tr>
@@ -983,7 +983,7 @@ class AceRedisCache {
                                 • <strong>Required</strong> for AWS ElastiCache/Valkey with "encryption in transit"<br>
                                 • Automatically enables SNI (Server Name Indication) for proper certificate validation<br>
                                 • Do not prefix the hostname with <code>tls://</code> — use the TLS checkbox instead<br>
-                                • For AWS: Use port 6380 (TLS) instead of 6379 (plain)
+                                • For AWS: Use port 6379 (TLS is negotiated by the client). Do not use 6380.
                             </p>
                         </td>
                     </tr>
@@ -2273,19 +2273,30 @@ class AceRedisCache {
             } else {
                 // TCP connection with optional TLS
                 if ($enable_tls || stripos($host, 'tls://') === 0) {
-                    // TLS/SSL connection with SNI support (AWS Valkey/ElastiCache compatible)
-                    $clean_host = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
-                    error_log('Ace Redis Cache: Attempting TLS connection to: ' . $clean_host . ':' . $port . ' with SNI (timeout: ' . $connect_timeout . 's)');
-                    
-                    // Stronger TLS handshake with SNI support
-                    $tls_options = [
-                        'tls' => [
-                            'peer_name' => $clean_host  // SNI support for proper TLS handshake
+                    // Force TLS by using the scheme and pass SNI via the *ssl* context
+                    $clean_host  = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
+                    $scheme_host = 'tls://' . $clean_host;
+
+                    $ssl_ctx = [
+                        'ssl' => [
+                            'peer_name' => $clean_host, // SNI
+                            // leave verification ON and use system CAs
+                            // (php.ini already points cafile to /etc/ssl/certs/ca-certificates.crt)
                         ]
                     ];
-                    error_log('Ace Redis Cache: TLS options with SNI: ' . json_encode($tls_options));
-                    
-                    $connect_result = $redis->pconnect($clean_host, $port, $connect_timeout, $this->redis_persistent_id, 0, 0, $tls_options);
+
+                    error_log('Ace Redis Cache: Attempting TLS connection to: ' . $clean_host . ':' . $port . ' with SNI (timeout: ' . $connect_timeout . 's)');
+
+                    $connect_result = $redis->pconnect(
+                        $scheme_host,
+                        $port,
+                        $connect_timeout,
+                        $this->redis_persistent_id,
+                        0,
+                        0,
+                        $ssl_ctx
+                    );
+
                     error_log('Ace Redis Cache: TLS pconnect result: ' . ($connect_result ? 'SUCCESS' : 'FAILED'));
                 } else {
                     // Standard TCP connection

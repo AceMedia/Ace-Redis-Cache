@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Ace Redis Cache
  * Description: Smart Redis-powered caching with WordPress Block API support and configurable exclusions for any plugins.
- * Version: 0.4.0
+ * Version: 0.4.1
  * Author: Ace Media
  */
 
@@ -31,7 +31,7 @@ class AceRedisCache {
             'ttl' => 3600, // Increased default TTL to 1 hour
             'mode' => 'full', // 'full' or 'object'
             'enabled' => 1,
-            'enable_tls' => 0, // Enable TLS/SSL connection (for AWS Valkey/ElastiCache)
+            'enable_tls' => 1, // Enable TLS by default for AWS Valkey/ElastiCache
             'enable_block_caching' => 0, // Enable WordPress Block API caching
             'custom_cache_exclusions' => '', // Custom cache key exclusions
             'custom_transient_exclusions' => '', // Custom transient exclusions
@@ -41,6 +41,9 @@ class AceRedisCache {
 
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
+        
+        // Version 0.4.1 update notice
+        add_action('admin_notices', [$this, 'show_version_notice']);
         
         // Clear cache when settings are updated
         add_action('update_option_ace_redis_cache_settings', [$this, 'clear_all_cache_on_settings_change'], 10, 2);
@@ -172,6 +175,8 @@ class AceRedisCache {
                 'core/rss',              // RSS - External dynamic content
                 'core/search',           // Search - User input dependent
                 'core/query',            // Query Loop - CRITICAL: Don't cache this!
+                'core/post-template',    // Post Template - Dynamic block safety net
+                'core/query-loop',       // Query Loop - Additional safety net
                 'core/query-pagination', // Query Pagination - Dynamic based on query results
                 'core/query-pagination-next',     // Next page link - Dynamic
                 'core/query-pagination-numbers',  // Page numbers - Dynamic
@@ -204,7 +209,6 @@ class AceRedisCache {
      * Retry wrapper for Redis operations with automatic reconnection
      */
     private function rtry(callable $fn) {
-        error_log('Ace Redis Cache: rtry() operation started');
         // Set maximum operation time to prevent 504 gateway timeout
         $max_operation_time = 15; // 15 seconds max to stay well below typical 30s gateway timeout
         $start_time = microtime(true);
@@ -216,8 +220,6 @@ class AceRedisCache {
                 throw new RedisException('No Redis connection available');
             }
             
-            error_log('Ace Redis Cache: rtry() - Got Redis connection, executing operation');
-            
             // Check if we're already near timeout before attempting operation
             $elapsed = microtime(true) - $start_time;
             if ($elapsed > ($max_operation_time * 0.8)) {
@@ -228,7 +230,6 @@ class AceRedisCache {
             
             // Execute the Redis operation with timeout monitoring
             $result = $this->execute_with_timeout($fn, $redis, $max_operation_time - $elapsed);
-            error_log('Ace Redis Cache: rtry() - Operation completed successfully');
             return $result;
             
         } catch (RedisException $e) {
@@ -241,31 +242,26 @@ class AceRedisCache {
                 throw new RedisException('Timeout prevention - no retry');
             }
             
-            error_log('Ace Redis Cache: rtry() - Attempting retry with reconnect');
-            // Close existing connection and force reconnect
-            $this->close_redis_connection();
-            
-            try {
-                $redis = $this->get_redis_connection(true); // Force reconnect
-                if (!$redis) {
-                    error_log('Ace Redis Cache: rtry() - Reconnection failed');
-                    throw new RedisException('Reconnection failed');
-                }
+                error_log('Ace Redis Cache: rtry() - Attempting retry with reconnect');
+                // Close existing connection and force reconnect
+                $this->close_redis_connection();
                 
-                error_log('Ace Redis Cache: rtry() - Reconnection successful, executing retry');
-                
-                // Add retry header for debugging
-                if (!is_admin()) {
-                    header('X-Redis-Retry: 1');
-                }
-                
-                // Execute retry with remaining time
-                $remaining_time = $max_operation_time - (microtime(true) - $start_time);
-                $result = $this->execute_with_timeout($fn, $redis, $remaining_time);
-                error_log('Ace Redis Cache: rtry() - Retry operation completed successfully');
-                return $result;
-                
-            } catch (Exception $retry_e) {
+                try {
+                    $redis = $this->get_redis_connection(true); // Force reconnect
+                    if (!$redis) {
+                        error_log('Ace Redis Cache: rtry() - Reconnection failed');
+                        throw new RedisException('Reconnection failed');
+                    }
+                    
+                    // Add retry header for debugging
+                    if (!is_admin()) {
+                        header('X-Redis-Retry: 1');
+                    }
+                    
+                    // Execute retry with remaining time
+                    $remaining_time = $max_operation_time - (microtime(true) - $start_time);
+                    $result = $this->execute_with_timeout($fn, $redis, $remaining_time);
+                    return $result;            } catch (Exception $retry_e) {
                 $total_time = microtime(true) - $start_time;
                 error_log("Redis retry failed ({$total_time}s): " . $retry_e->getMessage());
                 
@@ -858,6 +854,40 @@ class AceRedisCache {
         add_options_page('Ace Redis Cache', 'Ace Redis Cache', 'manage_options', 'ace-redis-cache', [$this, 'settings_page']);
     }
 
+    public function show_version_notice() {
+        $current_user = wp_get_current_user();
+        $notice_key = 'ace_redis_cache_0_4_1_notice_dismissed_' . $current_user->ID;
+        
+        // Don't show if already dismissed
+        if (get_user_meta($current_user->ID, $notice_key, true)) {
+            return;
+        }
+        
+        // Only show on admin pages
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        
+        echo '<div class="notice notice-info is-dismissible" data-notice="' . esc_attr($notice_key) . '">';
+        echo '<p><strong>Ace Redis Cache v0.4.1 Update:</strong> ';
+        echo 'New TLS/SNI support for AWS ElastiCache, improved timeout handling, and enhanced block exclusions for Query Loops. ';
+        echo '<a href="' . admin_url('options-general.php?page=ace-redis-cache') . '">Review Settings</a> | ';
+        echo '<a href="#" onclick="jQuery(this).closest(\'.notice\').fadeOut(); jQuery.post(ajaxurl, {action: \'dismiss_ace_redis_notice\', notice: \'' . esc_js($notice_key) . '\', nonce: \'' . wp_create_nonce('dismiss_notice') . '\'});">Dismiss</a>';
+        echo '</p></div>';
+        
+        // Add AJAX handler for dismissal
+        add_action('wp_ajax_dismiss_ace_redis_notice', function() {
+            if (!wp_verify_nonce($_POST['nonce'], 'dismiss_notice')) {
+                wp_die('Invalid nonce');
+            }
+            
+            $notice_key = sanitize_text_field($_POST['notice']);
+            $current_user = wp_get_current_user();
+            update_user_meta($current_user->ID, $notice_key, '1');
+            wp_send_json_success();
+        });
+    }
+
     public function register_settings() {
         register_setting('ace_redis_cache_group', 'ace_redis_cache_settings');
     }
@@ -928,13 +958,35 @@ class AceRedisCache {
                 <?php $opts = get_option('ace_redis_cache_settings', $this->settings); ?>
                 <table class="form-table">
                     <tr><th>Enable Cache</th><td><input type="checkbox" name="ace_redis_cache_settings[enabled]" value="1" <?php checked($opts['enabled'], 1); ?>></td></tr>
-                    <tr><th>Redis Host</th><td><input type="text" name="ace_redis_cache_settings[host]" value="<?php echo esc_attr($opts['host']); ?>"></td></tr>
-                    <tr><th>Redis Port</th><td><input type="number" name="ace_redis_cache_settings[port]" value="<?php echo esc_attr($opts['port']); ?>"></td></tr>
-                    <tr><th>Redis Password</th><td><input type="password" name="ace_redis_cache_settings[password]" value="<?php echo esc_attr($opts['password']); ?>"></td></tr>
+                    <tr><th>Redis Host</th>
+                        <td>
+                            <input type="text" name="ace_redis_cache_settings[host]" value="<?php echo esc_attr($opts['host']); ?>" placeholder="localhost">
+                            <p class="description">
+                                <strong>Examples:</strong><br>
+                                • Local Redis: <code>localhost</code> or <code>127.0.0.1</code><br>
+                                • AWS ElastiCache: <code>clustercfg.my-cache.abc123.usw2.cache.amazonaws.com</code><br>
+                                • Unix Socket: <code>/var/run/redis/redis-server.sock</code><br>
+                                <strong>Note:</strong> For TLS connections, just enter the hostname - don't add <code>tls://</code> prefix (use the TLS checkbox below instead).
+                            </p>
+                        </td>
+                    </tr>
+                    <tr><th>Redis Port</th>
+                        <td>
+                            <input type="number" name="ace_redis_cache_settings[port]" value="<?php echo esc_attr($opts['port']); ?>" placeholder="6379">
+                            <p class="description">Standard Redis: <code>6379</code>, AWS ElastiCache TLS: <code>6380</code></p>
+                        </td>
+                    </tr>
+                    <tr><th>Redis Password</th><td><input type="password" name="ace_redis_cache_settings[password]" value="<?php echo esc_attr($opts['password']); ?>" placeholder="Optional - leave blank for no auth"></td></tr>
                     <tr><th>Enable TLS/SSL</th>
                         <td>
                             <input type="checkbox" name="ace_redis_cache_settings[enable_tls]" value="1" <?php checked($opts['enable_tls'] ?? 0, 1); ?>>
-                            <p class="description">Enable TLS/SSL encryption for secure Redis connections. Required for AWS ElastiCache/Valkey with encryption in transit. Use this instead of adding <code>tls://</code> to the hostname.</p>
+                            <p class="description">
+                                <strong>Enable TLS encryption for secure Redis connections.</strong><br>
+                                • <strong>Required</strong> for AWS ElastiCache/Valkey with "encryption in transit"<br>
+                                • Automatically enables SNI (Server Name Indication) for proper certificate validation<br>
+                                • Use this checkbox instead of adding <code>tls://</code> to the hostname above<br>
+                                • For AWS: Use port 6380 (TLS) instead of 6379 (plain)
+                            </p>
                         </td>
                     </tr>
                     <tr><th>Cache TTL (seconds)</th><td><input type="number" name="ace_redis_cache_settings[ttl]" value="<?php echo esc_attr($opts['ttl']); ?>"></td></tr>
@@ -1282,12 +1334,34 @@ class AceRedisCache {
         }
         
         try {
+            $start_time = microtime(true);
+            
             if (!$this->get_redis_connection()) {
                 wp_send_json_success(['status'=>'Not connected','size'=>0,'size_kb'=>0]);
                 return;
             }
 
+            // Calculate connection latency
+            $connection_time = microtime(true) - $start_time;
+            $latency_ms = round($connection_time * 1000, 1);
+            
+            // Base status with TLS info
             $status = 'Connected';
+            if (!empty($settings['enable_tls'])) {
+                $status .= ' (TLS)';
+                if ($latency_ms > 50) {
+                    $status .= ' - Check TLS overhead';
+                }
+            }
+            
+            // Add latency hint
+            if ($latency_ms > 100) {
+                $status .= ' - High latency (' . $latency_ms . 'ms)';
+            } else if ($latency_ms > 50) {
+                $status .= ' - Moderate latency (' . $latency_ms . 'ms)';
+            } else if ($latency_ms < 10) {
+                $status .= ' - Fast (' . $latency_ms . 'ms)';
+            }
             
             // Count different cache types using scan instead of keys
             $page_keys = $this->scan_keys($this->cache_prefix . '*');
@@ -1337,12 +1411,21 @@ class AceRedisCache {
             if (!empty($performance_info)) {
                 $debug_info .= " | " . $performance_info;
             }
+            
+            // Add TLS-specific debug info
+            if (!empty($settings['enable_tls'])) {
+                $debug_info .= " | TLS: Enabled";
+                if ($latency_ms > 50) {
+                    $debug_info .= " (High latency - consider TLS optimization)";
+                }
+            }
 
             wp_send_json_success([
                 'status' => $status,
                 'size'   => $total_cache_size,
                 'size_kb' => $size_kb,
                 'debug_info' => $debug_info,
+                'latency_ms' => $latency_ms
             ]);
         } catch (Exception $e) {
             wp_send_json_success(['status'=>'Error: ' . $e->getMessage(),'size'=>0,'size_kb'=>0]);
@@ -2127,6 +2210,7 @@ class AceRedisCache {
             $is_under_load = $this->is_under_load();
             $recent_issues = $this->has_recent_redis_issues();
             
+            // Set explicit timeouts for faster fail semantics
             if ($is_under_load || $recent_issues) {
                 // Very aggressive timeouts when under load
                 $connect_timeout = is_admin() ? 1.5 : 1.0;
@@ -2148,12 +2232,17 @@ class AceRedisCache {
             } else {
                 // TCP connection with optional TLS
                 if ($enable_tls || stripos($host, 'tls://') === 0) {
-                    // TLS/SSL connection (AWS Valkey/ElastiCache compatible)
+                    // TLS/SSL connection with SNI support (AWS Valkey/ElastiCache compatible)
                     $clean_host = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
-                    error_log('Ace Redis Cache: Attempting TLS connection to: ' . $clean_host . ':' . $port . ' (timeout: ' . $connect_timeout . 's)');
+                    error_log('Ace Redis Cache: Attempting TLS connection to: ' . $clean_host . ':' . $port . ' with SNI (timeout: ' . $connect_timeout . 's)');
                     
-                    $tls_options = ['tls' => []];
-                    error_log('Ace Redis Cache: TLS options: ' . json_encode($tls_options));
+                    // Stronger TLS handshake with SNI support
+                    $tls_options = [
+                        'tls' => [
+                            'peer_name' => $clean_host  // SNI support for proper TLS handshake
+                        ]
+                    ];
+                    error_log('Ace Redis Cache: TLS options with SNI: ' . json_encode($tls_options));
                     
                     $connect_result = $redis->pconnect($clean_host, $port, $connect_timeout, $this->redis_persistent_id, 0, 0, $tls_options);
                     error_log('Ace Redis Cache: TLS pconnect result: ' . ($connect_result ? 'SUCCESS' : 'FAILED'));
@@ -2198,20 +2287,14 @@ class AceRedisCache {
                 error_log('Ace Redis Cache: No password provided, skipping auth');
             }
 
-            // Test connection with ping for better compatibility
+            // Test connection with ping/info compatibility
             error_log('Ace Redis Cache: Testing connection with ping/info');
             try {
-                if (!$redis->ping()) {
-                    error_log('Ace Redis Cache: Ping failed');
-                    $this->record_redis_issue('connection_failures');
-                    $redis->close();
-                    return false;
-                }
-                error_log('Ace Redis Cache: Ping successful');
+                $redis->ping(); // Immediate ping test
                 error_log('Ace Redis Cache: Ping successful');
             } catch (Exception $e) {
                 error_log('Ace Redis Cache: Ping failed with exception: ' . $e->getMessage());
-                // Fallback to INFO command for Valkey compatibility
+                // Fallback to INFO command exactly once for Valkey compatibility
                 try {
                     error_log('Ace Redis Cache: Trying INFO command as fallback');
                     $info = $redis->info();
@@ -2221,7 +2304,7 @@ class AceRedisCache {
                         $redis->close();
                         return false;
                     }
-                    error_log('Ace Redis Cache: INFO command successful - got ' . count($info) . ' info items');
+                    error_log('Ace Redis Cache: INFO command successful - connection verified');
                 } catch (Exception $info_e) {
                     error_log('Ace Redis Cache: INFO command failed with exception: ' . $info_e->getMessage());
                     $this->record_redis_issue('connection_failures');
@@ -2230,13 +2313,18 @@ class AceRedisCache {
                 }
             }
             
-            // Check if connection took too long (potential timeout issue)
+            // Check if connection or ping/info exceeded timeout
             $connect_time = microtime(true) - $start_time;
             error_log('Ace Redis Cache: Total connection time: ' . round($connect_time, 3) . 's');
-            if ($connect_time > ($connect_timeout * 0.8)) {
+            if ($connect_time > $connect_timeout) {
+                $this->record_redis_issue('timeouts');
+                error_log("Ace Redis Cache: Connection/ping exceeded timeout ({$connect_time}s), opening circuit breaker");
+                if (!is_admin()) {
+                    $this->open_circuit_breaker();
+                }
+            } elseif ($connect_time > ($connect_timeout * 0.8)) {
                 $this->record_redis_issue('slow_operations');
-                error_log("Ace Redis Cache: Connection slow ({$connect_time}s), opening circuit breaker");
-                $this->open_circuit_breaker();
+                error_log("Ace Redis Cache: Connection slow ({$connect_time}s), monitoring for issues");
             }
             
             error_log('Ace Redis Cache: Connection established successfully');

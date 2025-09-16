@@ -41,6 +41,7 @@ class AceRedisCache {
         add_action('wp_ajax_ace_redis_cache_status', [$this, 'ajax_status']);
         add_action('wp_ajax_ace_redis_cache_flush', [$this, 'ajax_flush']);
         add_action('wp_ajax_ace_redis_cache_flush_blocks', [$this, 'ajax_flush_blocks']);
+        add_action('wp_ajax_ace_redis_cache_test_write', [$this, 'ajax_test_write']);
 
         // Admin scripts
         add_action('admin_enqueue_scripts', [$this, 'admin_enqueue']);
@@ -398,6 +399,7 @@ class AceRedisCache {
             
             <div id="ace-redis-cache-status" style="margin-bottom:1em;">
                 <button id="ace-redis-cache-test-btn" class="button">Test Redis Connection</button>
+                <button id="ace-redis-cache-test-write-btn" class="button button-secondary">Test Write/Read</button>
                 <button id="ace-redis-cache-flush-btn" class="button">Flush All Cache</button>
                 <button id="ace-redis-cache-flush-blocks-btn" class="button button-secondary">Flush Block Cache Only</button>
                 <span id="ace-redis-cache-connection"></span>
@@ -549,13 +551,43 @@ class AceRedisCache {
             // Existing connection test and flush functionality
             $('#ace-redis-cache-test-btn').on('click', function(e) {
                 e.preventDefault();
+                $(this).text('Checking...');
                 $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_status', nonce:AceRedisCacheAjax.nonce}, function(res) {
+                    $('#ace-redis-cache-test-btn').text('Test Redis Connection');
                     if(res.success) {
                         $('#ace-redis-cache-connection').text(res.data.status);
-                        $('#ace-redis-cache-size').text(res.data.size + ' keys (' + res.data.size_kb + ' KB)');
+                        var sizeText = res.data.size + ' keys (' + res.data.size_kb + ' KB)';
+                        if (res.data.debug_info) {
+                            sizeText += ' - ' + res.data.debug_info;
+                        }
+                        $('#ace-redis-cache-size').text(sizeText);
+                    } else {
+                        $('#ace-redis-cache-connection').text('Connection failed');
+                        $('#ace-redis-cache-size').text('0 keys (0 KB)');
                     }
+                }).fail(function() {
+                    $('#ace-redis-cache-test-btn').text('Test Redis Connection');
+                    $('#ace-redis-cache-connection').text('AJAX failed - check console');
+                    $('#ace-redis-cache-size').text('0 keys (0 KB)');
                 });
             });
+            
+            $('#ace-redis-cache-test-write-btn').on('click', function(e) {
+                e.preventDefault();
+                $(this).text('Testing...');
+                $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_test_write', nonce:AceRedisCacheAjax.nonce}, function(res) {
+                    $('#ace-redis-cache-test-write-btn').text('Test Write/Read');
+                    if(res.success) {
+                        alert('Write: ' + res.data.write + ', Read: ' + res.data.read + '\nValue: ' + res.data.value);
+                    } else {
+                        alert('Test failed: ' + (res.data || 'Unknown error'));
+                    }
+                }).fail(function() {
+                    $('#ace-redis-cache-test-write-btn').text('Test Write/Read');
+                    alert('AJAX failed - check console');
+                });
+            });
+            
             $('#ace-redis-cache-flush-btn').on('click', function(e) {
                 e.preventDefault();
                 $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_flush', nonce:AceRedisCacheAjax.flush_nonce}, function(res) {
@@ -600,13 +632,24 @@ class AceRedisCache {
         $settings = get_option('ace_redis_cache_settings', $this->settings);
         try {
             $redis = $this->connect_redis();
-            $status = $redis ? 'Connected' : 'Not connected';
-            $keys = $redis ? $redis->keys($this->cache_prefix . '*') : [];
-            $size = is_array($keys) ? count($keys) : 0;
+            if (!$redis) {
+                wp_send_json_success(['status'=>'Not connected','size'=>0,'size_kb'=>0]);
+                return;
+            }
+
+            $status = 'Connected';
+            
+            // Count cache keys
+            $cache_keys = $redis->keys($this->cache_prefix . '*') ?: [];
+            $cache_size = is_array($cache_keys) ? count($cache_keys) : 0;
+            
+            // Count all keys for debugging
+            $all_keys = $redis->keys('*') ?: [];
+            $all_keys_count = is_array($all_keys) ? count($all_keys) : 0;
 
             $totalBytes = 0;
-            if ($redis && is_array($keys)) {
-                foreach ($keys as $key) {
+            if (is_array($cache_keys)) {
+                foreach ($cache_keys as $key) {
                     $len = $redis->strlen($key);
                     if ($len !== false) $totalBytes += $len;
                 }
@@ -615,11 +658,44 @@ class AceRedisCache {
 
             wp_send_json_success([
                 'status' => $status,
-                'size'   => $size,
+                'size'   => $cache_size,
                 'size_kb' => $size_kb,
+                'debug_info' => "Cache keys: {$cache_size}, Total keys: {$all_keys_count}",
             ]);
         } catch (Exception $e) {
-            wp_send_json_success(['status'=>'Not connected','size'=>0,'size_kb'=>0]);
+            wp_send_json_success(['status'=>'Error: ' . $e->getMessage(),'size'=>0,'size_kb'=>0]);
+        }
+    }
+
+    /** AJAX: Test Write **/
+    public function ajax_test_write() {
+        check_ajax_referer('ace_redis_cache_status', 'nonce');
+        if (!current_user_can('manage_options')) wp_send_json_error('No permission');
+
+        try {
+            $redis = $this->connect_redis();
+            if (!$redis) {
+                wp_send_json_error('Not connected');
+                return;
+            }
+
+            // Test write
+            $test_key = 'test_write_' . time();
+            $test_value = 'PHP Redis test at ' . date('Y-m-d H:i:s');
+            
+            $write_result = $redis->setex($test_key, 10, $test_value);
+            $read_result = $redis->get($test_key);
+            
+            // Clean up
+            $redis->del($test_key);
+            
+            wp_send_json_success([
+                'write' => $write_result ? 'OK' : 'FAILED',
+                'read' => $read_result === $test_value ? 'OK' : 'FAILED',
+                'value' => $read_result
+            ]);
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
         }
     }
 
@@ -755,7 +831,7 @@ class AceRedisCache {
         $redis = new Redis();
         $host = $this->settings['host'];
         $port = intval($this->settings['port']);
-        $timeout = 1.5;
+        $timeout = 5.0; // Increased timeout for slower connections
 
         if (stripos($host, 'tls://') === 0) {
             $redis->setOption(Redis::OPT_READ_TIMEOUT, $timeout);
@@ -774,13 +850,22 @@ class AceRedisCache {
             $redis->auth($this->settings['password']);
         }
 
-        if (!$redis->ping()) {
-            return false;
+        // Test with INFO instead of PING for better Valkey compatibility
+        try {
+            $info = $redis->info();
+            if (empty($info)) {
+                return false;
+            }
+        } catch (Exception $e) {
+            // Fallback to ping
+            if (!$redis->ping()) {
+                return false;
+            }
         }
 
         return $redis;
     } catch (Exception $e) {
-        error_log('Redis connect failed: ' . $e->getMessage());
+        error_log('Redis/Valkey connect failed: ' . $e->getMessage());
         return false;
     }
 }

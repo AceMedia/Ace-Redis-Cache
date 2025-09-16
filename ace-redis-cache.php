@@ -253,18 +253,18 @@ class AceRedisCache {
             }
         }
         
+        // Skip caching for query-based blocks that contain dynamic content
+        if ($this->is_query_block($block_name)) {
+            return $block_content;
+        }
+        
         $redis = $this->connect_redis();
         if (!$redis) {
             return $block_content;
         }
         
-        // Debug: Log block names for troubleshooting
-        if (strpos($block_name, 'query') !== false || strpos($block_name, 'post') !== false) {
-            error_log("Ace Redis Cache: Attempting to cache block: " . $block_name);
-        }
-        
-        // Generate cache key based on block name, attributes, and content
-        $cache_key = 'block_cache:' . md5($block_name . serialize($block['attrs'] ?? []) . serialize($block['innerContent'] ?? []));
+        // Generate cache key that includes block context and global state for better cache invalidation
+        $cache_key = $this->generate_block_cache_key($block_name, $block, $block_content);
         
         // Try to get from cache first
         $cached = $redis->get($cache_key);
@@ -276,6 +276,80 @@ class AceRedisCache {
         $redis->setex($cache_key, intval($this->settings['ttl']), $block_content);
         
         return $block_content;
+    }
+    
+    /**
+     * Check if this is a query-based block that should not be cached
+     */
+    private function is_query_block($block_name) {
+        $query_blocks = [
+            'core/query',
+            'core/post-template',
+            'core/query-loop',
+            'core/latest-posts',
+            'core/latest-comments',
+            'core/rss',
+            'core/search',
+            'core/tag-cloud',
+            'core/categories',
+            'core/archives'
+        ];
+        
+        foreach ($query_blocks as $query_block) {
+            if ($block_name === $query_block || strpos($block_name, $query_block) === 0) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Generate context-aware cache key for blocks
+     */
+    private function generate_block_cache_key($block_name, $block, $block_content) {
+        // Include page context to prevent cross-page contamination
+        global $post;
+        $page_id = $post ? $post->ID : 0;
+        
+        // Include query variables that might affect block output
+        $query_vars = [];
+        if (is_single() || is_page()) {
+            $query_vars['is_single'] = true;
+            $query_vars['post_id'] = $page_id;
+        } elseif (is_home()) {
+            $query_vars['is_home'] = true;
+            $query_vars['paged'] = get_query_var('paged', 1);
+        } elseif (is_category()) {
+            $query_vars['is_category'] = true;
+            $query_vars['cat_id'] = get_query_var('cat');
+        } elseif (is_tag()) {
+            $query_vars['is_tag'] = true;
+            $query_vars['tag_id'] = get_query_var('tag_id');
+        } elseif (is_archive()) {
+            $query_vars['is_archive'] = true;
+            $query_vars['archive_type'] = get_post_type();
+        }
+        
+        // Include user context for personalized content
+        $user_context = [];
+        if (is_user_logged_in()) {
+            $user_context['logged_in'] = true;
+            $user_context['user_id'] = get_current_user_id();
+        }
+        
+        // Create cache key components
+        $cache_components = [
+            'block_name' => $block_name,
+            'block_attrs' => $block['attrs'] ?? [],
+            'query_vars' => $query_vars,
+            'user_context' => $user_context,
+            // Include a content hash for blocks that might have dynamic inner content
+            'content_hash' => md5($block_content)
+        ];
+        
+        // Don't include innerContent in the key as it causes circular reference issues
+        return 'block_cache:' . md5(serialize($cache_components));
     }
     
     /**
@@ -1006,27 +1080,26 @@ class AceRedisCache {
         add_filter('pre_get_transient', [$this, 'redis_get_transient'], 10, 2);
         add_filter('pre_delete_transient', [$this, 'redis_delete_transient'], 10, 2);
         
-        // Implement WordPress object cache operations
-        add_filter('pre_wp_cache_set', [$this, 'redis_wp_cache_set'], 10, 5);
-        add_filter('pre_wp_cache_get', [$this, 'redis_wp_cache_get'], 10, 3);
-        add_filter('pre_wp_cache_delete', [$this, 'redis_wp_cache_delete'], 10, 3);
+        // Site transients
+        add_filter('pre_set_site_transient', [$this, 'redis_set_site_transient'], 10, 3);
+        add_filter('pre_get_site_transient', [$this, 'redis_get_site_transient'], 10, 2);
+        add_filter('pre_delete_site_transient', [$this, 'redis_delete_site_transient'], 10, 2);
+        
+        // Override WordPress object cache functions with custom implementations
+        $this->override_wp_cache_functions();
     }
     
     /**
      * Store transient in Redis
      */
     public function redis_set_transient($value, $transient, $expiration) {
-        error_log("DEBUG: redis_set_transient called for: {$transient}");
-        
         // Check if this transient should be excluded
         if ($this->should_exclude_transient($transient)) {
-            error_log("DEBUG: Transient {$transient} excluded");
             return false; // Let WordPress handle it normally
         }
         
         $redis = $this->connect_redis();
         if (!$redis) {
-            error_log("DEBUG: Redis connection failed for transient {$transient}");
             return false; // Fall back to database
         }
         
@@ -1035,7 +1108,6 @@ class AceRedisCache {
         
         try {
             $result = $redis->setex($key, $expiration, serialize($value));
-            error_log("DEBUG: Stored transient {$key} in Redis, result: " . ($result ? 'SUCCESS' : 'FAILED'));
             return $value; // Return the value to indicate we handled it
         } catch (Exception $e) {
             error_log('Redis transient set failed: ' . $e->getMessage());
@@ -1093,6 +1165,301 @@ class AceRedisCache {
         } catch (Exception $e) {
             error_log('Redis transient delete failed: ' . $e->getMessage());
             return false; // Fall back to database
+        }
+    }
+    
+    /**
+     * Site transient functions
+     */
+    public function redis_set_site_transient($value, $transient, $expiration) {
+        // Check if this transient should be excluded
+        if ($this->should_exclude_transient($transient)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to database
+        }
+        
+        $key = "_site_transient_{$transient}";
+        $expiration = intval($expiration) ?: intval($this->settings['ttl']);
+        
+        try {
+            $result = $redis->setex($key, $expiration, serialize($value));
+            return $value; // Return the value to indicate we handled it
+        } catch (Exception $e) {
+            error_log('Redis site transient set failed: ' . $e->getMessage());
+            return false; // Fall back to database
+        }
+    }
+    
+    public function redis_get_site_transient($value, $transient) {
+        // Check if this transient should be excluded
+        if ($this->should_exclude_transient($transient)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to database
+        }
+        
+        $key = "_site_transient_{$transient}";
+        
+        try {
+            $cached = $redis->get($key);
+            if ($cached !== false) {
+                return unserialize($cached);
+            }
+            return false; // Not found in cache
+        } catch (Exception $e) {
+            error_log('Redis site transient get failed: ' . $e->getMessage());
+            return false; // Fall back to database
+        }
+    }
+    
+    public function redis_delete_site_transient($value, $transient) {
+        // Check if this transient should be excluded
+        if ($this->should_exclude_transient($transient)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to database
+        }
+        
+        $key = "_site_transient_{$transient}";
+        
+        try {
+            $redis->del($key);
+            return true; // Indicate we handled it
+        } catch (Exception $e) {
+            error_log('Redis site transient delete failed: ' . $e->getMessage());
+            return false; // Fall back to database
+        }
+    }
+    
+    /**
+     * Override WordPress object cache functions
+     */
+    private function override_wp_cache_functions() {
+        if (!function_exists('wp_cache_get_original')) {
+            // Store original functions for fallback
+            if (function_exists('wp_cache_get')) {
+                function wp_cache_get_original($key, $group = 'default') {
+                    global $wp_object_cache;
+                    return $wp_object_cache->get($key, $group);
+                }
+            }
+            
+            if (function_exists('wp_cache_set')) {
+                function wp_cache_set_original($key, $data, $group = 'default', $expire = 0) {
+                    global $wp_object_cache;
+                    return $wp_object_cache->set($key, $data, $group, $expire);
+                }
+            }
+            
+            // Override with our Redis implementations
+            add_filter('wp_cache_get', [$this, 'redis_wp_cache_get_override'], 10, 2);
+            add_filter('wp_cache_set', [$this, 'redis_wp_cache_set_override'], 10, 4);
+            add_filter('wp_cache_delete', [$this, 'redis_wp_cache_delete_override'], 10, 2);
+            add_filter('wp_cache_add', [$this, 'redis_wp_cache_add_override'], 10, 4);
+            add_filter('wp_cache_replace', [$this, 'redis_wp_cache_replace_override'], 10, 4);
+            add_filter('wp_cache_incr', [$this, 'redis_wp_cache_incr_override'], 10, 3);
+            add_filter('wp_cache_decr', [$this, 'redis_wp_cache_decr_override'], 10, 3);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_get override
+     */
+    public function redis_wp_cache_get_override($key, $group = 'default') {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_get_original($key, $group);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_get_original($key, $group);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        try {
+            $cached = $redis->get($cache_key);
+            if ($cached !== false) {
+                return unserialize($cached);
+            }
+            return false; // Not found in cache
+        } catch (Exception $e) {
+            error_log('Redis wp_cache get failed: ' . $e->getMessage());
+            return wp_cache_get_original($key, $group);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_set override
+     */
+    public function redis_wp_cache_set_override($key, $data, $group = 'default', $expire = 0) {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_set_original($key, $data, $group, $expire);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_set_original($key, $data, $group, $expire);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        $expire = intval($expire) ?: intval($this->settings['ttl']);
+        
+        try {
+            $result = $redis->setex($cache_key, $expire, serialize($data));
+            return $result;
+        } catch (Exception $e) {
+            error_log('Redis wp_cache set failed: ' . $e->getMessage());
+            return wp_cache_set_original($key, $data, $group, $expire);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_delete override
+     */
+    public function redis_wp_cache_delete_override($key, $group = 'default') {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_delete_original($key, $group);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_delete_original($key, $group);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        try {
+            $result = $redis->del($cache_key);
+            return $result > 0;
+        } catch (Exception $e) {
+            error_log('Redis wp_cache delete failed: ' . $e->getMessage());
+            return wp_cache_delete_original($key, $group);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_add override
+     */
+    public function redis_wp_cache_add_override($key, $data, $group = 'default', $expire = 0) {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_add_original($key, $data, $group, $expire);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_add_original($key, $data, $group, $expire);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        // Check if key already exists
+        if ($redis->exists($cache_key)) {
+            return false;
+        }
+        
+        $expire = intval($expire) ?: intval($this->settings['ttl']);
+        
+        try {
+            $result = $redis->setex($cache_key, $expire, serialize($data));
+            return $result;
+        } catch (Exception $e) {
+            error_log('Redis wp_cache add failed: ' . $e->getMessage());
+            return wp_cache_add_original($key, $data, $group, $expire);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_replace override
+     */
+    public function redis_wp_cache_replace_override($key, $data, $group = 'default', $expire = 0) {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_replace_original($key, $data, $group, $expire);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_replace_original($key, $data, $group, $expire);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        // Check if key exists
+        if (!$redis->exists($cache_key)) {
+            return false;
+        }
+        
+        $expire = intval($expire) ?: intval($this->settings['ttl']);
+        
+        try {
+            $result = $redis->setex($cache_key, $expire, serialize($data));
+            return $result;
+        } catch (Exception $e) {
+            error_log('Redis wp_cache replace failed: ' . $e->getMessage());
+            return wp_cache_replace_original($key, $data, $group, $expire);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_incr override
+     */
+    public function redis_wp_cache_incr_override($key, $offset = 1, $group = 'default') {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_incr_original($key, $offset, $group);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_incr_original($key, $offset, $group);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        try {
+            return $redis->incrBy($cache_key, $offset);
+        } catch (Exception $e) {
+            error_log('Redis wp_cache incr failed: ' . $e->getMessage());
+            return wp_cache_incr_original($key, $offset, $group);
+        }
+    }
+    
+    /**
+     * Redis-backed wp_cache_decr override
+     */
+    public function redis_wp_cache_decr_override($key, $offset = 1, $group = 'default') {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return wp_cache_decr_original($key, $offset, $group);
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return wp_cache_decr_original($key, $offset, $group);
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        try {
+            return $redis->decrBy($cache_key, $offset);
+        } catch (Exception $e) {
+            error_log('Redis wp_cache decr failed: ' . $e->getMessage());
+            return wp_cache_decr_original($key, $offset, $group);
         }
     }
     

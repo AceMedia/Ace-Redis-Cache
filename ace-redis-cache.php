@@ -50,6 +50,7 @@ class AceRedisCache {
         add_action('wp_ajax_ace_redis_cache_flush', [$this, 'ajax_flush']);
         add_action('wp_ajax_ace_redis_cache_flush_blocks', [$this, 'ajax_flush_blocks']);
         add_action('wp_ajax_ace_redis_cache_test_write', [$this, 'ajax_test_write']);
+        add_action('wp_ajax_ace_redis_cache_diagnostics', [$this, 'ajax_diagnostics']);
 
         // Admin scripts
         add_action('admin_enqueue_scripts', [$this, 'admin_enqueue']);
@@ -203,6 +204,7 @@ class AceRedisCache {
      * Retry wrapper for Redis operations with automatic reconnection
      */
     private function rtry(callable $fn) {
+        error_log('Ace Redis Cache: rtry() operation started');
         // Set maximum operation time to prevent 504 gateway timeout
         $max_operation_time = 15; // 15 seconds max to stay well below typical 30s gateway timeout
         $start_time = microtime(true);
@@ -210,38 +212,47 @@ class AceRedisCache {
         try {
             $redis = $this->get_redis_connection();
             if (!$redis) {
+                error_log('Ace Redis Cache: rtry() - No Redis connection available');
                 throw new RedisException('No Redis connection available');
             }
+            
+            error_log('Ace Redis Cache: rtry() - Got Redis connection, executing operation');
             
             // Check if we're already near timeout before attempting operation
             $elapsed = microtime(true) - $start_time;
             if ($elapsed > ($max_operation_time * 0.8)) {
-                error_log('Redis operation aborted - approaching timeout limit');
+                error_log('Ace Redis Cache: rtry() - Aborting due to timeout limit');
                 $this->open_circuit_breaker();
                 throw new RedisException('Operation timeout prevention');
             }
             
             // Execute the Redis operation with timeout monitoring
             $result = $this->execute_with_timeout($fn, $redis, $max_operation_time - $elapsed);
+            error_log('Ace Redis Cache: rtry() - Operation completed successfully');
             return $result;
             
         } catch (RedisException $e) {
+            error_log('Ace Redis Cache: rtry() - RedisException caught: ' . $e->getMessage());
             // Check if we have time for a retry
             $elapsed = microtime(true) - $start_time;
             if ($elapsed > ($max_operation_time * 0.6)) {
-                error_log('Redis retry skipped - insufficient time remaining');
+                error_log('Ace Redis Cache: rtry() - Skipping retry due to insufficient time');
                 $this->open_circuit_breaker();
                 throw new RedisException('Timeout prevention - no retry');
             }
             
+            error_log('Ace Redis Cache: rtry() - Attempting retry with reconnect');
             // Close existing connection and force reconnect
             $this->close_redis_connection();
             
             try {
                 $redis = $this->get_redis_connection(true); // Force reconnect
                 if (!$redis) {
+                    error_log('Ace Redis Cache: rtry() - Reconnection failed');
                     throw new RedisException('Reconnection failed');
                 }
+                
+                error_log('Ace Redis Cache: rtry() - Reconnection successful, executing retry');
                 
                 // Add retry header for debugging
                 if (!is_admin()) {
@@ -251,6 +262,7 @@ class AceRedisCache {
                 // Execute retry with remaining time
                 $remaining_time = $max_operation_time - (microtime(true) - $start_time);
                 $result = $this->execute_with_timeout($fn, $redis, $remaining_time);
+                error_log('Ace Redis Cache: rtry() - Retry operation completed successfully');
                 return $result;
                 
             } catch (Exception $retry_e) {
@@ -317,17 +329,29 @@ class AceRedisCache {
      * Get or create Redis connection with connection pooling
      */
     private function get_redis_connection($force_reconnect = false) {
+        error_log('Ace Redis Cache: get_redis_connection called - force_reconnect: ' . ($force_reconnect ? 'YES' : 'NO'));
+        
         // Return existing connection if available and not forcing reconnect
         if (!$force_reconnect && $this->redis && $this->redis->isConnected()) {
+            error_log('Ace Redis Cache: Returning existing connection');
             return $this->redis;
         }
         
         // Check circuit breaker on frontend
         if (!is_admin() && $this->is_circuit_breaker_open()) {
+            error_log('Ace Redis Cache: Circuit breaker is open, refusing connection');
             return false;
         }
         
+        error_log('Ace Redis Cache: Creating new Redis connection');
         $this->redis = $this->connect_redis($force_reconnect);
+        
+        if ($this->redis) {
+            error_log('Ace Redis Cache: New connection created successfully');
+        } else {
+            error_log('Ace Redis Cache: Failed to create new connection');
+        }
+        
         return $this->redis;
     }
     
@@ -888,11 +912,16 @@ class AceRedisCache {
             <div id="ace-redis-cache-status" style="margin-bottom:1em;">
                 <button id="ace-redis-cache-test-btn" class="button">Test Redis Connection</button>
                 <button id="ace-redis-cache-test-write-btn" class="button button-secondary">Test Write/Read</button>
+                <button id="ace-redis-cache-diagnostics-btn" class="button button-secondary">System Diagnostics</button>
                 <button id="ace-redis-cache-flush-btn" class="button">Flush All Cache</button>
                 <button id="ace-redis-cache-flush-blocks-btn" class="button button-secondary">Flush Block Cache Only</button>
                 <span id="ace-redis-cache-connection"></span>
                 <br>
                 <strong>Cache Size:</strong> <span id="ace-redis-cache-size">-</span>
+                <div id="ace-redis-cache-diagnostics" style="margin-top: 10px; display: none; background: #f0f8ff; border: 1px solid #0073aa; padding: 15px; border-radius: 4px;">
+                    <h4>System Diagnostics</h4>
+                    <pre id="ace-redis-cache-diagnostics-content" style="white-space: pre-wrap; font-size: 12px;"></pre>
+                </div>
             </div>
             <form method="post" action="options.php">
                 <?php settings_fields('ace_redis_cache_group'); ?>
@@ -1158,6 +1187,33 @@ class AceRedisCache {
                 });
             });
             
+            $('#ace-redis-cache-diagnostics-btn').on('click', function(e) {
+                e.preventDefault();
+                var $diagnosticsDiv = $('#ace-redis-cache-diagnostics');
+                var $diagnosticsContent = $('#ace-redis-cache-diagnostics-content');
+                
+                if ($diagnosticsDiv.is(':visible')) {
+                    $diagnosticsDiv.hide();
+                    $(this).text('System Diagnostics');
+                    return;
+                }
+                
+                $(this).text('Loading...');
+                $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_diagnostics', nonce:AceRedisCacheAjax.nonce}, function(res) {
+                    $('#ace-redis-cache-diagnostics-btn').text('Hide Diagnostics');
+                    if(res.success) {
+                        $diagnosticsContent.text(res.data.diagnostics);
+                        $diagnosticsDiv.show();
+                    } else {
+                        $diagnosticsContent.text('Failed to load diagnostics: ' + (res.data || 'Unknown error'));
+                        $diagnosticsDiv.show();
+                    }
+                }).fail(function() {
+                    $('#ace-redis-cache-diagnostics-btn').text('System Diagnostics');
+                    alert('Diagnostics AJAX failed - check console');
+                });
+            });
+            
             $('#ace-redis-cache-flush-btn').on('click', function(e) {
                 e.preventDefault();
                 $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_flush', nonce:AceRedisCacheAjax.flush_nonce}, function(res) {
@@ -1213,6 +1269,18 @@ class AceRedisCache {
         if (!current_user_can('manage_options')) wp_send_json_error('No permission');
 
         $settings = get_option('ace_redis_cache_settings', $this->settings);
+        
+        // Check PHP Redis extension first
+        if (!extension_loaded('redis')) {
+            wp_send_json_success([
+                'status' => 'ERROR: PHP Redis extension not installed',
+                'size' => 0,
+                'size_kb' => 0,
+                'debug_info' => 'Install php-redis extension'
+            ]);
+            return;
+        }
+        
         try {
             if (!$this->get_redis_connection()) {
                 wp_send_json_success(['status'=>'Not connected','size'=>0,'size_kb'=>0]);
@@ -1362,6 +1430,93 @@ class AceRedisCache {
             error_log('Ajax flush blocks failed: ' . $e->getMessage());
             wp_send_json_error(false);
         }
+    }
+
+    /** AJAX: System Diagnostics **/
+    public function ajax_diagnostics() {
+        check_ajax_referer('ace_redis_cache_status', 'nonce');
+        if (!current_user_can('manage_options')) wp_send_json_error('No permission');
+
+        $diagnostics = [];
+        
+        // PHP Environment
+        $diagnostics[] = "=== PHP Environment ===";
+        $diagnostics[] = "PHP Version: " . PHP_VERSION;
+        $diagnostics[] = "Redis Extension: " . (extension_loaded('redis') ? 'LOADED (v' . phpversion('redis') . ')' : 'NOT LOADED');
+        
+        if (extension_loaded('redis')) {
+            $diagnostics[] = "Redis Class Available: " . (class_exists('Redis') ? 'YES' : 'NO');
+        }
+        
+        // Current Settings
+        $diagnostics[] = "\n=== Plugin Settings ===";
+        $diagnostics[] = "Host: " . ($this->settings['host'] ?? 'not set');
+        $diagnostics[] = "Port: " . ($this->settings['port'] ?? 'not set');
+        $diagnostics[] = "Password: " . (empty($this->settings['password']) ? 'not set' : 'set');
+        $diagnostics[] = "TLS Enabled: " . (($this->settings['enable_tls'] ?? 0) ? 'YES' : 'NO');
+        $diagnostics[] = "TTL: " . ($this->settings['ttl'] ?? 'not set') . " seconds";
+        $diagnostics[] = "Mode: " . ($this->settings['mode'] ?? 'not set');
+        $diagnostics[] = "Plugin Enabled: " . (($this->settings['enabled'] ?? 0) ? 'YES' : 'NO');
+        
+        // Connection Status
+        $diagnostics[] = "\n=== Connection Status ===";
+        $diagnostics[] = "Current Connection: " . ($this->redis && $this->redis->isConnected() ? 'CONNECTED' : 'NOT CONNECTED');
+        $diagnostics[] = "Circuit Breaker: " . ($this->is_circuit_breaker_open() ? 'OPEN (blocking connections)' : 'CLOSED');
+        $diagnostics[] = "Under Load: " . ($this->is_under_load() ? 'YES' : 'NO');
+        $diagnostics[] = "Recent Issues: " . ($this->has_recent_redis_issues() ? 'YES' : 'NO');
+        
+        // WordPress Environment
+        $diagnostics[] = "\n=== WordPress Environment ===";
+        $diagnostics[] = "WordPress Version: " . get_bloginfo('version');
+        $diagnostics[] = "Is Admin: " . (is_admin() ? 'YES' : 'NO');
+        $diagnostics[] = "Site URL: " . site_url();
+        $diagnostics[] = "Current User Can Manage: " . (current_user_can('manage_options') ? 'YES' : 'NO');
+        
+        // Server Environment  
+        $diagnostics[] = "\n=== Server Environment ===";
+        $diagnostics[] = "Server Software: " . ($_SERVER['SERVER_SOFTWARE'] ?? 'unknown');
+        $diagnostics[] = "Request Method: " . ($_SERVER['REQUEST_METHOD'] ?? 'unknown');
+        $diagnostics[] = "HTTPS: " . (is_ssl() ? 'YES' : 'NO');
+        
+        // Network Tests
+        $diagnostics[] = "\n=== Network Diagnostics ===";
+        
+        $host = $this->settings['host'] ?? 'localhost';
+        $port = intval($this->settings['port'] ?? 6379);
+        
+        if (!empty($host) && $port > 0) {
+            if (!str_starts_with($host, '/') && !str_starts_with($host, 'unix://')) {
+                // TCP connection test
+                $clean_host = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
+                
+                $socket_timeout = 5;
+                $errno = 0;
+                $errstr = '';
+                
+                $socket = @fsockopen($clean_host, $port, $errno, $errstr, $socket_timeout);
+                if ($socket) {
+                    $diagnostics[] = "TCP Connection: SUCCESS (port {$port} is reachable)";
+                    fclose($socket);
+                } else {
+                    $diagnostics[] = "TCP Connection: FAILED (Error {$errno}: {$errstr})";
+                    $diagnostics[] = "This usually means Redis is not running or port {$port} is blocked";
+                }
+            } else {
+                $socket_path = str_starts_with($host, 'unix://') ? substr($host, 7) : $host;
+                if (file_exists($socket_path)) {
+                    $diagnostics[] = "Unix Socket: EXISTS at {$socket_path}";
+                    if (is_readable($socket_path)) {
+                        $diagnostics[] = "Unix Socket: READABLE";
+                    } else {
+                        $diagnostics[] = "Unix Socket: NOT READABLE (check permissions)";
+                    }
+                } else {
+                    $diagnostics[] = "Unix Socket: NOT FOUND at {$socket_path}";
+                }
+            }
+        }
+        
+        wp_send_json_success(['diagnostics' => implode("\n", $diagnostics)]);
     }
 
     /** Full Page Cache **/
@@ -1942,10 +2097,20 @@ class AceRedisCache {
     private function connect_redis($force_reconnect = false) {
         // Return existing connection if available and not forcing reconnect
         if (!$force_reconnect && $this->redis && $this->redis->isConnected()) {
+            error_log('Ace Redis Cache: Using existing connection');
             return $this->redis;
         }
         
+        // Check if Redis extension is loaded
+        if (!extension_loaded('redis')) {
+            error_log('Ace Redis Cache: CRITICAL - PHP Redis extension is not installed');
+            return false;
+        }
+        
+        error_log('Ace Redis Cache: PHP Redis extension version: ' . phpversion('redis'));
+        
         $start_time = microtime(true);
+        error_log('Ace Redis Cache: Starting connection attempt at ' . date('Y-m-d H:i:s'));
         
         try {
             $redis = new Redis();
@@ -1954,6 +2119,8 @@ class AceRedisCache {
             $port = intval($this->settings['port'] ?? 6379);
             $password = $this->settings['password'] ?? '';
             $enable_tls = $this->settings['enable_tls'] ?? 0;
+            
+            error_log('Ace Redis Cache: Connection settings - Host: ' . $host . ', Port: ' . $port . ', TLS: ' . ($enable_tls ? 'YES' : 'NO') . ', Password: ' . (empty($password) ? 'NO' : 'YES'));
             
             // Set aggressive timeouts to prevent 504 errors
             // Use shorter timeouts if we're under load or circuit breaker was recently open
@@ -1975,22 +2142,36 @@ class AceRedisCache {
             if (str_starts_with($host, '/') || str_starts_with($host, 'unix://')) {
                 // Unix socket connection
                 $socket_path = str_starts_with($host, 'unix://') ? substr($host, 7) : $host;
-                $redis->pconnect($socket_path, 0, $connect_timeout, $this->redis_persistent_id);
+                error_log('Ace Redis Cache: Attempting Unix socket connection to: ' . $socket_path);
+                $connect_result = $redis->pconnect($socket_path, 0, $connect_timeout, $this->redis_persistent_id);
+                error_log('Ace Redis Cache: Unix socket pconnect result: ' . ($connect_result ? 'SUCCESS' : 'FAILED'));
             } else {
                 // TCP connection with optional TLS
                 if ($enable_tls || stripos($host, 'tls://') === 0) {
                     // TLS/SSL connection (AWS Valkey/ElastiCache compatible)
                     $clean_host = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
-                    $redis->pconnect($clean_host, $port, $connect_timeout, $this->redis_persistent_id, 0, 0, [
-                        'tls' => []  // AWS Valkey/ElastiCache TLS configuration
-                    ]);
+                    error_log('Ace Redis Cache: Attempting TLS connection to: ' . $clean_host . ':' . $port . ' (timeout: ' . $connect_timeout . 's)');
+                    
+                    $tls_options = ['tls' => []];
+                    error_log('Ace Redis Cache: TLS options: ' . json_encode($tls_options));
+                    
+                    $connect_result = $redis->pconnect($clean_host, $port, $connect_timeout, $this->redis_persistent_id, 0, 0, $tls_options);
+                    error_log('Ace Redis Cache: TLS pconnect result: ' . ($connect_result ? 'SUCCESS' : 'FAILED'));
                 } else {
                     // Standard TCP connection
-                    $redis->pconnect($host, $port, $connect_timeout, $this->redis_persistent_id);
+                    error_log('Ace Redis Cache: Attempting standard TCP connection to: ' . $host . ':' . $port . ' (timeout: ' . $connect_timeout . 's)');
+                    $connect_result = $redis->pconnect($host, $port, $connect_timeout, $this->redis_persistent_id);
+                    error_log('Ace Redis Cache: Standard pconnect result: ' . ($connect_result ? 'SUCCESS' : 'FAILED'));
                 }
+            }
+            
+            if (!$connect_result) {
+                error_log('Ace Redis Cache: Connection failed - pconnect returned false');
+                return false;
             }
 
             // Set Redis options for better reliability and fast-fail behavior
+            error_log('Ace Redis Cache: Setting Redis options - Read timeout: ' . $read_timeout . 's');
             $redis->setOption(Redis::OPT_READ_TIMEOUT, $read_timeout);
             $redis->setOption(Redis::OPT_TCP_KEEPALIVE, 1);
             $redis->setOption(Redis::OPT_MAX_RETRIES, 0); // No internal retries - we handle it in rtry()
@@ -1998,37 +2179,51 @@ class AceRedisCache {
             // Set TCP_NODELAY for faster response (reduce latency)
             if (defined('Redis::OPT_TCP_NODELAY')) {
                 $redis->setOption(Redis::OPT_TCP_NODELAY, 1);
+                error_log('Ace Redis Cache: TCP_NODELAY enabled');
             }
+            
+            error_log('Ace Redis Cache: Redis options set successfully');
 
             // Authenticate if password is provided
             if (!empty($password)) {
+                error_log('Ace Redis Cache: Attempting authentication');
                 if (!$redis->auth($password)) {
-                    error_log('Redis auth failed');
-                    $redis->close();
-                    return false;
-                }
-            }
-
-            // Test connection with ping for better compatibility
-            try {
-                if (!$redis->ping()) {
-                    error_log('Redis ping failed');
+                    error_log('Ace Redis Cache: Authentication failed');
                     $this->record_redis_issue('connection_failures');
                     $redis->close();
                     return false;
                 }
+                error_log('Ace Redis Cache: Authentication successful');
+            } else {
+                error_log('Ace Redis Cache: No password provided, skipping auth');
+            }
+
+            // Test connection with ping for better compatibility
+            error_log('Ace Redis Cache: Testing connection with ping/info');
+            try {
+                if (!$redis->ping()) {
+                    error_log('Ace Redis Cache: Ping failed');
+                    $this->record_redis_issue('connection_failures');
+                    $redis->close();
+                    return false;
+                }
+                error_log('Ace Redis Cache: Ping successful');
+                error_log('Ace Redis Cache: Ping successful');
             } catch (Exception $e) {
+                error_log('Ace Redis Cache: Ping failed with exception: ' . $e->getMessage());
                 // Fallback to INFO command for Valkey compatibility
                 try {
+                    error_log('Ace Redis Cache: Trying INFO command as fallback');
                     $info = $redis->info();
                     if (empty($info)) {
-                        error_log('Redis/Valkey INFO failed');
+                        error_log('Ace Redis Cache: INFO command returned empty result');
                         $this->record_redis_issue('connection_failures');
                         $redis->close();
                         return false;
                     }
+                    error_log('Ace Redis Cache: INFO command successful - got ' . count($info) . ' info items');
                 } catch (Exception $info_e) {
-                    error_log('Redis/Valkey connection test failed: ' . $info_e->getMessage());
+                    error_log('Ace Redis Cache: INFO command failed with exception: ' . $info_e->getMessage());
                     $this->record_redis_issue('connection_failures');
                     $redis->close();
                     return false;
@@ -2037,12 +2232,14 @@ class AceRedisCache {
             
             // Check if connection took too long (potential timeout issue)
             $connect_time = microtime(true) - $start_time;
+            error_log('Ace Redis Cache: Total connection time: ' . round($connect_time, 3) . 's');
             if ($connect_time > ($connect_timeout * 0.8)) {
                 $this->record_redis_issue('slow_operations');
-                error_log("Redis connection slow ({$connect_time}s), opening circuit breaker");
+                error_log("Ace Redis Cache: Connection slow ({$connect_time}s), opening circuit breaker");
                 $this->open_circuit_breaker();
             }
             
+            error_log('Ace Redis Cache: Connection established successfully');
             return $redis;
             
         } catch (Exception $e) {
@@ -2051,11 +2248,16 @@ class AceRedisCache {
             // Record different types of connection failures
             if ($connect_time > $connect_timeout) {
                 $this->record_redis_issue('timeouts');
+                error_log('Ace Redis Cache: Connection timeout after ' . $connect_time . 's: ' . $e->getMessage());
             } else {
                 $this->record_redis_issue('connection_failures');
+                error_log('Ace Redis Cache: Connection failed after ' . $connect_time . 's: ' . $e->getMessage());
             }
             
-            error_log('Redis connect failed (' . $connect_time . 's): ' . $e->getMessage());
+            // Log detailed error information
+            error_log('Ace Redis Cache: Exception class: ' . get_class($e));
+            error_log('Ace Redis Cache: Exception code: ' . $e->getCode());
+            error_log('Ace Redis Cache: Exception file: ' . $e->getFile() . ':' . $e->getLine());
             
             // Open circuit breaker on frontend for connection failures
             $this->open_circuit_breaker();

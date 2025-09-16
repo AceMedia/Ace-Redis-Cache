@@ -203,13 +203,37 @@ class AceRedisCache {
      * Retry wrapper for Redis operations with automatic reconnection
      */
     private function rtry(callable $fn) {
+        // Set maximum operation time to prevent 504 gateway timeout
+        $max_operation_time = 15; // 15 seconds max to stay well below typical 30s gateway timeout
+        $start_time = microtime(true);
+        
         try {
             $redis = $this->get_redis_connection();
             if (!$redis) {
                 throw new RedisException('No Redis connection available');
             }
-            return $fn($redis);
+            
+            // Check if we're already near timeout before attempting operation
+            $elapsed = microtime(true) - $start_time;
+            if ($elapsed > ($max_operation_time * 0.8)) {
+                error_log('Redis operation aborted - approaching timeout limit');
+                $this->open_circuit_breaker();
+                throw new RedisException('Operation timeout prevention');
+            }
+            
+            // Execute the Redis operation with timeout monitoring
+            $result = $this->execute_with_timeout($fn, $redis, $max_operation_time - $elapsed);
+            return $result;
+            
         } catch (RedisException $e) {
+            // Check if we have time for a retry
+            $elapsed = microtime(true) - $start_time;
+            if ($elapsed > ($max_operation_time * 0.6)) {
+                error_log('Redis retry skipped - insufficient time remaining');
+                $this->open_circuit_breaker();
+                throw new RedisException('Timeout prevention - no retry');
+            }
+            
             // Close existing connection and force reconnect
             $this->close_redis_connection();
             
@@ -224,11 +248,68 @@ class AceRedisCache {
                     header('X-Redis-Retry: 1');
                 }
                 
-                return $fn($redis);
+                // Execute retry with remaining time
+                $remaining_time = $max_operation_time - (microtime(true) - $start_time);
+                $result = $this->execute_with_timeout($fn, $redis, $remaining_time);
+                return $result;
+                
             } catch (Exception $retry_e) {
-                error_log('Redis retry failed: ' . $retry_e->getMessage());
+                $total_time = microtime(true) - $start_time;
+                error_log("Redis retry failed ({$total_time}s): " . $retry_e->getMessage());
+                
+                // Open circuit breaker if we're taking too long
+                if ($total_time > ($max_operation_time * 0.5)) {
+                    $this->open_circuit_breaker();
+                }
+                
                 throw $retry_e;
             }
+        }
+    }
+    
+    /**
+     * Execute Redis operation with timeout monitoring
+     */
+    private function execute_with_timeout(callable $fn, $redis, $max_time) {
+        if ($max_time <= 0) {
+            $this->record_redis_issue('timeout');
+            throw new RedisException('Operation timeout - no time remaining');
+        }
+        
+        $start = microtime(true);
+        
+        try {
+            // Execute the operation
+            $result = $fn($redis);
+            
+            // Check if operation took too long
+            $duration = microtime(true) - $start;
+            if ($duration > ($max_time * 0.8)) {
+                $this->record_redis_issue('slow_operations');
+                error_log("Redis operation slow ({$duration}s), monitoring for circuit breaker");
+                
+                // Don't open circuit breaker immediately for slow but successful operations
+                // But log it for monitoring
+                if (!is_admin()) {
+                    header('X-Redis-Slow: ' . round($duration, 3));
+                }
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            $duration = microtime(true) - $start;
+            
+            // Record different types of issues
+            if ($duration > 3) {
+                $this->record_redis_issue('timeouts');
+                error_log("Redis operation failed after {$duration}s, opening circuit breaker");
+                $this->open_circuit_breaker();
+            } else {
+                $this->record_redis_issue('operation_failure');
+            }
+            
+            throw $e;
         }
     }
     
@@ -279,6 +360,116 @@ class AceRedisCache {
         if (!is_admin()) {
             set_transient($this->circuit_breaker_key, time(), $this->circuit_breaker_window);
         }
+    }
+    
+    /**
+     * Check if system is under load (high request rate)
+     */
+    private function is_under_load() {
+        // Simple load detection based on concurrent requests
+        // This could be enhanced with more sophisticated metrics
+        
+        $load_key = 'redis_load_tracker';
+        $current_time = time();
+        
+        // Get recent request timestamps
+        $requests = get_transient($load_key) ?: [];
+        
+        // Remove old requests (older than 60 seconds)
+        $requests = array_filter($requests, function($time) use ($current_time) {
+            return ($current_time - $time) < 60;
+        });
+        
+        // Add current request
+        $requests[] = $current_time;
+        
+        // Update the tracker
+        set_transient($load_key, $requests, 120);
+        
+        // Consider high load if more than 50 requests in the last minute
+        return count($requests) > 50;
+    }
+    
+    /**
+     * Check if there have been recent Redis connection issues
+     */
+    private function has_recent_redis_issues() {
+        // Check multiple indicators of Redis issues
+        $issue_indicators = [
+            'redis_connection_failures',
+            'redis_slow_operations', 
+            'redis_timeouts',
+            $this->circuit_breaker_key
+        ];
+        
+        $recent_issues = 0;
+        $check_period = 300; // Check last 5 minutes
+        
+        foreach ($issue_indicators as $indicator) {
+            $issue_time = get_transient($indicator);
+            if ($issue_time && (time() - $issue_time) < $check_period) {
+                $recent_issues++;
+            }
+        }
+        
+        // If we have multiple recent issues, use aggressive timeouts
+        return $recent_issues >= 2;
+    }
+    
+    /**
+     * Record a Redis issue for load balancing decisions
+     */
+    private function record_redis_issue($issue_type = 'connection_failure') {
+        $issue_key = "redis_{$issue_type}";
+        set_transient($issue_key, time(), 600); // Track for 10 minutes
+    }
+    
+    /**
+     * Get performance diagnostics for admin display
+     */
+    private function get_performance_diagnostics() {
+        $diagnostics = [];
+        
+        // Check circuit breaker status
+        if ($this->is_circuit_breaker_open()) {
+            $diagnostics[] = "⚠️ Circuit Open";
+        }
+        
+        // Check recent issues
+        if ($this->has_recent_redis_issues()) {
+            $diagnostics[] = "⚡ Fast-Fail Mode";
+        }
+        
+        // Check load status
+        if ($this->is_under_load()) {
+            $diagnostics[] = "📈 High Load";
+        }
+        
+        // Check recent issue types
+        $issue_types = [
+            'connection_failures' => 'Conn Fail',
+            'slow_operations' => 'Slow Ops',
+            'timeouts' => 'Timeouts'
+        ];
+        
+        $recent_issues = [];
+        foreach ($issue_types as $key => $label) {
+            $issue_time = get_transient("redis_{$key}");
+            if ($issue_time && (time() - $issue_time) < 300) {
+                $recent_issues[] = $label;
+            }
+        }
+        
+        if (!empty($recent_issues)) {
+            $diagnostics[] = "Issues: " . implode(', ', $recent_issues);
+        }
+        
+        // Performance status
+        if (empty($diagnostics)) {
+            $diagnostics[] = "✅ Optimal";
+        }
+        
+        return implode(' | ', $diagnostics);
     }
     
     /**
@@ -1071,7 +1262,13 @@ class AceRedisCache {
             if ($object_count > 0) $cache_breakdown[] = "Objects: {$object_count}";
             if ($transient_count > 0) $cache_breakdown[] = "Transients: {$transient_count}";
             
+            // Add performance and timeout diagnostics
+            $performance_info = $this->get_performance_diagnostics();
+            
             $debug_info = implode(', ', $cache_breakdown) . " | Total Redis: {$all_keys_count}";
+            if (!empty($performance_info)) {
+                $debug_info .= " | " . $performance_info;
+            }
 
             wp_send_json_success([
                 'status' => $status,
@@ -1758,9 +1955,21 @@ class AceRedisCache {
             $password = $this->settings['password'] ?? '';
             $enable_tls = $this->settings['enable_tls'] ?? 0;
             
-            // Set different timeouts for admin vs frontend
-            $connect_timeout = is_admin() ? 2.5 : 2.0;
-            $read_timeout = 5.0;
+            // Set aggressive timeouts to prevent 504 errors
+            // Use shorter timeouts if we're under load or circuit breaker was recently open
+            $is_under_load = $this->is_under_load();
+            $recent_issues = $this->has_recent_redis_issues();
+            
+            if ($is_under_load || $recent_issues) {
+                // Very aggressive timeouts when under load
+                $connect_timeout = is_admin() ? 1.5 : 1.0;
+                $read_timeout = 3.0;
+                error_log('Redis using fast-fail timeouts due to load/issues');
+            } else {
+                // Standard timeouts for normal conditions
+                $connect_timeout = is_admin() ? 2.5 : 2.0;
+                $read_timeout = 5.0;
+            }
             
             // Check if it's a Unix socket path
             if (str_starts_with($host, '/') || str_starts_with($host, 'unix://')) {
@@ -1781,10 +1990,15 @@ class AceRedisCache {
                 }
             }
 
-            // Set Redis options for better reliability
+            // Set Redis options for better reliability and fast-fail behavior
             $redis->setOption(Redis::OPT_READ_TIMEOUT, $read_timeout);
             $redis->setOption(Redis::OPT_TCP_KEEPALIVE, 1);
-            $redis->setOption(Redis::OPT_MAX_RETRIES, 1);
+            $redis->setOption(Redis::OPT_MAX_RETRIES, 0); // No internal retries - we handle it in rtry()
+            
+            // Set TCP_NODELAY for faster response (reduce latency)
+            if (defined('Redis::OPT_TCP_NODELAY')) {
+                $redis->setOption(Redis::OPT_TCP_NODELAY, 1);
+            }
 
             // Authenticate if password is provided
             if (!empty($password)) {
@@ -1799,6 +2013,7 @@ class AceRedisCache {
             try {
                 if (!$redis->ping()) {
                     error_log('Redis ping failed');
+                    $this->record_redis_issue('connection_failures');
                     $redis->close();
                     return false;
                 }
@@ -1808,11 +2023,13 @@ class AceRedisCache {
                     $info = $redis->info();
                     if (empty($info)) {
                         error_log('Redis/Valkey INFO failed');
+                        $this->record_redis_issue('connection_failures');
                         $redis->close();
                         return false;
                     }
                 } catch (Exception $info_e) {
                     error_log('Redis/Valkey connection test failed: ' . $info_e->getMessage());
+                    $this->record_redis_issue('connection_failures');
                     $redis->close();
                     return false;
                 }
@@ -1821,6 +2038,7 @@ class AceRedisCache {
             // Check if connection took too long (potential timeout issue)
             $connect_time = microtime(true) - $start_time;
             if ($connect_time > ($connect_timeout * 0.8)) {
+                $this->record_redis_issue('slow_operations');
                 error_log("Redis connection slow ({$connect_time}s), opening circuit breaker");
                 $this->open_circuit_breaker();
             }
@@ -1829,6 +2047,14 @@ class AceRedisCache {
             
         } catch (Exception $e) {
             $connect_time = microtime(true) - $start_time;
+            
+            // Record different types of connection failures
+            if ($connect_time > $connect_timeout) {
+                $this->record_redis_issue('timeouts');
+            } else {
+                $this->record_redis_issue('connection_failures');
+            }
+            
             error_log('Redis connect failed (' . $connect_time . 's): ' . $e->getMessage());
             
             // Open circuit breaker on frontend for connection failures

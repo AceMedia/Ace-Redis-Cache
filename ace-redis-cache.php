@@ -36,6 +36,9 @@ class AceRedisCache {
 
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
+        
+        // Clear cache when settings are updated
+        add_action('update_option_ace_redis_cache_settings', [$this, 'clear_all_cache_on_settings_change'], 10, 2);
 
         // AJAX handlers for status and flushing cache
         add_action('wp_ajax_ace_redis_cache_status', [$this, 'ajax_status']);
@@ -51,12 +54,12 @@ class AceRedisCache {
                 $this->setup_full_page_cache();
             } else {
                 $this->setup_object_cache();
+                
+                // Setup block-level caching only in object cache mode if enabled
+                if ($this->settings['enable_block_caching'] ?? 0) {
+                    $this->setup_block_caching();
+                }
             }
-        }
-        
-        // Setup block-level caching if enabled
-        if ($this->settings['enabled'] && ($this->settings['enable_block_caching'] ?? 0)) {
-            $this->setup_block_caching();
         }
         
         // Add WordPress hooks to intercept transient and cache operations
@@ -147,7 +150,58 @@ class AceRedisCache {
             }
         }
         
-        return $excluded_blocks;
+        // Auto-exclude dynamic WordPress blocks when in object cache mode with block-level caching enabled
+        if (($this->settings['mode'] === 'object') && ($this->settings['enable_block_caching'] ?? 0)) {
+            $auto_excluded = [
+                'core/latest-posts',      // Latest Posts
+                'core/latest-comments',   // Latest Comments
+                'core/archives',          // Archives
+                'core/categories',        // Categories
+                'core/tag-cloud',         // Tag Cloud
+                'core/calendar',          // Calendar
+                'core/rss',              // RSS
+                'core/search',           // Search
+                'core/query',            // Query Loop - CRITICAL: Don't cache this!
+                'core/post-template',    // Post Template (inside Query Loop)
+                'core/query-pagination', // Query Pagination
+                'core/query-pagination-next',     // Next page link
+                'core/query-pagination-numbers',  // Page numbers
+                'core/query-pagination-previous', // Previous page link
+                'core/query-title',      // Query Title
+                'core/query-no-results', // Query No Results
+                'core/post-title',       // Post Title (when in loop context)
+                'core/post-date',        // Post Date (when in loop context)
+                'core/post-excerpt',     // Post Excerpt (when in loop context)
+                'core/post-featured-image', // Featured Image (when in loop context)
+                'core/post-content',     // Post Content (when in loop context)
+                'core/post-author',      // Post Author (when in loop context)
+                'core/post-author-name', // Post Author Name (when in loop context)
+                'core/post-author-biography', // Post Author Bio (when in loop context)
+                'core/post-terms',       // Post Terms (when in loop context)
+                'core/post-navigation-link', // Post Navigation
+                'core/comments',         // Comments
+                'core/comments-query-loop', // Comments Query Loop
+                'core/comment-template',    // Comment Template
+                'core/comment-author-name', // Comment Author Name
+                'core/comment-content',     // Comment Content
+                'core/comment-date',        // Comment Date
+                'core/comment-edit-link',   // Comment Edit Link
+                'core/comment-reply-link',  // Comment Reply Link
+                'core/avatar',           // Avatar (usually dynamic)
+                'core/loginout',         // Login/Logout link (dynamic based on user state)
+                'core/template-part',    // Template Parts (dynamic content)
+                'core/block',            // Reusable Blocks (could be dynamic)
+                'core/pattern',          // Block Patterns (could be dynamic)
+                'ace/popular-posts',     // Custom Popular Posts block (dynamic content)
+                'woocommerce/*',         // All WooCommerce blocks (typically dynamic)
+                // EXPERIMENTAL: Try excluding ALL blocks to see if Query Loops work
+                '*',                     // Exclude everything temporarily for testing
+            ];
+            
+            $excluded_blocks = array_merge($excluded_blocks, $auto_excluded);
+        }
+        
+        return array_unique($excluded_blocks);
     }
     
     /**
@@ -177,6 +231,10 @@ class AceRedisCache {
         // Check if this block should be excluded from caching
         foreach ($excluded_blocks as $excluded_block) {
             if ($block_name === $excluded_block || fnmatch($excluded_block, $block_name)) {
+                // Debug: Log excluded blocks
+                if (strpos($block_name, 'query') !== false || strpos($block_name, 'post') !== false) {
+                    error_log("Ace Redis Cache: EXCLUDED block: " . $block_name . " (matched: " . $excluded_block . ")");
+                }
                 // Mark this block as non-cacheable
                 $parsed_block['ace_redis_cache_exclude'] = true;
                 return $pre_render;
@@ -208,6 +266,11 @@ class AceRedisCache {
         $redis = $this->connect_redis();
         if (!$redis) {
             return $block_content;
+        }
+        
+        // Debug: Log block names for troubleshooting
+        if (strpos($block_name, 'query') !== false || strpos($block_name, 'post') !== false) {
+            error_log("Ace Redis Cache: Attempting to cache block: " . $block_name);
         }
         
         // Generate cache key based on block name, attributes, and content
@@ -377,6 +440,33 @@ class AceRedisCache {
     public function register_settings() {
         register_setting('ace_redis_cache_group', 'ace_redis_cache_settings');
     }
+    
+    /**
+     * Clear all cache when settings are changed
+     */
+    public function clear_all_cache_on_settings_change($old_value, $new_value) {
+        try {
+            $redis = $this->connect_redis();
+            if ($redis) {
+                // Clear page cache
+                $page_keys = $redis->keys($this->cache_prefix . '*');
+                if ($page_keys) {
+                    $redis->del($page_keys);
+                }
+                
+                // Clear block cache
+                $block_keys = $redis->keys('block_cache:*');
+                if ($block_keys) {
+                    $redis->del($block_keys);
+                }
+                
+                // Log the cache clear
+                error_log('Ace Redis Cache: All caches cleared due to settings change');
+            }
+        } catch (Exception $e) {
+            error_log('Ace Redis Cache: Failed to clear cache on settings change: ' . $e->getMessage());
+        }
+    }
 
     public function admin_enqueue($hook) {
         if ($hook !== 'settings_page_ace-redis-cache') return;
@@ -389,6 +479,10 @@ class AceRedisCache {
     }
 
     public function settings_page() {
+        // Show notice if settings were just saved
+        if (isset($_GET['settings-updated']) && $_GET['settings-updated']) {
+            echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved and all caches cleared!</strong></p></div>';
+        }
         ?>
         <div class="wrap">
             <h1>Ace Redis Cache</h1>
@@ -417,17 +511,22 @@ class AceRedisCache {
                     <tr><th>Cache TTL (seconds)</th><td><input type="number" name="ace_redis_cache_settings[ttl]" value="<?php echo esc_attr($opts['ttl']); ?>"></td></tr>
                     <tr><th>Cache Mode</th>
                         <td>
-                            <select name="ace_redis_cache_settings[mode]">
+                            <select name="ace_redis_cache_settings[mode]" id="cache-mode-select">
                                 <option value="full" <?php selected($opts['mode'], 'full'); ?>>Full Page Cache</option>
                                 <option value="object" <?php selected($opts['mode'], 'object'); ?>>Object Cache Only</option>
                             </select>
+                            <p class="description">
+                                <strong>Full Page Cache:</strong> Caches entire rendered pages for maximum speed.<br>
+                                <strong>Object Cache:</strong> Caches WordPress objects and database queries with optional block-level caching.
+                            </p>
                         </td>
                     </tr>
-                    <tr>
+                    <tr id="block-caching-row" style="display: <?php echo ($opts['mode'] === 'object') ? 'table-row' : 'none'; ?>;">
                         <th>Enable Block-Level Caching</th>
                         <td>
                             <input type="checkbox" name="ace_redis_cache_settings[enable_block_caching]" value="1" <?php checked($opts['enable_block_caching'] ?? 0, 1); ?>>
-                            <p class="description">Use WordPress Block API to cache individual blocks instead of full pages. This allows dynamic blocks to stay fresh while static content is cached. <strong>Experimental feature.</strong></p>
+                            <p class="description">Use WordPress Block API to cache individual blocks instead of full pages. This allows dynamic blocks to stay fresh while static content is cached. <strong>Only available in Object Cache mode.</strong></p>
+                            <p class="description"><strong>Auto-Exclusions:</strong> When enabled, automatically excludes dynamic WordPress blocks like <code>core/latest-posts</code>, <code>core/query</code>, <code>core/comments</code>, and all <code>woocommerce/*</code> blocks to prevent stale content in loops and dynamic widgets.</p>
                         </td>
                     </tr>
                 </table>
@@ -442,7 +541,8 @@ class AceRedisCache {
                             <textarea name="ace_redis_cache_settings[excluded_blocks]" rows="8" cols="50" style="width: 100%; max-width: 500px;"><?php echo esc_textarea($opts['excluded_blocks'] ?? ''); ?></textarea>
                             <p class="description">
                                 Exclude specific WordPress blocks from caching. Supports wildcards (*). One per line.<br>
-                                <strong>Examples:</strong> <code>my-plugin/*</code>, <code>woocommerce/cart</code>, <code>core/latest-posts</code>
+                                <strong>Examples:</strong> <code>my-plugin/*</code>, <code>woocommerce/cart</code>, <code>core/latest-posts</code><br>
+                                <strong>Note:</strong> When Block-Level Caching is enabled, common dynamic blocks are automatically excluded (Latest Posts, Query Loops, Comments, WooCommerce blocks, etc.)
                             </p>
                         </td>
                     </tr>
@@ -492,11 +592,11 @@ class AceRedisCache {
                     <div style="flex: 1;">
                         <h3 style="color: green;">✅ Cached by Redis</h3>
                         <ul>
-                            <li><strong>Full Page Mode</strong>: Complete WordPress pages</li>
-                            <li><strong>Block Mode</strong>: Individual WordPress blocks</li>
+                            <li><strong>Full Page Mode</strong>: Complete WordPress pages (HTML)</li>
+                            <li><strong>Object Mode</strong>: Database queries, WordPress objects</li>
+                            <li><strong>Block Mode</strong>: Individual WordPress blocks (when enabled)</li>
                             <li>Static content and media files</li>
                             <li>Theme assets and standard plugin data</li>
-                            <li>Search results and archive pages</li>
                             <li>Any content not matching exclusion patterns</li>
                         </ul>
                     </div>
@@ -504,27 +604,42 @@ class AceRedisCache {
                     <div style="flex: 1;">
                         <h3 style="color: red;">❌ Excluded from Redis</h3>
                         <ul>
-                            <li><strong>Cache Keys</strong>: Keys matching your configured prefixes (when textarea has content)</li>
-                            <li><strong>Transients</strong>: Transients matching your configured patterns (when textarea has content)</li>
-                            <li><strong>Dynamic Content</strong>: Pages containing your configured content patterns (when textarea has content)</li>
-                            <li><strong>Blocks</strong>: Specific block types when Block-Level Caching is enabled</li>
+                            <li><strong>Cache Keys</strong>: Keys matching your configured prefixes</li>
+                            <li><strong>Transients</strong>: Transients matching your configured patterns</li>
+                            <li><strong>Dynamic Content</strong>: Pages containing your configured content patterns</li>
+                            <li><strong>Dynamic Blocks</strong>: When block caching enabled (auto-excluded)</li>
                             <li><strong>User-Specific Pages</strong>: Logged-in user content</li>
                             <li><strong>Admin Areas</strong>: WordPress admin and dashboard</li>
-                            <li><strong>API Endpoints</strong>: AJAX and proxy requests</li>
+                            <li><strong>API Endpoints</strong>: AJAX and REST API requests</li>
                         </ul>
                     </div>
                 </div>
                 
                 <div style="margin-top: 20px; padding: 15px; background: #f0f8ff; border-left: 4px solid #0073aa;">
-                    <h4>🧩 Block-Level Caching Benefits</h4>
-                    <p><strong>When enabled</strong>, block-level caching uses WordPress's native Block API to:</p>
-                    <ul style="margin: 10px 0;">
-                        <li><strong>Cache Static Blocks</strong>: Paragraph, image, and heading blocks are cached for speed</li>
-                        <li><strong>Exclude Dynamic Blocks</strong>: Live data blocks (latest posts, dynamic widgets) stay fresh</li>
-                        <li><strong>Granular Control</strong>: Configure exactly which block types to exclude</li>
-                        <li><strong>WordPress Native</strong>: Uses core WordPress block caching mechanisms</li>
-                        <li><strong>Best Performance</strong>: Pages load fast with live data where needed</li>
-                    </ul>
+                    <h4>🧩 Cache Mode Comparison</h4>
+                    <div style="display: flex; gap: 20px; margin-top: 15px;">
+                        <div style="flex: 1;">
+                            <h5 style="color: #0073aa;">📄 Full Page Cache</h5>
+                            <ul style="margin: 10px 0;">
+                                <li><strong>Best Performance</strong>: Serves entire cached HTML pages</li>
+                                <li><strong>Simple Setup</strong>: No configuration needed</li>
+                                <li><strong>Use Case</strong>: Static websites, blogs, marketing pages</li>
+                                <li><strong>Limitation</strong>: All content on page shares same cache</li>
+                            </ul>
+                        </div>
+                        
+                        <div style="flex: 1;">
+                            <h5 style="color: #0073aa;">🧩 Object Cache + Block Caching</h5>
+                            <ul style="margin: 10px 0;">
+                                <li><strong>Granular Control</strong>: Cache individual blocks and database objects</li>
+                                <li><strong>Dynamic Content</strong>: Latest posts, comments stay fresh</li>
+                                <li><strong>Use Case</strong>: News sites, e-commerce, user-specific content</li>
+                                <li><strong>Smart Exclusions</strong>: Auto-excludes 30+ dynamic WordPress blocks</li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <p style="margin-top: 15px;"><strong>💡 Recommendation:</strong> Use <strong>Full Page Cache</strong> for static sites, <strong>Object Cache with Block Caching</strong> for dynamic content that needs fresh data.</p>
                 </div>
                 
                 <div style="margin-top: 15px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107;">
@@ -548,6 +663,26 @@ class AceRedisCache {
         
         <script>
         jQuery(function($) {
+            // Show/hide block caching option based on cache mode
+            function toggleBlockCachingOption() {
+                const cacheMode = $('#cache-mode-select').val();
+                const blockCachingRow = $('#block-caching-row');
+                const blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
+                
+                if (cacheMode === 'object') {
+                    blockCachingRow.show();
+                } else {
+                    blockCachingRow.hide();
+                    blockCachingCheckbox.prop('checked', false); // Disable block caching in full page mode
+                }
+            }
+            
+            // Initialize on page load
+            toggleBlockCachingOption();
+            
+            // Handle cache mode changes
+            $('#cache-mode-select').on('change', toggleBlockCachingOption);
+            
             // Existing connection test and flush functionality
             $('#ace-redis-cache-test-btn').on('click', function(e) {
                 e.preventDefault();

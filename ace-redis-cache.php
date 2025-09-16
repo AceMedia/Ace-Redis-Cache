@@ -31,6 +31,7 @@ class AceRedisCache {
             'ttl' => 3600, // Increased default TTL to 1 hour
             'mode' => 'full', // 'full' or 'object'
             'enabled' => 1,
+            'enable_tls' => 0, // Enable TLS/SSL connection (for AWS Valkey/ElastiCache)
             'enable_block_caching' => 0, // Enable WordPress Block API caching
             'custom_cache_exclusions' => '', // Custom cache key exclusions
             'custom_transient_exclusions' => '', // Custom transient exclusions
@@ -710,6 +711,12 @@ class AceRedisCache {
                     <tr><th>Redis Host</th><td><input type="text" name="ace_redis_cache_settings[host]" value="<?php echo esc_attr($opts['host']); ?>"></td></tr>
                     <tr><th>Redis Port</th><td><input type="number" name="ace_redis_cache_settings[port]" value="<?php echo esc_attr($opts['port']); ?>"></td></tr>
                     <tr><th>Redis Password</th><td><input type="password" name="ace_redis_cache_settings[password]" value="<?php echo esc_attr($opts['password']); ?>"></td></tr>
+                    <tr><th>Enable TLS/SSL</th>
+                        <td>
+                            <input type="checkbox" name="ace_redis_cache_settings[enable_tls]" value="1" <?php checked($opts['enable_tls'] ?? 0, 1); ?>>
+                            <p class="description">Enable TLS/SSL encryption for secure Redis connections. Required for AWS ElastiCache/Valkey with encryption in transit. Use this instead of adding <code>tls://</code> to the hostname.</p>
+                        </td>
+                    </tr>
                     <tr><th>Cache TTL (seconds)</th><td><input type="number" name="ace_redis_cache_settings[ttl]" value="<?php echo esc_attr($opts['ttl']); ?>"></td></tr>
                     <tr><th>Cache Mode</th>
                         <td>
@@ -786,6 +793,41 @@ class AceRedisCache {
                     <span style="margin-left: 10px; font-style: italic;">This will clear all exclusion patterns, allowing you to start fresh.</span>
                 </p>
             </form>
+            
+            <div class="card" style="margin-top: 20px; padding: 15px;">
+                <h2>Connection Examples</h2>
+                <div style="display: flex; gap: 20px; margin-top: 15px;">
+                    <div style="flex: 1;">
+                        <h4 style="color: #0073aa;">🔒 AWS ElastiCache/Valkey (TLS)</h4>
+                        <ul>
+                            <li><strong>Host:</strong> <code>master.development.bkuezy.euw2.cache.amazonaws.com</code></li>
+                            <li><strong>Port:</strong> <code>6379</code></li>
+                            <li><strong>Enable TLS/SSL:</strong> ✅ Checked</li>
+                            <li><strong>Password:</strong> Leave empty (unless AUTH enabled)</li>
+                        </ul>
+                    </div>
+                    
+                    <div style="flex: 1;">
+                        <h4 style="color: #0073aa;">🌐 Standard Redis (TCP)</h4>
+                        <ul>
+                            <li><strong>Host:</strong> <code>127.0.0.1</code> or <code>localhost</code></li>
+                            <li><strong>Port:</strong> <code>6379</code></li>
+                            <li><strong>Enable TLS/SSL:</strong> ❌ Unchecked</li>
+                            <li><strong>Password:</strong> Your Redis password (if set)</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 15px; padding: 15px; background: #e7f3ff; border-left: 4px solid #0073aa;">
+                    <h4>🔧 Unix Socket Connection</h4>
+                    <p>For local high-performance Redis connections, you can use Unix sockets:</p>
+                    <ul>
+                        <li><strong>Host:</strong> <code>/var/run/redis/redis.sock</code> or <code>unix:///var/run/redis/redis.sock</code></li>
+                        <li><strong>Port:</strong> <code>0</code> (ignored for Unix sockets)</li>
+                        <li><strong>Enable TLS/SSL:</strong> ❌ Not applicable for Unix sockets</li>
+                    </ul>
+                </div>
+            </div>
             
             <div class="card" style="margin-top: 20px; padding: 15px;">
                 <h2>Intelligent Caching System</h2>
@@ -1714,6 +1756,7 @@ class AceRedisCache {
             $host = $this->settings['host'] ?? 'localhost';
             $port = intval($this->settings['port'] ?? 6379);
             $password = $this->settings['password'] ?? '';
+            $enable_tls = $this->settings['enable_tls'] ?? 0;
             
             // Set different timeouts for admin vs frontend
             $connect_timeout = is_admin() ? 2.5 : 2.0;
@@ -1725,14 +1768,12 @@ class AceRedisCache {
                 $socket_path = str_starts_with($host, 'unix://') ? substr($host, 7) : $host;
                 $redis->pconnect($socket_path, 0, $connect_timeout, $this->redis_persistent_id);
             } else {
-                // TCP connection
-                if (stripos($host, 'tls://') === 0) {
-                    // TLS/SSL connection
-                    $redis->pconnect($host, $port, $connect_timeout, $this->redis_persistent_id, 0, [
-                        'ssl' => [
-                            'verify_peer' => false,
-                            'verify_peer_name' => false,
-                        ]
+                // TCP connection with optional TLS
+                if ($enable_tls || stripos($host, 'tls://') === 0) {
+                    // TLS/SSL connection (AWS Valkey/ElastiCache compatible)
+                    $clean_host = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
+                    $redis->pconnect($clean_host, $port, $connect_timeout, $this->redis_persistent_id, 0, 0, [
+                        'tls' => []  // AWS Valkey/ElastiCache TLS configuration
                     ]);
                 } else {
                     // Standard TCP connection

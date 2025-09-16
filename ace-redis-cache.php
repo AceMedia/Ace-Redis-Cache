@@ -465,8 +465,8 @@ class AceRedisCache {
 
     public function admin_enqueue($hook) {
         if ($hook !== 'settings_page_ace-redis-cache') return;
-        wp_enqueue_script('ace-redis-cache-admin', plugins_url('admin.js', __FILE__), ['jquery'], null, true);
-        wp_localize_script('ace-redis-cache-admin', 'AceRedisCacheAjax', [
+        // External admin.js removed - all functionality now handled by inline JavaScript
+        wp_localize_script('jquery', 'AceRedisCacheAjax', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('ace_redis_cache_status'),
             'flush_nonce' => wp_create_nonce('ace_redis_cache_flush')
@@ -722,7 +722,10 @@ class AceRedisCache {
                 e.preventDefault();
                 $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_flush', nonce:AceRedisCacheAjax.flush_nonce}, function(res) {
                     alert(res.success ? 'All cache flushed!' : 'Failed to flush cache');
-                    $('#ace-redis-cache-test-btn').click();
+                    // Auto-refresh status after flush
+                    if (res.success) {
+                        $('#ace-redis-cache-size').text('0 keys (0 KB)');
+                    }
                 });
             });
             
@@ -731,10 +734,20 @@ class AceRedisCache {
                 $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_flush_blocks', nonce:AceRedisCacheAjax.flush_nonce}, function(res) {
                     if (res.success) {
                         alert(res.data.message || 'Block cache flushed!');
+                        // Manually refresh the status without triggering duplicate requests
+                        $(this).text('Refreshing...');
+                        $.post(AceRedisCacheAjax.ajax_url, {action:'ace_redis_cache_status', nonce:AceRedisCacheAjax.nonce}, function(statusRes) {
+                            if(statusRes.success) {
+                                var sizeText = statusRes.data.size + ' keys (' + statusRes.data.size_kb + ' KB)';
+                                if (statusRes.data.debug_info) {
+                                    sizeText += ' - ' + statusRes.data.debug_info;
+                                }
+                                $('#ace-redis-cache-size').text(sizeText);
+                            }
+                        });
                     } else {
                         alert('Failed to flush block cache');
                     }
-                    $('#ace-redis-cache-test-btn').click();
                 });
             });
             

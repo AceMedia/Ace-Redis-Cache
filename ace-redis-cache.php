@@ -216,14 +216,12 @@ class AceRedisCache {
         try {
             $redis = $this->get_redis_connection();
             if (!$redis) {
-                error_log('Ace Redis Cache: rtry() - No Redis connection available');
                 throw new RedisException('No Redis connection available');
             }
             
             // Check if we're already near timeout before attempting operation
             $elapsed = microtime(true) - $start_time;
             if ($elapsed > ($max_operation_time * 0.8)) {
-                error_log('Ace Redis Cache: rtry() - Aborting due to timeout limit');
                 $this->open_circuit_breaker();
                 throw new RedisException('Operation timeout prevention');
             }
@@ -233,35 +231,35 @@ class AceRedisCache {
             return $result;
             
         } catch (RedisException $e) {
-            error_log('Ace Redis Cache: rtry() - RedisException caught: ' . $e->getMessage());
             // Check if we have time for a retry
             $elapsed = microtime(true) - $start_time;
             if ($elapsed > ($max_operation_time * 0.6)) {
-                error_log('Ace Redis Cache: rtry() - Skipping retry due to insufficient time');
+                error_log('Ace Redis Cache: Skipping retry due to insufficient time');
                 $this->open_circuit_breaker();
                 throw new RedisException('Timeout prevention - no retry');
             }
             
-                error_log('Ace Redis Cache: rtry() - Attempting retry with reconnect');
-                // Close existing connection and force reconnect
-                $this->close_redis_connection();
+            error_log('Ace Redis Cache: Attempting retry with reconnect');
+            // Close existing connection and force reconnect
+            $this->close_redis_connection();
+            
+            try {
+                $redis = $this->get_redis_connection(true); // Force reconnect
+                if (!$redis) {
+                    error_log('Ace Redis Cache: Reconnection failed');
+                    throw new RedisException('Reconnection failed');
+                }
                 
-                try {
-                    $redis = $this->get_redis_connection(true); // Force reconnect
-                    if (!$redis) {
-                        error_log('Ace Redis Cache: rtry() - Reconnection failed');
-                        throw new RedisException('Reconnection failed');
-                    }
-                    
-                    // Add retry header for debugging
-                    if (!is_admin()) {
-                        header('X-Redis-Retry: 1');
-                    }
-                    
-                    // Execute retry with remaining time
-                    $remaining_time = $max_operation_time - (microtime(true) - $start_time);
-                    $result = $this->execute_with_timeout($fn, $redis, $remaining_time);
-                    return $result;            } catch (Exception $retry_e) {
+                // Add retry header for debugging
+                if (!is_admin()) {
+                    header('X-Redis-Retry: 1');
+                }
+                
+                // Execute retry with remaining time
+                $remaining_time = $max_operation_time - (microtime(true) - $start_time);
+                $result = $this->execute_with_timeout($fn, $redis, $remaining_time);
+                return $result;
+            } catch (Exception $retry_e) {
                 $total_time = microtime(true) - $start_time;
                 error_log("Redis retry failed ({$total_time}s): " . $retry_e->getMessage());
                 
@@ -929,7 +927,7 @@ class AceRedisCache {
     public function settings_page() {
         // Show notice if settings were just saved
         if (isset($_GET['settings-updated']) && $_GET['settings-updated']) {
-            echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved and all caches cleared!</strong></p></div>';
+            echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved and all caches cleared! (Ace Redis Cache v0.4.1)</strong></p></div>';
         }
         ?>
         <div class="wrap">
@@ -966,7 +964,7 @@ class AceRedisCache {
                                 • Local Redis: <code>localhost</code> or <code>127.0.0.1</code><br>
                                 • AWS ElastiCache: <code>clustercfg.my-cache.abc123.usw2.cache.amazonaws.com</code><br>
                                 • Unix Socket: <code>/var/run/redis/redis-server.sock</code><br>
-                                <strong>Note:</strong> For TLS connections, just enter the hostname - don't add <code>tls://</code> prefix (use the TLS checkbox below instead).
+                                <strong>Note:</strong> For TLS connections, just enter the hostname — do not prefix the hostname with <code>tls://</code> — use the TLS checkbox below instead.
                             </p>
                         </td>
                     </tr>
@@ -984,7 +982,7 @@ class AceRedisCache {
                                 <strong>Enable TLS encryption for secure Redis connections.</strong><br>
                                 • <strong>Required</strong> for AWS ElastiCache/Valkey with "encryption in transit"<br>
                                 • Automatically enables SNI (Server Name Indication) for proper certificate validation<br>
-                                • Use this checkbox instead of adding <code>tls://</code> to the hostname above<br>
+                                • Do not prefix the hostname with <code>tls://</code> — use the TLS checkbox instead<br>
                                 • For AWS: Use port 6380 (TLS) instead of 6379 (plain)
                             </p>
                         </td>
@@ -1076,6 +1074,7 @@ class AceRedisCache {
                             <li><strong>Port:</strong> <code>6379</code></li>
                             <li><strong>Enable TLS/SSL:</strong> ✅ Checked</li>
                             <li><strong>Password:</strong> Leave empty (unless AUTH enabled)</li>
+                            <li><strong>SNI:</strong> automatic</li>
                         </ul>
                     </div>
                     
@@ -1337,9 +1336,20 @@ class AceRedisCache {
             $start_time = microtime(true);
             
             if (!$this->get_redis_connection()) {
-                wp_send_json_success(['status'=>'Not connected','size'=>0,'size_kb'=>0]);
+                $status = 'Not connected';
+                if (!empty($settings['enable_tls'])) {
+                    $status = 'Not connected (TLS required)';
+                }
+                wp_send_json_success(['status'=>$status,'size'=>0,'size_kb'=>0]);
                 return;
             }
+
+            // Send a single ping and measure RTT
+            $ping_start = microtime(true);
+            $this->rtry(function($redis) {
+                return $redis->ping();
+            });
+            $rtt_ms = round((microtime(true) - $ping_start) * 1000, 1);
 
             // Calculate connection latency
             $connection_time = microtime(true) - $start_time;
@@ -1407,7 +1417,7 @@ class AceRedisCache {
             // Add performance and timeout diagnostics
             $performance_info = $this->get_performance_diagnostics();
             
-            $debug_info = implode(', ', $cache_breakdown) . " | Total Redis: {$all_keys_count}";
+            $debug_info = implode(', ', $cache_breakdown) . " | Total Redis: {$all_keys_count} | RTT: {$rtt_ms}ms";
             if (!empty($performance_info)) {
                 $debug_info .= " | " . $performance_info;
             }
@@ -1566,23 +1576,48 @@ class AceRedisCache {
         
         $host = $this->settings['host'] ?? 'localhost';
         $port = intval($this->settings['port'] ?? 6379);
+        $enable_tls = !empty($this->settings['enable_tls']);
         
         if (!empty($host) && $port > 0) {
             if (!str_starts_with($host, '/') && !str_starts_with($host, 'unix://')) {
-                // TCP connection test
+                // Connection test based on TLS setting
                 $clean_host = str_starts_with($host, 'tls://') ? substr($host, 6) : $host;
                 
-                $socket_timeout = 5;
-                $errno = 0;
-                $errstr = '';
-                
-                $socket = @fsockopen($clean_host, $port, $errno, $errstr, $socket_timeout);
-                if ($socket) {
-                    $diagnostics[] = "TCP Connection: SUCCESS (port {$port} is reachable)";
-                    fclose($socket);
+                if ($enable_tls) {
+                    // TLS connection test using stream_socket_client
+                    $socket_timeout = 5;
+                    $errno = 0;
+                    $errstr = '';
+                    
+                    $socket = @stream_socket_client(
+                        "ssl://{$clean_host}:{$port}", 
+                        $errno, 
+                        $errstr, 
+                        $socket_timeout,
+                        STREAM_CLIENT_CONNECT
+                    );
+                    
+                    if ($socket) {
+                        $diagnostics[] = "TLS Connection: SUCCESS (port {$port} is reachable via TLS)";
+                        fclose($socket);
+                    } else {
+                        $diagnostics[] = "TLS Connection: FAILED (Error {$errno}: {$errstr})";
+                        $diagnostics[] = "TLS handshake failed — check security group and that the client is in the same VPC/subnet, and ensure port 6379 is open from the EC2 SG to the ElastiCache SG.";
+                    }
                 } else {
-                    $diagnostics[] = "TCP Connection: FAILED (Error {$errno}: {$errstr})";
-                    $diagnostics[] = "This usually means Redis is not running or port {$port} is blocked";
+                    // Standard TCP connection test
+                    $socket_timeout = 5;
+                    $errno = 0;
+                    $errstr = '';
+                    
+                    $socket = @fsockopen($clean_host, $port, $errno, $errstr, $socket_timeout);
+                    if ($socket) {
+                        $diagnostics[] = "TCP Connection: SUCCESS (port {$port} is reachable)";
+                        fclose($socket);
+                    } else {
+                        $diagnostics[] = "TCP Connection: FAILED (Error {$errno}: {$errstr})";
+                        $diagnostics[] = "This usually means Redis is not running or port {$port} is blocked";
+                    }
                 }
             } else {
                 $socket_path = str_starts_with($host, 'unix://') ? substr($host, 7) : $host;
@@ -1597,6 +1632,12 @@ class AceRedisCache {
                     $diagnostics[] = "Unix Socket: NOT FOUND at {$socket_path}";
                 }
             }
+        }
+        
+        // Add TLS and SNI info
+        $diagnostics[] = $enable_tls ? "TLS: YES" : "TLS: NO";
+        if ($enable_tls) {
+            $diagnostics[] = "SNI: set to {$host}";
         }
         
         wp_send_json_success(['diagnostics' => implode("\n", $diagnostics)]);
@@ -2348,7 +2389,9 @@ class AceRedisCache {
             error_log('Ace Redis Cache: Exception file: ' . $e->getFile() . ':' . $e->getLine());
             
             // Open circuit breaker on frontend for connection failures
-            $this->open_circuit_breaker();
+            if (!is_admin()) {
+                $this->open_circuit_breaker();
+            }
             
             return false;
         }

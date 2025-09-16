@@ -62,10 +62,14 @@ class AceRedisCache {
             }
         }
         
-        // Add WordPress hooks to intercept transient and cache operations
+        // Add WordPress hooks to intercept operations for exclusion logic only
         if ($this->settings['enabled']) {
-            $this->setup_transient_exclusions();
-            $this->setup_plugin_exclusions();
+            // Only setup exclusion filters if we're in full page mode
+            // In object mode, Redis operations are handled directly in setup_object_cache()
+            if ($this->settings['mode'] === 'full') {
+                $this->setup_transient_exclusions();
+                $this->setup_plugin_exclusions();
+            }
         }
     }
     
@@ -153,49 +157,35 @@ class AceRedisCache {
         // Auto-exclude dynamic WordPress blocks when in object cache mode with block-level caching enabled
         if (($this->settings['mode'] === 'object') && ($this->settings['enable_block_caching'] ?? 0)) {
             $auto_excluded = [
-                'core/latest-posts',      // Latest Posts
-                'core/latest-comments',   // Latest Comments
-                'core/archives',          // Archives
-                'core/categories',        // Categories
-                'core/tag-cloud',         // Tag Cloud
-                'core/calendar',          // Calendar
-                'core/rss',              // RSS
-                'core/search',           // Search
+                'core/latest-posts',      // Latest Posts - Dynamic content that changes frequently
+                'core/latest-comments',   // Latest Comments - Dynamic content
+                'core/archives',          // Archives - Dynamic navigation
+                'core/categories',        // Categories - Dynamic navigation
+                'core/tag-cloud',         // Tag Cloud - Dynamic navigation
+                'core/calendar',          // Calendar - Time-based dynamic content
+                'core/rss',              // RSS - External dynamic content
+                'core/search',           // Search - User input dependent
                 'core/query',            // Query Loop - CRITICAL: Don't cache this!
-                'core/post-template',    // Post Template (inside Query Loop)
-                'core/query-pagination', // Query Pagination
-                'core/query-pagination-next',     // Next page link
-                'core/query-pagination-numbers',  // Page numbers
-                'core/query-pagination-previous', // Previous page link
-                'core/query-title',      // Query Title
-                'core/query-no-results', // Query No Results
-                'core/post-title',       // Post Title (when in loop context)
-                'core/post-date',        // Post Date (when in loop context)
-                'core/post-excerpt',     // Post Excerpt (when in loop context)
-                'core/post-featured-image', // Featured Image (when in loop context)
-                'core/post-content',     // Post Content (when in loop context)
-                'core/post-author',      // Post Author (when in loop context)
-                'core/post-author-name', // Post Author Name (when in loop context)
-                'core/post-author-biography', // Post Author Bio (when in loop context)
-                'core/post-terms',       // Post Terms (when in loop context)
-                'core/post-navigation-link', // Post Navigation
-                'core/comments',         // Comments
-                'core/comments-query-loop', // Comments Query Loop
-                'core/comment-template',    // Comment Template
-                'core/comment-author-name', // Comment Author Name
-                'core/comment-content',     // Comment Content
-                'core/comment-date',        // Comment Date
-                'core/comment-edit-link',   // Comment Edit Link
-                'core/comment-reply-link',  // Comment Reply Link
-                'core/avatar',           // Avatar (usually dynamic)
-                'core/loginout',         // Login/Logout link (dynamic based on user state)
-                'core/template-part',    // Template Parts (dynamic content)
-                'core/block',            // Reusable Blocks (could be dynamic)
-                'core/pattern',          // Block Patterns (could be dynamic)
-                'ace/popular-posts',     // Custom Popular Posts block (dynamic content)
-                'woocommerce/*',         // All WooCommerce blocks (typically dynamic)
-                // EXPERIMENTAL: Try excluding ALL blocks to see if Query Loops work
-                '*',                     // Exclude everything temporarily for testing
+                'core/query-pagination', // Query Pagination - Dynamic based on query results
+                'core/query-pagination-next',     // Next page link - Dynamic
+                'core/query-pagination-numbers',  // Page numbers - Dynamic
+                'core/query-pagination-previous', // Previous page link - Dynamic
+                'core/query-title',      // Query Title - Dynamic based on query
+                'core/query-no-results', // Query No Results - Dynamic based on query
+                'core/comments',         // Comments - Dynamic user-generated content
+                'core/comments-query-loop', // Comments Query Loop - Dynamic
+                'core/comment-template',    // Comment Template - Dynamic
+                'core/comment-author-name', // Comment Author Name - Dynamic
+                'core/comment-content',     // Comment Content - Dynamic
+                'core/comment-date',        // Comment Date - Dynamic
+                'core/comment-edit-link',   // Comment Edit Link - User-dependent
+                'core/comment-reply-link',  // Comment Reply Link - User-dependent
+                'core/avatar',           // Avatar - Usually dynamic/user-dependent
+                'core/loginout',         // Login/Logout link - User state dependent
+                'woocommerce/*',         // All WooCommerce blocks - E-commerce is typically dynamic
+                // Note: Removed core/post-* blocks to allow caching of individual post content
+                // Note: Removed ace/popular-posts to allow custom caching control
+                // Note: Removed '*' wildcard to enable selective block caching
             ];
             
             $excluded_blocks = array_merge($excluded_blocks, $auto_excluded);
@@ -448,16 +438,21 @@ class AceRedisCache {
         try {
             $redis = $this->connect_redis();
             if ($redis) {
-                // Clear page cache
+                // Clear all cache types
                 $page_keys = $redis->keys($this->cache_prefix . '*');
-                if ($page_keys) {
-                    $redis->del($page_keys);
-                }
-                
-                // Clear block cache
                 $block_keys = $redis->keys('block_cache:*');
-                if ($block_keys) {
-                    $redis->del($block_keys);
+                $object_keys = $redis->keys('wp_cache_*');
+                $transient_keys = $redis->keys('_transient_*');
+                
+                $all_keys = array_merge(
+                    $page_keys ?: [], 
+                    $block_keys ?: [], 
+                    $object_keys ?: [], 
+                    $transient_keys ?: []
+                );
+                
+                if (!empty($all_keys)) {
+                    $redis->del($all_keys);
                 }
                 
                 // Log the cache clear
@@ -774,28 +769,48 @@ class AceRedisCache {
 
             $status = 'Connected';
             
-            // Count cache keys
-            $cache_keys = $redis->keys($this->cache_prefix . '*') ?: [];
-            $cache_size = is_array($cache_keys) ? count($cache_keys) : 0;
+            // Count different cache types
+            $page_keys = $redis->keys($this->cache_prefix . '*') ?: [];
+            $block_keys = $redis->keys('block_cache:*') ?: [];
+            $object_keys = $redis->keys('wp_cache_*') ?: [];
+            $transient_keys = $redis->keys('_transient_*') ?: [];
+            
+            $page_count = is_array($page_keys) ? count($page_keys) : 0;
+            $block_count = is_array($block_keys) ? count($block_keys) : 0;
+            $object_count = is_array($object_keys) ? count($object_keys) : 0;
+            $transient_count = is_array($transient_keys) ? count($transient_keys) : 0;
+            
+            // Total cache entries managed by this plugin
+            $total_cache_size = $page_count + $block_count + $object_count + $transient_count;
             
             // Count all keys for debugging
             $all_keys = $redis->keys('*') ?: [];
             $all_keys_count = is_array($all_keys) ? count($all_keys) : 0;
 
+            // Calculate total bytes for all cache types
             $totalBytes = 0;
-            if (is_array($cache_keys)) {
-                foreach ($cache_keys as $key) {
-                    $len = $redis->strlen($key);
-                    if ($len !== false) $totalBytes += $len;
-                }
+            $all_cache_keys = array_merge($page_keys, $block_keys, $object_keys, $transient_keys);
+            
+            foreach ($all_cache_keys as $key) {
+                $len = $redis->strlen($key);
+                if ($len !== false) $totalBytes += $len;
             }
             $size_kb = round($totalBytes / 1024, 2);
 
+            // Build detailed cache breakdown
+            $cache_breakdown = [];
+            if ($page_count > 0) $cache_breakdown[] = "Pages: {$page_count}";
+            if ($block_count > 0) $cache_breakdown[] = "Blocks: {$block_count}";
+            if ($object_count > 0) $cache_breakdown[] = "Objects: {$object_count}";
+            if ($transient_count > 0) $cache_breakdown[] = "Transients: {$transient_count}";
+            
+            $debug_info = implode(', ', $cache_breakdown) . " | Total Redis: {$all_keys_count}";
+
             wp_send_json_success([
                 'status' => $status,
-                'size'   => $cache_size,
+                'size'   => $total_cache_size,
                 'size_kb' => $size_kb,
-                'debug_info' => "Cache keys: {$cache_size}, Total keys: {$all_keys_count}",
+                'debug_info' => $debug_info,
             ]);
         } catch (Exception $e) {
             wp_send_json_success(['status'=>'Error: ' . $e->getMessage(),'size'=>0,'size_kb'=>0]);
@@ -842,8 +857,22 @@ class AceRedisCache {
         try {
             $redis = $this->connect_redis();
             if ($redis) {
-                $keys = $redis->keys($this->cache_prefix . '*');
-                if ($keys) $redis->del($keys);
+                // Clear all cache types
+                $page_keys = $redis->keys($this->cache_prefix . '*');
+                $block_keys = $redis->keys('block_cache:*');
+                $object_keys = $redis->keys('wp_cache_*');
+                $transient_keys = $redis->keys('_transient_*');
+                
+                $all_keys = array_merge(
+                    $page_keys ?: [], 
+                    $block_keys ?: [], 
+                    $object_keys ?: [], 
+                    $transient_keys ?: []
+                );
+                
+                if (!empty($all_keys)) {
+                    $redis->del($all_keys);
+                }
                 wp_send_json_success(true);
             }
         } catch (Exception $e) {
@@ -953,11 +982,184 @@ class AceRedisCache {
         return false;
     }
 
-    /** Object Cache Placeholder **/
+    /** Object Cache Implementation **/
     private function setup_object_cache() {
         add_action('init', function () {
             header('X-Cache-Mode: Object');
         });
+        
+        // Implement actual Redis-backed transient operations
+        add_filter('pre_set_transient', [$this, 'redis_set_transient'], 10, 3);
+        add_filter('pre_get_transient', [$this, 'redis_get_transient'], 10, 2);
+        add_filter('pre_delete_transient', [$this, 'redis_delete_transient'], 10, 2);
+        
+        // Implement WordPress object cache operations
+        add_filter('pre_wp_cache_set', [$this, 'redis_wp_cache_set'], 10, 5);
+        add_filter('pre_wp_cache_get', [$this, 'redis_wp_cache_get'], 10, 3);
+        add_filter('pre_wp_cache_delete', [$this, 'redis_wp_cache_delete'], 10, 3);
+    }
+    
+    /**
+     * Store transient in Redis
+     */
+    public function redis_set_transient($value, $transient, $expiration) {
+        error_log("DEBUG: redis_set_transient called for: {$transient}");
+        
+        // Check if this transient should be excluded
+        if ($this->should_exclude_transient($transient)) {
+            error_log("DEBUG: Transient {$transient} excluded");
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            error_log("DEBUG: Redis connection failed for transient {$transient}");
+            return false; // Fall back to database
+        }
+        
+        $key = "_transient_{$transient}";
+        $expiration = intval($expiration) ?: intval($this->settings['ttl']);
+        
+        try {
+            $result = $redis->setex($key, $expiration, serialize($value));
+            error_log("DEBUG: Stored transient {$key} in Redis, result: " . ($result ? 'SUCCESS' : 'FAILED'));
+            return $value; // Return the value to indicate we handled it
+        } catch (Exception $e) {
+            error_log('Redis transient set failed: ' . $e->getMessage());
+            return false; // Fall back to database
+        }
+    }
+    
+    /**
+     * Get transient from Redis
+     */
+    public function redis_get_transient($value, $transient) {
+        // Check if this transient should be excluded
+        if ($this->should_exclude_transient($transient)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to database
+        }
+        
+        $key = "_transient_{$transient}";
+        
+        try {
+            $cached = $redis->get($key);
+            if ($cached !== false) {
+                return unserialize($cached);
+            }
+            return false; // Not found in cache
+        } catch (Exception $e) {
+            error_log('Redis transient get failed: ' . $e->getMessage());
+            return false; // Fall back to database
+        }
+    }
+    
+    /**
+     * Delete transient from Redis
+     */
+    public function redis_delete_transient($value, $transient) {
+        // Check if this transient should be excluded
+        if ($this->should_exclude_transient($transient)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to database
+        }
+        
+        $key = "_transient_{$transient}";
+        
+        try {
+            $redis->del($key);
+            return true; // Indicate we handled it
+        } catch (Exception $e) {
+            error_log('Redis transient delete failed: ' . $e->getMessage());
+            return false; // Fall back to database
+        }
+    }
+    
+    /**
+     * Store object cache in Redis
+     */
+    public function redis_wp_cache_set($value, $key, $data, $group, $expire) {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to memory cache
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        $expire = intval($expire) ?: intval($this->settings['ttl']);
+        
+        try {
+            $redis->setex($cache_key, $expire, serialize($data));
+            return true; // Indicate we handled it
+        } catch (Exception $e) {
+            error_log('Redis wp_cache set failed: ' . $e->getMessage());
+            return false; // Fall back to memory cache
+        }
+    }
+    
+    /**
+     * Get object cache from Redis
+     */
+    public function redis_wp_cache_get($value, $key, $group) {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to memory cache
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        try {
+            $cached = $redis->get($cache_key);
+            if ($cached !== false) {
+                return unserialize($cached);
+            }
+            return false; // Not found in cache
+        } catch (Exception $e) {
+            error_log('Redis wp_cache get failed: ' . $e->getMessage());
+            return false; // Fall back to memory cache
+        }
+    }
+    
+    /**
+     * Delete object cache from Redis
+     */
+    public function redis_wp_cache_delete($value, $key, $group) {
+        // Check if this cache key should be excluded
+        if ($this->should_exclude_cache_key($key)) {
+            return false; // Let WordPress handle it normally
+        }
+        
+        $redis = $this->connect_redis();
+        if (!$redis) {
+            return false; // Fall back to memory cache
+        }
+        
+        $cache_key = "wp_cache_{$group}:{$key}";
+        
+        try {
+            $redis->del($cache_key);
+            return true; // Indicate we handled it
+        } catch (Exception $e) {
+            error_log('Redis wp_cache delete failed: ' . $e->getMessage());
+            return false; // Fall back to memory cache
+        }
     }
 
     /** Redis Connection **/

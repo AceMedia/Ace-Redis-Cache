@@ -10,8 +10,6 @@
 # Build outputs we DO commit
 # (Don't ignore assets/dist — we want compiled files tracked)
 # Optionally ignore only noisy build artefacts:
-assets/dist/**/*.map
-assets/dist/**/*.LICENSE.txt
 assets/dist/**/*hot-update*
 assets/dist/**/.DS_Store
 

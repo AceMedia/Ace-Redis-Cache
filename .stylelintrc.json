@@ -1,0 +1,25 @@
+{
+  "extends": [
+    "stylelint-config-standard-scss"
+  ],
+  "rules": {
+    "indentation": 4,
+    "string-quotes": "single",
+    "color-hex-length": "short",
+    "color-hex-case": "lower",
+    "selector-class-pattern": null,
+    "scss/at-rule-no-unknown": [
+      true,
+      {
+        "ignoreAtRules": [
+          "include",
+          "mixin",
+          "extend"
+        ]
+      }
+    ]
+  },
+  "ignoreFiles": [
+    "assets/dist/**/*"
+  ]
+}

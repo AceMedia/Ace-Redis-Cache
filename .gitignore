@@ -1,0 +1,30 @@
+# Ace Redis Cache - Build Files
+/node_modules/
+/assets/dist/
+*.log
+.DS_Store
+.vscode/
+.idea/
+*.zip
+*.tar.gz
+
+# WordPress specific
+wp-config.php
+.htaccess
+
+# Development
+.sass-cache/
+/.pnp
+.pnp.js
+
+# Testing
+/coverage/
+phpunit.xml
+.phpunit.cache
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

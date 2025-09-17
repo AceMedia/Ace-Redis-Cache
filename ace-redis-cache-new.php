@@ -138,8 +138,8 @@ class AceRedisCacheBootstrap {
             // Remove namespace prefix
             $class = str_replace('AceMedia\\RedisCache\\', '', $class);
             
-            // Convert class name to file name (handle CamelCase)
-            $class_file = 'class-' . strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $class)) . '.php';
+            // Convert class name to file name
+            $class_file = 'class-' . strtolower(str_replace('_', '-', $class)) . '.php';
             
             // Try includes directory first
             $includes_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'includes/' . $class_file;

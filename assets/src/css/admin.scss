@@ -1,0 +1,1048 @@
+/**
+ * Ace Redis Cache Admin Styles
+ * 
+ * Modern Yoast-style admin interface with sidebar navigation
+ * for the Redis cache plugin settings page.
+ *
+ * @package AceMedia\RedisCache
+ * @since 0.5.0
+ */
+
+// Import modern color functions
+@use 'sass:color';
+
+// Variables
+$primary-color: #0073aa;
+$primary-hover: #005a87;
+$success-color: #46b450;
+$error-color: #dc3232;
+$warning-color: #ffb900;
+$border-color: #e1e1e1;
+$background-light: #f9f9f9;
+$sidebar-bg: #f1f1f1;
+$text-color: #50575e;
+$text-color-light: #666;
+$sidebar-width: 250px;
+$mobile-breakpoint: 768px;
+
+// Mixins
+@mixin button-style($bg-color, $text-color: white) {
+    background-color: $bg-color;
+    color: $text-color;
+    border: 1px solid color.adjust($bg-color, $lightness: -10%);
+    border-radius: 4px;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: 500;
+    text-decoration: none;
+    display: inline-block;
+    
+    &:hover:not(:disabled) {
+        background-color: color.adjust($bg-color, $lightness: -5%);
+        border-color: color.adjust($bg-color, $lightness: -15%);
+        color: $text-color;
+        text-decoration: none;
+    }
+    
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+}
+
+@mixin card-style {
+    background: white;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+    padding: 24px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+// Main settings wrapper - Yoast style layout
+.ace-redis-settings {
+    margin: 0 20px 0 2px;
+    
+    .wrap > h1 {
+        color: #1d2327;
+        margin-bottom: 24px;
+        font-size: 23px;
+        font-weight: 400;
+        line-height: 1.3;
+    }
+    
+    // Notices
+    .notice {
+        margin: 20px 0;
+        padding: 15px;
+        border-left: 4px solid $primary-color;
+        background: #f0f8ff;
+        border-radius: 0 4px 4px 0;
+        
+        p {
+            margin: 5px 0;
+        }
+        
+        &.notice-error {
+            border-left-color: $error-color;
+            background: #ffeaea;
+        }
+        
+        &.notice-warning {
+            border-left-color: $warning-color;
+            background: #fff8e5;
+        }
+    }
+    
+    // Two-column layout container
+    .ace-redis-container {
+        display: flex;
+        gap: 20px;
+        position: relative;
+        
+        @media (max-width: $mobile-breakpoint) {
+            flex-direction: column;
+            gap: 0;
+        }
+    }
+    
+    // Left sidebar navigation
+    .ace-redis-sidebar {
+        width: $sidebar-width;
+        flex-shrink: 0;
+        
+        @media (max-width: $mobile-breakpoint) {
+            width: 100%;
+        }
+        
+        .nav-tab-wrapper {
+            @include card-style;
+            border: 1px solid $border-color;
+            padding: 0;
+            margin: 0;
+            background: white;
+            border-radius: 6px;
+            overflow: hidden;
+            
+            @media (max-width: $mobile-breakpoint) {
+                display: flex;
+                overflow-x: auto;
+                border-radius: 6px 6px 0 0;
+                background: $sidebar-bg;
+                padding: 0;
+            }
+        }
+        
+        .nav-tab {
+            display: block;
+            width: 100%;
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid $border-color;
+            color: $text-color;
+            text-decoration: none;
+            padding: 16px 20px;
+            margin: 0;
+            border-radius: 0;
+            transition: all 0.2s ease;
+            text-align: left;
+            font-size: 14px;
+            font-weight: 500;
+            position: relative;
+            
+            @media (max-width: $mobile-breakpoint) {
+                display: inline-block;
+                width: auto;
+                white-space: nowrap;
+                border-bottom: none;
+                border-right: 1px solid $border-color;
+                min-width: 120px;
+                text-align: center;
+                padding: 12px 16px;
+            }
+            
+            &:last-child {
+                border-bottom: none;
+                
+                @media (max-width: $mobile-breakpoint) {
+                    border-right: none;
+                }
+            }
+            
+            &:hover {
+                background: rgba($primary-color, 0.05);
+                color: $primary-color;
+            }
+            
+            &.nav-tab-active {
+                background: $primary-color;
+                color: white;
+                font-weight: 600;
+                
+                &::before {
+                    content: '';
+                    position: absolute;
+                    right: -1px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    width: 0;
+                    height: 0;
+                    border-top: 8px solid transparent;
+                    border-bottom: 8px solid transparent;
+                    border-left: 8px solid $primary-color;
+                    
+                    @media (max-width: $mobile-breakpoint) {
+                        display: none;
+                    }
+                }
+                
+                &:hover {
+                    background: $primary-color;
+                    color: white;
+                }
+            }
+        }
+    }
+    
+    // Cache action buttons panel
+    .cache-actions-panel {
+        @include card-style;
+        margin-top: 20px;
+        padding: 20px;
+        
+        @media (max-width: $mobile-breakpoint) {
+            margin-top: 15px;
+            padding: 15px;
+        }
+        
+        h4 {
+            margin: 0 0 15px 0;
+            color: $text-color;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .cache-action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            
+            .cache-action-btn {
+                @include button-style($primary-color);
+                width: 100%;
+                justify-content: flex-start;
+                padding: 12px 16px;
+                font-size: 13px;
+                font-weight: 500;
+                text-align: left;
+                display: flex;
+                align-items: center;
+                
+                .dashicons {
+                    margin-right: 8px;
+                    font-size: 16px;
+                    width: 16px;
+                    height: 16px;
+                }
+                
+                &:hover:not(:disabled) {
+                    transform: translateY(-1px);
+                    box-shadow: 0 3px 8px rgba($primary-color, 0.3);
+                }
+                
+                &#ace-redis-cache-flush-btn {
+                    @include button-style($error-color);
+                    
+                    &:hover:not(:disabled) {
+                        box-shadow: 0 3px 8px rgba($error-color, 0.3);
+                    }
+                }
+                
+                &#ace-redis-cache-flush-blocks-btn {
+                    @include button-style($warning-color, #000);
+                    
+                    &:hover:not(:disabled) {
+                        box-shadow: 0 3px 8px rgba($warning-color, 0.3);
+                    }
+                }
+            }
+            
+            @media (max-width: $mobile-breakpoint) {
+                flex-direction: row;
+                gap: 8px;
+                
+                .cache-action-btn {
+                    justify-content: center;
+                    text-align: center;
+                    font-size: 12px;
+                    padding: 10px 12px;
+                    
+                    .dashicons {
+                        margin-right: 4px;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Main content area
+    .ace-redis-content {
+        flex: 1;
+        min-width: 0; // Prevent flex item from overflowing
+        
+        @media (max-width: $mobile-breakpoint) {
+            width: 100%;
+        }
+    }
+    
+    // Form container
+    .ace-redis-form {
+        @include card-style;
+        margin: 0;
+        
+        @media (max-width: $mobile-breakpoint) {
+            border-radius: 0 0 6px 6px;
+            border-top: none;
+        }
+    }
+    
+    // Fixed save button
+    .ace-redis-save-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 1000;
+        
+        @media (max-width: $mobile-breakpoint) {
+            position: relative;
+            bottom: auto;
+            right: auto;
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .ace-redis-save-btn {
+            @include button-style($primary-color);
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba($primary-color, 0.3);
+            
+            &:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 6px 16px rgba($primary-color, 0.4);
+            }
+            
+            &:disabled {
+                transform: none;
+                box-shadow: 0 4px 12px rgba($primary-color, 0.2);
+            }
+        }
+    }
+}
+
+// Tab content
+.tab-content {
+    display: none;
+    padding-bottom: 80px; // Space for fixed save button
+    
+    @media (max-width: $mobile-breakpoint) {
+        padding-bottom: 20px;
+    }
+    
+    &.active {
+        display: block;
+        animation: fadeIn 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    
+    h2 {
+        color: #1d2327;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid $primary-color;
+        font-size: 20px;
+        font-weight: 600;
+    }
+    
+    h3 {
+        color: $text-color;
+        margin-top: 30px;
+        margin-bottom: 15px;
+    }
+}
+
+// Form elements
+.ace-redis-form {
+    .form-table {
+        th {
+            width: 200px;
+            font-weight: 600;
+            color: $text-color;
+            vertical-align: top;
+            padding-top: 20px;
+        }
+        
+        td {
+            padding-bottom: 20px;
+        }
+        
+        .description {
+            color: $text-color-light;
+            font-style: italic;
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        input[type="password"],
+        select,
+        textarea {
+            border: 1px solid $border-color;
+            border-radius: 4px;
+            padding: 8px 12px;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            font-size: 14px;
+            
+            &:focus {
+                border-color: $primary-color;
+                box-shadow: 0 0 0 2px rgba($primary-color, 0.1);
+                outline: none;
+            }
+            
+            &.error {
+                border-color: $error-color;
+                box-shadow: 0 0 0 2px rgba($error-color, 0.1);
+            }
+        }
+        
+        textarea.code {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            background: #f8f8f8;
+        }
+    }
+}
+
+// Custom toggle switch
+.ace-switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 28px;
+    
+    input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .ace-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 28px;
+        
+        &:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.4s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+    }
+    
+    input:checked + .ace-slider {
+        background-color: $success-color;
+        
+        &:before {
+            transform: translateX(32px);
+        }
+    }
+    
+    input:focus + .ace-slider {
+        box-shadow: 0 0 0 3px rgba($success-color, 0.2);
+    }
+}
+
+// Status indicators
+.status-unknown { 
+    color: $text-color-light; 
+    font-style: italic;
+}
+
+.status-success { 
+    color: $success-color; 
+    font-weight: 600;
+    
+    &:before {
+        content: "✅ ";
+    }
+}
+
+.status-error { 
+    color: $error-color; 
+    font-weight: 600;
+    
+    &:before {
+        content: "❌ ";
+    }
+}
+
+// Panel components
+.connection-test-panel,
+.cache-management-panel,
+.diagnostics-panel {
+    @include card-style;
+    margin: 20px 0;
+    background: $background-light;
+    
+    h4 {
+        margin-top: 0;
+        color: $text-color;
+    }
+}
+
+.test-buttons,
+.button-group {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    
+    .button {
+        @include button-style($primary-color);
+        
+        &.button-secondary {
+            @include button-style(white, $text-color);
+        }
+    }
+}
+
+.test-results {
+    p {
+        margin: 8px 0;
+        
+        strong {
+            color: $text-color;
+        }
+    }
+}
+
+// Diagnostics
+.diagnostics-output {
+    @include card-style;
+    margin-top: 15px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    background: #f8f8f8;
+    
+    pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+    
+    .error {
+        color: $error-color;
+        font-weight: 600;
+    }
+}
+
+// Performance metrics
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+    
+    .metric-card {
+        @include card-style;
+        text-align: center;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: $primary-color;
+            margin-bottom: 8px;
+        }
+        
+        .metric-label {
+            font-size: 14px;
+            color: $text-color-light;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+    }
+}
+
+// Messages
+#ace-redis-messages {
+    margin: 20px 0;
+    
+    .notice {
+        display: block;
+        margin: 10px 0;
+        padding: 12px 16px;
+        border-radius: 4px;
+        font-weight: 500;
+        
+        &.notice-success {
+            background: rgba($success-color, 0.1);
+            border-left: 4px solid $success-color;
+            color: color.adjust($success-color, $lightness: -20%);
+        }
+        
+        &.notice-error {
+            background: rgba($error-color, 0.1);
+            border-left: 4px solid $error-color;
+            color: color.adjust($error-color, $lightness: -10%);
+        }
+    }
+}
+
+// Responsive improvements
+@media (max-width: $mobile-breakpoint) {
+    .ace-redis-settings {
+        margin: 0 10px;
+        
+        .form-table {
+            th, td {
+                display: block;
+                width: 100%;
+                padding: 10px 0;
+            }
+            
+            th {
+                font-weight: 600;
+                margin-bottom: 5px;
+            }
+        }
+        
+        .metrics-grid {
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+    }
+}
+
+// Tab content
+.tab-content {
+    display: none;
+    padding: 20px 0;
+    
+    &.active {
+        display: block;
+        animation: fadeIn 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    
+    h2 {
+        color: #23282d;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid $primary-color;
+    }
+    
+    h3 {
+        color: $text-color;
+        margin-top: 30px;
+        margin-bottom: 15px;
+    }
+}
+
+// Form elements
+.ace-redis-form {
+    .form-table {
+        th {
+            width: 200px;
+            font-weight: 600;
+            color: $text-color;
+        }
+        
+        .description {
+            color: $text-color-light;
+            font-style: italic;
+            margin-top: 5px;
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        input[type="password"],
+        select,
+        textarea {
+            border: 1px solid $border-color;
+            border-radius: 4px;
+            padding: 8px 12px;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            
+            &:focus {
+                border-color: $primary-color;
+                box-shadow: 0 0 0 2px rgba(0, 115, 170, 0.1);
+                outline: none;
+            }
+            
+            &.error {
+                border-color: $error-color;
+                box-shadow: 0 0 0 2px rgba(220, 50, 50, 0.1);
+            }
+        }
+        
+        textarea.code {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            background: #f8f8f8;
+        }
+    }
+}
+
+// Custom toggle switch
+.ace-switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 28px;
+    
+    input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .ace-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 28px;
+        
+        &:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.4s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+    }
+    
+    input:checked + .ace-slider {
+        background-color: $success-color;
+        
+        &:before {
+            transform: translateX(32px);
+        }
+    }
+    
+    input:focus + .ace-slider {
+        box-shadow: 0 0 0 3px rgba(70, 180, 80, 0.2);
+    }
+}
+
+// Status indicators
+.status-unknown { 
+    color: $text-color-light; 
+    font-style: italic;
+}
+
+.status-success { 
+    color: $success-color; 
+    font-weight: 600;
+    
+    &:before {
+        content: "✅ ";
+    }
+}
+
+.status-error { 
+    color: $error-color; 
+    font-weight: 600;
+    
+    &:before {
+        content: "❌ ";
+    }
+}
+
+// Panel components
+.connection-test-panel,
+.cache-management-panel,
+.diagnostics-panel {
+    @include card-style;
+    margin: 20px 0;
+    background: $background-light;
+    
+    h4 {
+        margin-top: 0;
+        color: $text-color;
+    }
+}
+
+.test-buttons,
+.button-group {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    
+    .button {
+        @include button-style($primary-color);
+        
+        &.button-secondary {
+            @include button-style(white, $text-color);
+        }
+        
+        &:not(:last-child) {
+            margin-right: 0;
+        }
+    }
+}
+
+.test-results {
+    p {
+        margin: 8px 0;
+        
+        strong {
+            color: $text-color;
+        }
+    }
+}
+
+// Diagnostics
+.diagnostics-output {
+    @include card-style;
+    margin-top: 15px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    background: #f8f8f8;
+    
+    pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+    
+    .error {
+        color: $error-color;
+        font-weight: 600;
+    }
+}
+
+// Performance metrics
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.metric-card {
+    @include card-style;
+    text-align: center;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    
+    h4 {
+        margin: 0 0 15px 0;
+        color: $text-color-light;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .metric-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: $primary-color;
+        margin: 10px 0;
+        
+        &.success {
+            color: $success-color;
+        }
+        
+        &.warning {
+            color: $warning-color;
+        }
+        
+        &.error {
+            color: $error-color;
+        }
+    }
+}
+
+// Exclusion help
+.exclusion-help {
+    @include card-style;
+    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+    border-left: 4px solid $primary-color;
+    margin-top: 20px;
+    
+    h4 {
+        margin-top: 0;
+        color: $primary-color;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    ul {
+        margin: 15px 0 0 20px;
+        
+        li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+            
+            strong {
+                color: $text-color;
+            }
+            
+            code {
+                background: rgba(0, 115, 170, 0.1);
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+        }
+    }
+}
+
+// Save button enhancement
+#ace-redis-save-btn {
+    @include button-style($success-color);
+    font-size: 16px;
+    padding: 12px 24px;
+    margin-top: 20px;
+    
+    &:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(70, 180, 80, 0.3);
+    }
+}
+
+// Responsive design
+@media (max-width: 768px) {
+    .ace-redis-settings {
+        margin: 0 -20px;
+        
+        .nav-tab-wrapper {
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+    }
+    
+    .metrics-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+    }
+    
+    .test-buttons,
+    .button-group {
+        flex-direction: column;
+        
+        .button {
+            width: 100%;
+            justify-content: center;
+        }
+    }
+    
+    .form-table {
+        th,
+        td {
+            display: block;
+            width: 100%;
+            padding: 10px 0;
+        }
+        
+        th {
+            border-bottom: 1px solid #eee;
+            margin-bottom: 5px;
+        }
+    }
+}
+
+@media (max-width: 480px) {
+    .metrics-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .metric-card {
+        padding: 15px;
+        
+        .metric-value {
+            font-size: 24px;
+        }
+    }
+}
+
+// Top alignment for all content in right panel
+.ace-redis-content {
+    align-items: flex-start;
+    
+    .tab-content {
+        align-self: flex-start;
+        
+        * {
+            vertical-align: top;
+        }
+    }
+    
+    .settings-card {
+        align-self: flex-start;
+        
+        .card-content {
+            align-items: flex-start;
+            
+            * {
+                vertical-align: top;
+            }
+        }
+    }
+}
+
+// Hide WordPress footer with important
+#wpfooter {
+    display: none !important;
+}

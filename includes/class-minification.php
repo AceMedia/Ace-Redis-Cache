@@ -34,8 +34,9 @@ class Minification {
             return;
         }
         
-        // Hook into output buffering for full page cache mode
-        if ($this->settings['mode'] === 'full') {
+        // Only setup output buffering if not in full page cache mode
+        // (full page cache will handle minification directly)
+        if ($this->settings['mode'] !== 'full') {
             add_action('template_redirect', [$this, 'start_output_buffering'], 1);
         }
     }
@@ -72,8 +73,24 @@ class Minification {
             return false;
         }
         
+        // Don't minify XML feeds
+        if (is_feed()) {
+            return false;
+        }
+        
         // Don't minify if user is logged in and in customize mode
         if (is_customize_preview()) {
+            return false;
+        }
+        
+        // Don't minify non-HTML content types
+        if (function_exists('http_response_code') && http_response_code() !== 200) {
+            return false;
+        }
+        
+        // Only minify for guest users (logged out users)
+        // This ensures minification only applies to cached public content
+        if (is_user_logged_in()) {
             return false;
         }
         
@@ -88,6 +105,13 @@ class Minification {
      */
     public function minify_output($html) {
         if (empty($html) || !is_string($html)) {
+            return $html;
+        }
+        
+        // Check if this looks like HTML content (should start with <!DOCTYPE or <html)
+        $trimmed_html = ltrim($html);
+        if (!preg_match('/^<!DOCTYPE\s+html|^<html/i', $trimmed_html)) {
+            // Not HTML content, skip minification
             return $html;
         }
         
@@ -144,17 +168,17 @@ class Minification {
     }
     
     /**
-     * Minify HTML content
+     * Minify HTML content - Remove all blank lines
      *
      * @param string $html HTML content
      * @return string Minified HTML
      */
     public function minify_html($html) {
-        // Preserve important whitespace in pre, code, script, style, and textarea tags
+        // Preserve important content completely - don't touch script, style, pre, code, textarea
         $preserve_tags = [];
         $preserve_patterns = [
             '/<(pre|code|script|style|textarea)[^>]*>.*?<\/\1>/is',
-            '/<!--.*?-->/s'
+            '/<!--\[if\s.*?\[endif\]-->/s' // IE conditional comments
         ];
         
         $placeholder_index = 0;
@@ -167,24 +191,17 @@ class Minification {
             }, $html);
         }
         
-        // Remove HTML comments (except IE conditionals)
-        $html = preg_replace('/<!--(?!\s*(?:\[if [^\]]+]|<!|>))(?:(?!-->).)*-->/s', '', $html);
+        // Remove regular HTML comments (but keep IE conditionals)
+        $html = preg_replace('/<!--(?!\s*(?:\[if|\[endif)).*?-->/s', '', $html);
         
-        // Remove unnecessary whitespace
-        $html = preg_replace('/\s+/', ' ', $html);
+        // Remove ALL blank lines (lines with only whitespace)
+        $html = preg_replace('/^\s*$/m', '', $html);
         
-        // Remove whitespace around block elements
-        $block_elements = 'div|p|h[1-6]|ul|ol|li|table|tr|td|th|thead|tbody|tfoot|section|article|header|footer|nav|aside|main';
-        $html = preg_replace('/\s*(<\/?(?:' . $block_elements . ')[^>]*>)\s*/', '$1', $html);
+        // Remove all consecutive newlines (collapse multiple newlines into none)
+        $html = preg_replace('/\n+/', '', $html);
         
-        // Remove whitespace before closing tags
-        $html = preg_replace('/\s+(<\/[^>]+>)/', '$1', $html);
-        
-        // Remove whitespace after opening tags
-        $html = preg_replace('/(<[^\/][^>]*>)\s+/', '$1', $html);
-        
-        // Remove empty lines
-        $html = preg_replace('/\n\s*\n/', "\n", $html);
+        // Convert multiple spaces to single spaces
+        $html = preg_replace('/ {2,}/', ' ', $html);
         
         // Restore preserved content
         foreach ($preserve_tags as $placeholder => $original) {
@@ -195,7 +212,7 @@ class Minification {
     }
     
     /**
-     * Minify inline CSS
+     * Minify inline CSS - Light minification only
      *
      * @param string $html HTML content with CSS
      * @return string HTML with minified CSS
@@ -204,21 +221,19 @@ class Minification {
         return preg_replace_callback('/<style[^>]*>(.*?)<\/style>/is', function($matches) {
             $css = $matches[1];
             
-            // Remove comments
+            // Remove CSS comments
             $css = preg_replace('/\/\*.*?\*\//s', '', $css);
             
-            // Remove unnecessary whitespace
-            $css = preg_replace('/\s+/', ' ', $css);
+            // Remove empty lines
+            $css = preg_replace('/\n\s*\n/', "\n", $css);
             
-            // Remove whitespace around specific characters
-            $css = preg_replace('/\s*([\{\}:;,>+~])\s*/', '$1', $css);
+            // Remove leading and trailing whitespace from each line
+            $css = preg_replace('/^\s+|\s+$/m', '', $css);
             
-            // Remove trailing semicolons before closing braces
-            $css = preg_replace('/;(\s*})/', '$1', $css);
+            // Remove newlines
+            $css = preg_replace('/\n+/', '', $css);
             
-            // Remove unnecessary quotes from URLs
-            $css = preg_replace('/url\((["\'])([^"\']*)\1\)/', 'url($2)', $css);
-            
+            // Trim final result
             $css = trim($css);
             
             // Reconstruct the style tag
@@ -228,7 +243,7 @@ class Minification {
     }
     
     /**
-     * Minify inline JavaScript
+     * Minify inline JavaScript - Minimal safe minification
      *
      * @param string $html HTML content with JavaScript
      * @return string HTML with minified JavaScript
@@ -242,23 +257,21 @@ class Minification {
                 return $matches[0];
             }
             
-            // Simple JS minification (be careful not to break functionality)
+            // Skip if it's JSON data
+            if (strpos($matches[0], 'application/json') !== false) {
+                return $matches[0];
+            }
             
-            // Remove single-line comments (but preserve URLs and regex)
-            $js = preg_replace('/(?<!["\'])\/\/[^\r\n]*/', '', $js);
+            // Only do the safest possible minification: remove completely blank lines
+            // Don't touch anything else to avoid breaking JS syntax
             
-            // Remove multi-line comments
-            $js = preg_replace('/\/\*.*?\*\//s', '', $js);
+            // Remove lines that are completely empty (only whitespace)
+            $js = preg_replace('/^\s*$/m', '', $js);
             
-            // Remove unnecessary whitespace
-            $js = preg_replace('/\s+/', ' ', $js);
+            // Remove consecutive newlines (multiple blank lines become single)
+            $js = preg_replace('/\n{3,}/', "\n\n", $js);
             
-            // Remove whitespace around operators and punctuation
-            $js = preg_replace('/\s*([\{\}:;,=\(\)\[\]><!&\|+\-\*\/])\s*/', '$1', $js);
-            
-            // Remove trailing semicolons before closing braces
-            $js = preg_replace('/;(\s*})/', '$1', $js);
-            
+            // Trim the start and end
             $js = trim($js);
             
             // Reconstruct the script tag

@@ -18,6 +18,7 @@ class CacheManager {
     private $redis_connection;
     private $settings;
     private $cache_prefix = 'page_cache:';
+    private $minified_cache_prefix = 'page_cache_min:';
     
     /**
      * Constructor
@@ -198,15 +199,20 @@ class CacheManager {
         return $this->redis_connection->retry_operation(function($redis) {
             $total_keys = 0;
             $cache_keys = 0;
+            $minified_cache_keys = 0;
             $total_size = 0;
             
             // Count total keys
             $all_keys = $this->scan_keys('*');
             $total_keys = count($all_keys);
             
-            // Count cache-specific keys
+            // Count regular cache keys
             $cache_pattern_keys = $this->scan_keys($this->cache_prefix . '*');
             $cache_keys = count($cache_pattern_keys);
+            
+            // Count minified cache keys
+            $minified_cache_pattern_keys = $this->scan_keys($this->minified_cache_prefix . '*');
+            $minified_cache_keys = count($minified_cache_pattern_keys);
             
             // Estimate total memory usage (rough calculation)
             $info = $redis->info('memory');
@@ -215,6 +221,7 @@ class CacheManager {
             return [
                 'total_keys' => $total_keys,
                 'cache_keys' => $cache_keys,
+                'minified_cache_keys' => $minified_cache_keys,
                 'memory_usage' => $used_memory,
                 'memory_usage_human' => $this->format_bytes($used_memory)
             ];
@@ -271,10 +278,11 @@ class CacheManager {
         $diagnostics['redis_connected'] = $connection_status['connected'];
         $diagnostics['redis_status'] = $connection_status['status'];
         
-        // Cache statistics
+        // Cache statistics with minification breakdown
         $cache_stats = $this->get_cache_stats();
         $diagnostics['total_keys'] = $cache_stats['total_keys'];
         $diagnostics['cache_keys'] = $cache_stats['cache_keys'];
+        $diagnostics['minified_cache_keys'] = $cache_stats['minified_cache_keys'] ?? 0;
         $diagnostics['memory_usage'] = $cache_stats['memory_usage_human'];
         
         // System information
@@ -392,5 +400,186 @@ class CacheManager {
      */
     public function get_redis_connection() {
         return $this->redis_connection;
+    }
+    
+    /**
+     * Check if current request should be excluded from minification
+     *
+     * @param string $content Optional content to check against content exclusions
+     * @return bool True if should be excluded from minification
+     */
+    public function should_exclude_from_minification($content = '') {
+        // Get default minification exclusions
+        $default_exclusions = [
+            '/wp-admin/',
+            '/wp-login.php',
+            '/wp-cron.php',
+            '/xmlrpc.php',
+        ];
+        
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        
+        // Check default exclusions
+        foreach ($default_exclusions as $exclusion) {
+            if (strpos($request_uri, $exclusion) !== false) {
+                return true;
+            }
+        }
+        
+        // Check custom cache exclusions (URL-based)
+        $custom_exclusions = $this->get_cache_exclusions();
+        foreach ($custom_exclusions as $pattern) {
+            if (strpos($request_uri, $pattern) !== false) {
+                return true;
+            }
+        }
+        
+        // Check content-based exclusions if content is provided
+        if (!empty($content)) {
+            $content_exclusions = $this->get_content_exclusions();
+            foreach ($content_exclusions as $pattern) {
+                if (strpos($content, $pattern) !== false) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Store content in cache with minification handling
+     *
+     * @param string $key Cache key
+     * @param string $content Content to cache
+     * @param object $minifier Optional minification instance
+     * @return bool Success status
+     */
+    public function set_with_minification($key, $content, $minifier = null) {
+        if (empty($content)) {
+            return false;
+        }
+        
+        $redis = $this->redis_connection->get_connection();
+        if (!$redis) {
+            return false;
+        }
+        
+        $should_exclude = $this->should_exclude_from_minification($content);
+        $minification_enabled = ($this->settings['enable_minification'] ?? 0) && $minifier;
+        
+        if (!$should_exclude && $minification_enabled) {
+            // Store both minified and original versions
+            try {
+                $minified_content = $minifier->minify_output($content);
+                
+                // Store minified version with separate key
+                $minified_key = $this->minified_cache_prefix . $key;
+                $redis->setex($minified_key, $this->get_cache_expiry(), $minified_content);
+                
+                // Store original version (as fallback)
+                $original_key = $this->cache_prefix . $key;
+                $redis->setex($original_key, $this->get_cache_expiry(), $content);
+                
+                return true;
+            } catch (\Exception $e) {
+                // If minification fails, store original
+                return $this->set($key, $content);
+            }
+        } else {
+            // Store original version only
+            return $this->set($key, $content);
+        }
+    }
+    
+    /**
+     * Get content from cache with minification handling
+     *
+     * @param string $key Cache key
+     * @return string|null Cached content or null if not found
+     */
+    public function get_with_minification($key) {
+        $redis = $this->redis_connection->get_connection();
+        if (!$redis) {
+            return null;
+        }
+        
+        $should_exclude = $this->should_exclude_from_minification();
+        $minification_enabled = ($this->settings['enable_minification'] ?? 0);
+        
+        if (!$should_exclude && $minification_enabled) {
+            // Try to get minified version first
+            $minified_key = $this->minified_cache_prefix . $key;
+            $content = $redis->get($minified_key);
+            
+            if ($content !== false) {
+                return $content;
+            }
+        }
+        
+        // Fall back to original version
+        return $this->get($key);
+    }
+    
+    /**
+     * Get cache expiry time in seconds
+     *
+     * @return int Expiry time in seconds
+     */
+    private function get_cache_expiry() {
+        return $this->settings['ttl'] ?? 3600; // Default 1 hour
+    }
+    
+    /**
+     * Clear both regular and minified cache for a key
+     *
+     * @param string $key Cache key
+     * @return bool Success status
+     */
+    public function delete_with_minification($key) {
+        $redis = $this->redis_connection->get_connection();
+        if (!$redis) {
+            return false;
+        }
+        
+        $success = true;
+        
+        // Delete regular cache
+        $original_key = $this->cache_prefix . $key;
+        if ($redis->exists($original_key)) {
+            $success &= $redis->del($original_key);
+        }
+        
+        // Delete minified cache
+        $minified_key = $this->minified_cache_prefix . $key;
+        if ($redis->exists($minified_key)) {
+            $success &= $redis->del($minified_key);
+        }
+        
+        return $success;
+    }
+    
+    /**
+     * Flush both regular and minified cache
+     *
+     * @return bool Success status
+     */
+    public function flush_all_cache() {
+        $redis = $this->redis_connection->get_connection();
+        if (!$redis) {
+            return false;
+        }
+        
+        // Get all cache keys (both regular and minified)
+        $regular_keys = $redis->keys($this->cache_prefix . '*');
+        $minified_keys = $redis->keys($this->minified_cache_prefix . '*');
+        
+        $all_keys = array_merge($regular_keys ?: [], $minified_keys ?: []);
+        
+        if (empty($all_keys)) {
+            return true;
+        }
+        
+        return $this->delete_keys_chunked($all_keys);
     }
 }

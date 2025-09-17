@@ -68,6 +68,18 @@
             $('.tab-content.active').removeClass('active');
             setTimeout(() => {
                 $(target).addClass('active');
+                
+                // Load metrics when diagnostics tab is opened
+                if (target === '#diagnostics') {
+                    setTimeout(() => {
+                        $('#refresh-metrics-btn').click();
+                    }, 100);
+                    // Resume timer countdown if auto-refresh is enabled
+                    this.resumeAutoRefreshTimer();
+                } else {
+                    // Pause timer countdown when leaving diagnostics tab
+                    this.pauseAutoRefreshTimer();
+                }
             }, 50); // Small delay to allow previous content to fade out
         }
         
@@ -147,9 +159,15 @@
 
             $btn.text('Testing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.ajax_url, {
-                action: 'ace_redis_cache_status',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/test-connection",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -159,7 +177,7 @@
                     }
                 })
                 .fail(() => {
-                    this.showConnectionError('AJAX request failed');
+                    this.showConnectionError('REST API request failed');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -173,9 +191,15 @@
 
             $btn.text('Testing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.ajax_url, {
-                action: 'ace_redis_cache_test_write',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/test-write-read",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -191,7 +215,7 @@
                     }
                 })
                 .fail(() => {
-                    this.showNotification('❌ AJAX request failed', 'error');
+                    this.showNotification('❌ REST API request failed', 'error');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -202,6 +226,9 @@
         updateConnectionStatus(data) {
             const $status = $('#ace-redis-cache-connection');
             const $size = $('#ace-redis-cache-size');
+            const $serverInfo = $('#redis-server-info');
+            const $serverType = $('#redis-server-type');
+            const $suggestions = $('#redis-suggestions');
 
             $status.text(data.status)
                 .removeClass('status-unknown status-error')
@@ -212,18 +239,39 @@
                 sizeText += ` - ${data.debug_info}`;
             }
             $size.text(sizeText);
+            
+            // Show server information if available
+            if (data.server_type || data.suggestions) {
+                $serverType.text(data.server_type || 'Unknown');
+                
+                // Display suggestions
+                if (data.suggestions && data.suggestions.length > 0) {
+                    let suggestionsHtml = '<p><strong>Recommendations:</strong></p><ul>';
+                    data.suggestions.forEach(suggestion => {
+                        suggestionsHtml += `<li>${suggestion}</li>`;
+                    });
+                    suggestionsHtml += '</ul>';
+                    $suggestions.html(suggestionsHtml);
+                } else {
+                    $suggestions.html('<p><strong>Recommendations:</strong> Configuration looks good ✅</p>');
+                }
+                
+                $serverInfo.slideDown(300);
+            }
         }
 
         // Show connection error
         showConnectionError(message) {
             const $status = $('#ace-redis-cache-connection');
             const $size = $('#ace-redis-cache-size');
+            const $serverInfo = $('#redis-server-info');
 
             $status.text(message)
                 .removeClass('status-unknown status-success')
                 .addClass('status-error');
 
             $size.text('0 keys (0 KB)');
+            $serverInfo.slideUp(300);
         }
 
         // Initialize cache management
@@ -250,9 +298,16 @@
 
             $btn.text('Clearing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.ajax_url, {
-                action: 'ace_redis_cache_flush',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce,
+                    type: 'all'
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -263,7 +318,7 @@
                     }
                 })
                 .fail(() => {
-                    this.showNotification('❌ AJAX request failed', 'error');
+                    this.showNotification('❌ REST API request failed', 'error');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -281,9 +336,16 @@
 
             $btn.text('Clearing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.ajax_url, {
-                action: 'ace_redis_cache_flush_blocks',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce,
+                    type: 'blocks'
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -295,7 +357,7 @@
                     }
                 })
                 .fail(() => {
-                    this.showNotification('❌ AJAX request failed', 'error');
+                    this.showNotification('❌ REST API request failed', 'error');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -319,9 +381,15 @@
             $btn.text('Running...').prop('disabled', true);
             $results.html('<p>⏳ Running comprehensive diagnostics...</p>');
 
-            $.post(ace_redis_admin.ajax_url, {
-                action: 'ace_redis_cache_diagnostics',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/diagnostics",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce
+                }
             })
                 .done((response) => {
                     if (response.success && response.data) {
@@ -334,7 +402,7 @@
                     }
                 })
                 .fail(() => {
-                    $results.html('<p class="error">❌ Diagnostics request failed</p>');
+                    $results.html('<p class="error">❌ Diagnostics REST API request failed</p>');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -564,11 +632,10 @@
                     xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
                     console.log('Set REST nonce:', ace_redis_admin.rest_nonce);
                 },
-                contentType: 'application/json',
-                data: JSON.stringify({
+                data: {
                     settings: formData,
                     nonce: ace_redis_admin.nonce
-                }),
+                },
                 success: (response) => {
                     console.log('Success response:', response);
                     if (response.success) {
@@ -648,31 +715,141 @@
 
         // Initialize performance metrics
         initPerformanceMetrics() {
-            // Load metrics on page load
-            this.loadPerformanceMetrics();
+            // Load metrics immediately if diagnostics tab is active
+            if ($('#diagnostics').hasClass('active')) {
+                setTimeout(() => {
+                    $('#refresh-metrics-btn').click();
+                }, 100);
+            }
             
-            // Refresh metrics every 30 seconds
-            setInterval(() => {
+            // Initialize auto-refresh functionality
+            this.initAutoRefresh();
+            
+            // Manual refresh button
+            $('#refresh-metrics-btn').on('click', () => {
                 this.loadPerformanceMetrics();
-            }, 30000);
+                // Visual feedback for manual refresh
+                const $btn = $('#refresh-metrics-btn');
+                $btn.prop('disabled', true).html('⏳');
+                setTimeout(() => {
+                    $btn.prop('disabled', false).html('🔄');
+                }, 1000);
+            });
+        }
+        
+        // Initialize auto-refresh functionality
+        initAutoRefresh() {
+            // Store references at class level
+            this.autoRefreshInterval = null;
+            this.countdownInterval = null;
+            this.remainingSeconds = 0;
+            
+            const updateTimer = () => {
+                const $timer = $('#refresh-timer');
+                if (this.remainingSeconds > 0) {
+                    $timer.text(`Next refresh in ${this.remainingSeconds}s`);
+                    this.remainingSeconds--;
+                } else {
+                    $timer.text('');
+                }
+            };
+            
+            this.startAutoRefresh = (seconds) => {
+                // Clear existing intervals
+                if (this.autoRefreshInterval) {
+                    clearInterval(this.autoRefreshInterval);
+                }
+                if (this.countdownInterval) {
+                    clearInterval(this.countdownInterval);
+                }
+                
+                const $timer = $('#refresh-timer');
+                
+                if (seconds > 0) {
+                    this.remainingSeconds = seconds;
+                    
+                    // Start countdown timer
+                    this.countdownInterval = setInterval(updateTimer, 1000);
+                    
+                    // Start auto-refresh timer
+                    this.autoRefreshInterval = setInterval(() => {
+                        // Only refresh if diagnostics tab is active
+                        if ($('#diagnostics').hasClass('active')) {
+                            $('#refresh-metrics-btn').click();
+                            this.remainingSeconds = seconds; // Reset countdown
+                        }
+                    }, seconds * 1000);
+                    
+                    updateTimer(); // Show initial timer
+                } else {
+                    $timer.text('');
+                }
+            };
+            
+            // Handle dropdown change
+            $('#auto-refresh-select').on('change', () => {
+                const seconds = parseInt($('#auto-refresh-select').val());
+                this.startAutoRefresh(seconds);
+            });
+            
+            // Start with default value (30 seconds)
+            this.startAutoRefresh(30);
+        }
+        
+        // Pause auto-refresh timer (when leaving diagnostics tab)
+        pauseAutoRefreshTimer() {
+            if (this.countdownInterval) {
+                clearInterval(this.countdownInterval);
+            }
+            $('#refresh-timer').text('');
+        }
+        
+        // Resume auto-refresh timer (when entering diagnostics tab)
+        resumeAutoRefreshTimer() {
+            const selectedSeconds = parseInt($('#auto-refresh-select').val());
+            if (selectedSeconds > 0) {
+                // Restart the timer to show countdown immediately
+                this.startAutoRefresh(selectedSeconds);
+            }
         }
 
-        // Load performance metrics via AJAX
+        // Load performance metrics via REST API
         loadPerformanceMetrics() {
+            // Safety check - only load if diagnostics tab is active
+            if (!$('#diagnostics').hasClass('active')) {
+                return;
+            }
+            
             $.ajax({
-                url: ace_redis_admin.ajax_url,
-                type: 'POST',
-                data: {
-                    action: 'ace_redis_cache_metrics',
-                    nonce: ace_redis_admin.nonce
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/metrics',
+                type: 'GET',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
                 },
                 success: (response) => {
-                    if (response.success) {
+                    // Double-check we're still on the diagnostics tab when response comes back
+                    if (!$('#diagnostics').hasClass('active')) {
+                        return;
+                    }
+                    
+                    if (response.success && response.data) {
+                        this.updateMetricsDisplay(response.data);
+                    } else if (response.data) {
+                        // Even on error, use the fallback data provided
                         this.updateMetricsDisplay(response.data);
                     }
                 },
                 error: () => {
-                    // Keep showing "--" on error
+                    // Use fallback metrics on error
+                    this.updateMetricsDisplay({
+                        cache_hit_rate: '--',
+                        total_keys: '--',
+                        memory_usage: '--',
+                        response_time: '--',
+                        uptime: '--',
+                        connected_clients: '--',
+                        ops_per_sec: '--'
+                    });
                 }
             });
         }
@@ -683,22 +860,50 @@
                 const $card = $(this);
                 const $value = $card.find('.metric-value');
                 const title = $card.find('h4').text();
+                let newValue = '--';
                 
                 switch (title) {
                     case 'Cache Hit Rate':
-                        $value.text(metrics.cache_hit_rate || '--');
-                        break;
-                    case 'Memory Usage':
-                        $value.text(metrics.memory_usage || '--');
+                        newValue = metrics.cache_hit_rate || '--';
                         break;
                     case 'Total Keys':
-                        $value.text(metrics.total_keys || '--');
+                        newValue = metrics.total_keys || '--';
+                        break;
+                    case 'Memory Usage':
+                        newValue = metrics.memory_usage || '--';
+                        break;
+                    case 'Response Time':
+                        newValue = metrics.response_time || '--';
+                        break;
+                    case 'Uptime':
+                        newValue = metrics.uptime || '--';
+                        break;
+                    case 'Connected Clients':
+                        newValue = metrics.connected_clients || '--';
+                        break;
+                    case 'Operations/sec':
+                    case 'Ops/sec':
+                        newValue = metrics.ops_per_sec || '--';
                         break;
                     case 'Connection Time':
-                        $value.text(metrics.connection_time || '--');
+                        newValue = metrics.connection_time || '--';
                         break;
                 }
+                
+                // Add visual feedback when value changes
+                const oldValue = $value.text();
+                if (oldValue !== newValue) {
+                    $value.fadeOut(100, function() {
+                        $(this).text(newValue).fadeIn(100);
+                    });
+                } else {
+                    $value.text(newValue);
+                }
             });
+            
+            // Update last updated timestamp
+            const now = new Date().toLocaleTimeString();
+            $('.metrics-last-updated').text(`Last updated: ${now}`);
         }
 
         // Escape HTML for safe display

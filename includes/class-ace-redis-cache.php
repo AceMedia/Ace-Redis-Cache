@@ -57,7 +57,7 @@ class AceRedisCache {
             'ttl' => 3600,
             'mode' => 'full',
             'enabled' => 1,
-            'enable_tls' => 1,
+            'enable_tls' => 0, // Changed default to 0 (disabled)
             'enable_block_caching' => 0,
             'enable_minification' => 0,
             'custom_cache_exclusions' => '',
@@ -71,23 +71,60 @@ class AceRedisCache {
      * Initialize all plugin components
      */
     private function init_components() {
-        // Redis connection management
-        $this->redis_connection = new RedisConnection($this->settings);
+        // Skip Redis initialization during plugin activation to prevent timeouts
+        if (defined('WP_ADMIN') && (
+            (isset($_GET['action']) && $_GET['action'] === 'activate') ||
+            (isset($_POST['action']) && $_POST['action'] === 'activate-selected') ||
+            (function_exists('is_plugin_activation') && is_plugin_activation())
+        )) {
+            return;
+        }
         
-        // Cache management
-        $this->cache_manager = new CacheManager($this->redis_connection, $this->settings);
+        // Check if cache is enabled before initializing Redis components
+        if (empty($this->settings['enabled'])) {
+            // Still initialize API handler for admin interface (without Redis components)
+            $this->api_handler = new \AceMedia\RedisCache\API_Handler(null, null, $this->settings);
+            
+            // Admin interface (only for admin)
+            if (is_admin()) {
+                $this->admin_interface = new AdminInterface(
+                    null, // No cache manager when disabled
+                    $this->settings,
+                    $this->plugin_url,
+                    $this->plugin_version
+                );
+            }
+            return;
+        }
         
-        // Block caching (only if enabled)
-        $this->block_caching = new BlockCaching($this->cache_manager, $this->settings);
+        // Add timeout protection for Redis connection
+        set_time_limit(10); // Limit initialization to 10 seconds
         
-        // Minification
-        $this->minification = new Minification($this->settings);
+        try {
+            // Redis connection management
+            $this->redis_connection = new RedisConnection($this->settings);
+            
+            // Cache management
+            $this->cache_manager = new CacheManager($this->redis_connection, $this->settings);
+            
+            // Block caching (only if enabled)
+            $this->block_caching = new BlockCaching($this->cache_manager, $this->settings);
+            
+            // Minification
+            $this->minification = new Minification($this->settings);
+            
+        } catch (Exception $e) {
+            // Continue without Redis - plugin will show admin warnings
+        }
         
-        // REST API handlers (always available for API endpoints)
+        // Reset time limit
+        set_time_limit(0);
+        
+        // REST API handlers (always available for API endpoints, even if Redis fails)
         $this->api_handler = new \AceMedia\RedisCache\API_Handler($this->cache_manager, $this->redis_connection, $this->settings);
         
         // Admin interface (only for admin)
-        if (is_admin()) {
+        if (is_admin() && $this->cache_manager) {
             $this->admin_interface = new AdminInterface(
                 $this->cache_manager,
                 $this->settings,
@@ -96,19 +133,21 @@ class AceRedisCache {
             );
             
             // Diagnostics
-            $this->diagnostics = new \AceMedia\RedisCache\Diagnostics(
-                $this->redis_connection,
-                $this->cache_manager,
-                $this->settings
-            );
-            
-            // AJAX handlers
-            $this->admin_ajax = new \AceMedia\RedisCache\AdminAjax(
-                $this->redis_connection,
-                $this->cache_manager,
-                $this->diagnostics,
-                $this->settings
-            );
+            if ($this->redis_connection) {
+                $this->diagnostics = new \AceMedia\RedisCache\Diagnostics(
+                    $this->redis_connection,
+                    $this->cache_manager,
+                    $this->settings
+                );
+                
+                // AJAX handlers
+                $this->admin_ajax = new \AceMedia\RedisCache\AdminAjax(
+                    $this->redis_connection,
+                    $this->cache_manager,
+                    $this->diagnostics,
+                    $this->settings
+                );
+            }
         }
     }
     
@@ -123,14 +162,18 @@ class AceRedisCache {
         // Settings update hook
         add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
         
-        // Setup component hooks
+        // Setup component hooks (only if components are initialized)
         if (is_admin()) {
-            $this->admin_interface->setup_hooks();
-            $this->admin_ajax->setup_hooks();
+            if ($this->admin_interface) {
+                $this->admin_interface->setup_hooks();
+            }
+            if ($this->admin_ajax) {
+                $this->admin_ajax->setup_hooks();
+            }
         }
         
-        // Frontend caching hooks (only if enabled and not admin)
-        if (!is_admin() && $this->settings['enabled']) {
+        // Frontend caching hooks (only if enabled, not admin, and cache manager exists)
+        if (!is_admin() && $this->settings['enabled'] && $this->cache_manager) {
             $this->setup_caching_hooks();
         }
     }
@@ -145,13 +188,13 @@ class AceRedisCache {
             $this->setup_object_cache();
             
             // Setup block caching only in object mode if enabled
-            if ($this->settings['enable_block_caching'] ?? 0) {
+            if (($this->settings['enable_block_caching'] ?? 0) && $this->block_caching) {
                 $this->block_caching->setup_hooks();
             }
         }
         
         // Setup minification if enabled
-        if ($this->settings['enable_minification'] ?? 0) {
+        if (($this->settings['enable_minification'] ?? 0) && $this->minification) {
             $this->minification->setup_hooks();
         }
         
@@ -227,8 +270,8 @@ class AceRedisCache {
     public function start_full_page_cache() {
         $cache_key = $this->generate_page_cache_key();
         
-        // Try to get cached version
-        $cached_content = $this->cache_manager->get($cache_key);
+        // Try to get cached version (with minification handling)
+        $cached_content = $this->cache_manager->get_with_minification($cache_key);
         if ($cached_content !== null) {
             echo $cached_content;
             exit;
@@ -236,9 +279,9 @@ class AceRedisCache {
         
         // Start output buffering
         ob_start(function($content) use ($cache_key) {
-            // Cache the content
+            // Cache the content with intelligent minification handling
             if (!empty($content)) {
-                $this->cache_manager->set($cache_key, $content);
+                $this->cache_manager->set_with_minification($cache_key, $content, $this->minification);
             }
             return $content;
         });
@@ -342,14 +385,20 @@ class AceRedisCache {
             update_option('ace_redis_cache_settings', $this->settings);
         }
         
-        // Test Redis connection
-        $status = $this->redis_connection->get_status();
-        if (!$status['connected']) {
-            wp_die(
-                'Ace Redis Cache activation failed: Unable to connect to Redis server. Please check your Redis configuration.',
-                'Plugin Activation Error',
-                ['back_link' => true]
-            );
+        // Skip Redis connection test during activation if components weren't initialized
+        // (This prevents timeout issues during activation)
+        if ($this->redis_connection) {
+            $status = $this->redis_connection->get_status();
+            if (!$status['connected']) {
+                wp_die(
+                    'Ace Redis Cache activation failed: Unable to connect to Redis server. Please check your Redis configuration.',
+                    'Plugin Activation Error',
+                    ['back_link' => true]
+                );
+            }
+        } else {
+            // Redis connection wasn't initialized (likely due to activation safety check)
+            // Plugin will initialize properly on next request
         }
     }
     
@@ -357,11 +406,19 @@ class AceRedisCache {
      * Handle plugin deactivation
      */
     public function on_deactivation() {
-        // Clear all cache on deactivation
-        $this->cache_manager->clear_all_cache();
-        
-        // Close Redis connection
-        $this->redis_connection->close_connection();
+        try {
+            // Clear all cache on deactivation (only if cache manager exists)
+            if ($this->cache_manager) {
+                $this->cache_manager->clear_all_cache();
+            }
+            
+            // Close Redis connection (only if connection exists)
+            if ($this->redis_connection) {
+                $this->redis_connection->close_connection();
+            }
+        } catch (Exception $e) {
+            // Log any errors during deactivation but don't fail
+        }
     }
     
     /**

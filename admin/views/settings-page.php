@@ -71,22 +71,6 @@ if (!defined('ABSPATH')) exit;
                     
                     <tr>
                         <th scope="row">
-                            <label for="cache_mode">Cache Mode</label>
-                        </th>
-                        <td>
-                            <select name="ace_redis_cache_settings[mode]" id="cache-mode-select" class="regular-text">
-                                <option value="full" <?php selected($settings['mode'], 'full'); ?>>Full Page Cache</option>
-                                <option value="object" <?php selected($settings['mode'], 'object'); ?>>Object Cache Only</option>
-                            </select>
-                            <p class="description">
-                                <strong>Full Page Cache:</strong> Maximum performance but may conflict with dynamic content<br>
-                                <strong>Object Cache:</strong> Cache transients and database queries only
-                            </p>
-                        </td>
-                    </tr>
-                    
-                    <tr>
-                        <th scope="row">
                             <label for="redis_host">Redis Host</label>
                         </th>
                         <td>
@@ -135,6 +119,22 @@ if (!defined('ABSPATH')) exit;
                 <h2>Caching Options</h2>
                 
                 <table class="form-table">
+                    <tr>
+                        <th scope="row">
+                            <label for="cache_mode">Cache Mode</label>
+                        </th>
+                        <td>
+                            <select name="ace_redis_cache_settings[mode]" id="cache-mode-select" class="regular-text">
+                                <option value="full" <?php selected($settings['mode'], 'full'); ?>>Full Page Cache</option>
+                                <option value="object" <?php selected($settings['mode'], 'object'); ?>>Object Cache Only</option>
+                            </select>
+                            <p class="description">
+                                <strong>Full Page Cache:</strong> Maximum performance but may conflict with dynamic content<br>
+                                <strong>Object Cache:</strong> Cache transients and database queries only
+                            </p>
+                        </td>
+                    </tr>
+                    
                     <tr>
                         <th scope="row">
                             <label for="cache_ttl">Cache TTL</label>
@@ -256,6 +256,10 @@ if (!defined('ABSPATH')) exit;
                     <div class="test-results">
                         <p><strong>Status:</strong> <span id="ace-redis-cache-connection" class="status-unknown">Unknown</span></p>
                         <p><strong>Cache Size:</strong> <span id="ace-redis-cache-size">Unknown</span></p>
+                        <div id="redis-server-info" style="display: none; margin-top: 10px; padding: 10px; background: #f9f9f9; border-left: 4px solid #0073aa;">
+                            <p><strong>Server Type:</strong> <span id="redis-server-type">Unknown</span></p>
+                            <div id="redis-suggestions"></div>
+                        </div>
                     </div>
                 </div>
                 
@@ -267,25 +271,55 @@ if (!defined('ABSPATH')) exit;
                     </div>
                 </div>
                 
-                <h3>Performance Metrics</h3>
+                <h3>Performance Metrics 
+                    <button type="button" id="refresh-metrics-btn" class="button button-small" title="Refresh metrics now">🔄</button>
+                    <select id="auto-refresh-select" class="button-small" style="margin-left: 10px; height: 28px;">
+                        <option value="0">No auto-refresh</option>
+                        <option value="5">Auto-refresh 5s</option>
+                        <option value="15">Auto-refresh 15s</option>
+                        <option value="30" selected>Auto-refresh 30s</option>
+                        <option value="60">Auto-refresh 1min</option>
+                    </select>
+                    <span id="refresh-timer" style="margin-left: 10px; color: #666; font-size: 12px;"></span>
+                </h3>
                 <div id="performance-metrics" class="metrics-grid">
                     <div class="metric-card">
                         <h4>Cache Hit Rate</h4>
                         <div class="metric-value">--</div>
-                    </div>
-                    <div class="metric-card">
-                        <h4>Memory Usage</h4>
-                        <div class="metric-value">--</div>
+                        <div class="metric-description">Percentage of cache requests that were hits</div>
                     </div>
                     <div class="metric-card">
                         <h4>Total Keys</h4>
                         <div class="metric-value">--</div>
+                        <div class="metric-description">Number of keys stored in Redis</div>
                     </div>
                     <div class="metric-card">
-                        <h4>Connection Time</h4>
+                        <h4>Memory Usage</h4>
                         <div class="metric-value">--</div>
+                        <div class="metric-description">Redis memory consumption</div>
+                    </div>
+                    <div class="metric-card">
+                        <h4>Response Time</h4>
+                        <div class="metric-value">--</div>
+                        <div class="metric-description">Redis query response time</div>
+                    </div>
+                    <div class="metric-card">
+                        <h4>Uptime</h4>
+                        <div class="metric-value">--</div>
+                        <div class="metric-description">Redis server uptime</div>
+                    </div>
+                    <div class="metric-card">
+                        <h4>Connected Clients</h4>
+                        <div class="metric-value">--</div>
+                        <div class="metric-description">Active connections to Redis</div>
+                    </div>
+                    <div class="metric-card">
+                        <h4>Operations/sec</h4>
+                        <div class="metric-value">--</div>
+                        <div class="metric-description">Redis operations per second</div>
                     </div>
                 </div>
+                <div class="metrics-last-updated">Last updated: Never</div>
             </div>
                 
                 <?php wp_nonce_field('ace_redis_admin_nonce', 'ace_redis_nonce'); ?>

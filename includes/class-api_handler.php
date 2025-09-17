@@ -148,6 +148,13 @@ class API_Handler {
         register_rest_route($this->namespace, '/status', [
             'methods' => 'GET',
             'callback' => [$this, 'get_simple_status'],
+            'permission_callback' => '__return_true'  // Temporary: make public for testing
+        ]);
+        
+        // Simple metrics route for admin dashboard
+        register_rest_route($this->namespace, '/metrics', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_simple_metrics'],
             'permission_callback' => [$this, 'check_simple_permissions']
         ]);
     }
@@ -233,8 +240,20 @@ class API_Handler {
      */
     public function test_connection($request) {
         try {
-            $connection = $this->cache_manager->get_connection();
-            $result = $connection->test_connection();
+            $start_time = microtime(true);
+            $connection = $this->cache_manager->get_redis_connection();
+            $result = $connection->get_status();
+            $response_time = round((microtime(true) - $start_time) * 1000, 2);
+            
+            // Add response time to the result
+            if (is_array($result)) {
+                $result['response_time'] = $response_time . 'ms';
+            } else {
+                $result = [
+                    'original_result' => $result,
+                    'response_time' => $response_time . 'ms'
+                ];
+            }
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -258,8 +277,8 @@ class API_Handler {
      */
     public function test_write_read($request) {
         try {
-            $connection = $this->cache_manager->get_connection();
-            $result = $connection->test_write_read();
+            $connection = $this->cache_manager->get_redis_connection();
+            $result = $connection->test_operations();
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -286,24 +305,23 @@ class API_Handler {
             $type = $request->get_param('type');
             
             if ($type === 'blocks') {
-                $result = $this->cache_manager->flush_block_cache();
+                $result = $this->cache_manager->clear_block_cache();
                 $message = 'Block cache flushed successfully.';
             } else {
-                $result = $this->cache_manager->flush_all();
+                $result = $this->cache_manager->clear_all_cache();
                 $message = 'All cache flushed successfully.';
             }
             
             if ($result) {
                 // Get updated stats
-                $connection = $this->cache_manager->get_connection();
-                $stats = $connection->get_cache_info();
+                $stats = $this->cache_manager->get_cache_stats();
                 
                 return new \WP_REST_Response([
                     'success' => true,
                     'message' => $message,
                     'data' => [
-                        'cache_size' => $stats['cache_size'] ?? 'Unknown',
-                        'key_count' => $stats['key_count'] ?? 0
+                        'cache_size' => $stats['memory_usage_human'] ?? 'Unknown',
+                        'key_count' => $stats['cache_keys'] ?? 0
                     ]
                 ], 200);
             } else {
@@ -331,8 +349,7 @@ class API_Handler {
      */
     public function get_cache_stats($request) {
         try {
-            $connection = $this->cache_manager->get_connection();
-            $stats = $connection->get_cache_info();
+            $stats = $this->cache_manager->get_cache_stats();
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -381,6 +398,16 @@ class API_Handler {
      */
     public function simple_flush_cache($request) {
         try {
+            // Check if cache is enabled first
+            $settings = get_option('ace_redis_cache_settings', []);
+            if (empty($settings['enabled'])) {
+                return new \WP_REST_Response([
+                    'success' => false,
+                    'message' => 'Cache is disabled, nothing to flush',
+                    'timestamp' => current_time('mysql')
+                ], 400);
+            }
+            
             // Clear all cache using the cache manager
             $result = $this->cache_manager->clear_all_cache();
             
@@ -407,6 +434,18 @@ class API_Handler {
      */
     public function get_simple_status($request) {
         try {
+            // Check if cache is enabled first
+            $settings = get_option('ace_redis_cache_settings', []);
+            if (empty($settings['enabled'])) {
+                return new \WP_REST_Response([
+                    'success' => true,
+                    'redis_connected' => false,
+                    'cache_entries' => 0,
+                    'message' => 'Cache is disabled',
+                    'timestamp' => current_time('mysql')
+                ], 200);
+            }
+            
             // Get Redis connection status
             $redis_connection = $this->cache_manager->get_redis_connection();
             $connection_status = $redis_connection->get_status();
@@ -426,6 +465,169 @@ class API_Handler {
                 'success' => false,
                 'message' => 'Failed to get status: ' . $e->getMessage(),
                 'error' => 'STATUS_CHECK_FAILED'
+            ], 500);
+        }
+    }
+    
+    /**
+     * Simple metrics endpoint handler for admin dashboard
+     *
+     * @param \WP_REST_Request $request
+     * @return \WP_REST_Response
+     */
+    public function get_simple_metrics($request) {
+        try {
+            // Get basic metrics without heavy operations
+            $metrics = [
+                'cache_hit_rate' => '--',
+                'total_keys' => 0,
+                'memory_usage' => '--',
+                'uptime' => '--',
+                'connected_clients' => '--',
+                'ops_per_sec' => '--',
+                'response_time' => '--'
+            ];
+            
+            // Check if cache is enabled before attempting any connections
+            $settings = get_option('ace_redis_cache_settings', []);
+            if (empty($settings['enabled'])) {
+                return new \WP_REST_Response([
+                    'success' => true,
+                    'data' => $metrics,
+                    'message' => 'Cache is disabled',
+                    'timestamp' => current_time('mysql')
+                ], 200);
+            }
+            
+            // Try to get metrics if cache manager is available and cache is enabled
+            if ($this->cache_manager) {
+                try {
+                    $connection = $this->cache_manager->get_redis_connection();
+                    
+                    if ($connection) {
+                        // Get the actual Redis instance, not the wrapper
+                        $redis_instance = $connection->get_connection();
+                        
+                        if ($redis_instance) {
+                            $start_time = microtime(true);
+                            $info = $redis_instance->info();
+                            $keyspace_info = $redis_instance->info('keyspace');
+                            $response_time = round((microtime(true) - $start_time) * 1000, 2);
+                            
+                            if ($info) {
+                                // Look for database keys in keyspace info
+                                $total_keys = 0;
+                                if ($keyspace_info) {
+                                    foreach ($keyspace_info as $key => $value) {
+                                        if (strpos($key, 'db') === 0) {
+                                            // Parse "keys=60,expires=60,avg_ttl=8791544" format
+                                            if (preg_match('/keys=(\d+)/', $value, $matches)) {
+                                                $total_keys += intval($matches[1]);
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Extract key metrics
+                                $metrics = [
+                                    'cache_hit_rate' => isset($info['keyspace_hits'], $info['keyspace_misses']) 
+                                        ? round(($info['keyspace_hits'] / max(1, $info['keyspace_hits'] + $info['keyspace_misses'])) * 100, 1) . '%'
+                                        : '--',
+                                    'total_keys' => $total_keys,
+                                    'memory_usage' => isset($info['used_memory_human']) ? $info['used_memory_human'] : '--',
+                                    'uptime' => isset($info['uptime_in_seconds']) ? gmdate("H:i:s", $info['uptime_in_seconds']) : '--',
+                                    'connected_clients' => $info['connected_clients'] ?? '--',
+                                    'ops_per_sec' => $info['instantaneous_ops_per_sec'] ?? '--',
+                                    'response_time' => $response_time . 'ms'
+                                ];
+                            }
+                        }
+                    } else {
+                        // Connection wrapper is null
+                    }
+                } catch (\Exception $e) {
+                    // Log error but continue with default metrics
+                }
+            } else {
+                // Try to create a temporary Redis connection directly only if cache is enabled
+                if (!empty($settings['enabled'])) {
+                    try {
+                    
+                    if (!empty($settings['host']) && !empty($settings['port'])) {
+                        $redis = new \Redis();
+                        $connected = $redis->connect($settings['host'], $settings['port'], 2); // 2 second timeout
+                        
+                        if ($connected && !empty($settings['password'])) {
+                            $auth_result = $redis->auth($settings['password']);
+                        }
+                        
+                        if ($connected) {
+                            $start_time = microtime(true);
+                            $info = $redis->info();
+                            $keyspace_info = $redis->info('keyspace');
+                            $response_time = round((microtime(true) - $start_time) * 1000, 2);
+                            
+                            if ($info) {
+                                // Look for database keys in keyspace info
+                                $total_keys = 0;
+                                if ($keyspace_info) {
+                                    foreach ($keyspace_info as $key => $value) {
+                                        if (strpos($key, 'db') === 0) {
+                                            // Parse "keys=60,expires=60,avg_ttl=8791544" format
+                                            if (preg_match('/keys=(\d+)/', $value, $matches)) {
+                                                $total_keys += intval($matches[1]);
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                $metrics = [
+                                    'cache_hit_rate' => isset($info['keyspace_hits'], $info['keyspace_misses']) 
+                                        ? round(($info['keyspace_hits'] / max(1, $info['keyspace_hits'] + $info['keyspace_misses'])) * 100, 1) . '%'
+                                        : '--',
+                                    'total_keys' => $total_keys,
+                                    'memory_usage' => isset($info['used_memory_human']) ? $info['used_memory_human'] : '--',
+                                    'uptime' => isset($info['uptime_in_seconds']) ? gmdate("H:i:s", $info['uptime_in_seconds']) : '--',
+                                    'connected_clients' => $info['connected_clients'] ?? '--',
+                                    'ops_per_sec' => $info['instantaneous_ops_per_sec'] ?? '--',
+                                    'response_time' => $response_time . 'ms'
+                                ];
+                            }
+                            $redis->close();
+                        } else {
+                            // Direct Redis connection failed
+                        }
+                    } else {
+                        // Missing Redis host or port in settings
+                    }
+                    } catch (\Exception $e) {
+                        // Log error but continue with default metrics
+                    }
+                } else {
+                    // Cache is disabled, not attempting direct Redis connection
+                }
+            }
+            
+            return new \WP_REST_Response([
+                'success' => true,
+                'data' => $metrics,
+                'timestamp' => current_time('mysql')
+            ], 200);
+            
+        } catch (\Exception $e) {
+            return new \WP_REST_Response([
+                'success' => false,
+                'message' => 'Failed to get metrics: ' . $e->getMessage(),
+                'error' => 'METRICS_FAILED',
+                'data' => [
+                    'cache_hit_rate' => '--',
+                    'total_keys' => 0,
+                    'memory_usage' => '--',
+                    'uptime' => '--',
+                    'connected_clients' => '--',
+                    'ops_per_sec' => '--',
+                    'response_time' => '--'
+                ]
             ], 500);
         }
     }

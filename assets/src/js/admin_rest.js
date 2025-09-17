@@ -145,9 +145,15 @@
 
             $btn.text('Testing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.rest_url + "ace-redis-cache/v1/", {
-                action: 'ace_redis_cache_status',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/test-connection",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -157,7 +163,7 @@
                     }
                 })
                 .fail(() => {
-                    this.showConnectionError('AJAX request failed');
+                    this.showConnectionError('REST API request failed');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -171,9 +177,15 @@
 
             $btn.text('Testing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.rest_url + "ace-redis-cache/v1/", {
-                action: 'ace_redis_cache_test_write',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/test-write-read",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -189,7 +201,7 @@
                     }
                 })
                 .fail(() => {
-                    this.showNotification('❌ AJAX request failed', 'error');
+                    this.showNotification('❌ REST API request failed', 'error');
                 })
                 .always(() => {
                     $btn.text(originalText).prop('disabled', false);
@@ -248,9 +260,16 @@
 
             $btn.text('Clearing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.rest_url + "ace-redis-cache/v1/", {
-                action: 'ace_redis_cache_flush',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce,
+                    type: 'all'
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -279,9 +298,16 @@
 
             $btn.text('Clearing...').prop('disabled', true);
 
-            $.post(ace_redis_admin.rest_url + "ace-redis-cache/v1/", {
-                action: 'ace_redis_cache_flush_blocks',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce,
+                    type: 'blocks'
+                }
             })
                 .done((response) => {
                     if (response.success) {
@@ -317,9 +343,15 @@
             $btn.text('Running...').prop('disabled', true);
             $results.html('<p>⏳ Running comprehensive diagnostics...</p>');
 
-            $.post(ace_redis_admin.rest_url + "ace-redis-cache/v1/", {
-                action: 'ace_redis_cache_diagnostics',
-                nonce: ace_redis_admin.nonce
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/diagnostics",
+                type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
+                data: {
+                    nonce: ace_redis_admin.nonce
+                }
             })
                 .done((response) => {
                     if (response.success && response.data) {
@@ -459,7 +491,7 @@
             });
         }
 
-        // Save settings via AJAX
+        // Save settings via REST API
         saveSettings() {
             const $form = $('#ace-redis-settings-form');
             const $button = $('#ace-redis-save-btn');
@@ -470,13 +502,25 @@
             $button.val('Saving...').prop('disabled', true);
             $messages.hide();
 
+            // Serialize form data properly for REST API
+            const formData = {};
+            $form.serializeArray().forEach(function(item) {
+                if (item.name.includes('ace_redis_cache_settings[')) {
+                    // Extract the setting name from the array notation
+                    const settingName = item.name.match(/\[([^\]]+)\]/)[1];
+                    formData[settingName] = item.value;
+                }
+            });
+
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/",
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/settings",
                 type: 'POST',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                },
                 data: {
-                    method: "POST",
                     nonce: ace_redis_admin.nonce,
-                    form_data: $form.serialize()
+                    settings: formData
                 },
                 success: (response) => {
                     if (response.success) {
@@ -543,11 +587,10 @@
         // Load performance metrics via AJAX
         loadPerformanceMetrics() {
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/",
-                type: 'POST',
-                data: {
-                    action: 'ace_redis_cache_metrics',
-                    nonce: ace_redis_admin.nonce
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/metrics",
+                type: 'GET',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
                 },
                 success: (response) => {
                     if (response.success) {

@@ -228,8 +228,8 @@ class API_Handler {
      */
     public function test_connection($request) {
         try {
-            $connection = $this->cache_manager->get_connection();
-            $result = $connection->test_connection();
+            $connection = $this->cache_manager->get_redis_connection();
+            $result = $connection->test_operations();
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -253,8 +253,8 @@ class API_Handler {
      */
     public function test_write_read($request) {
         try {
-            $connection = $this->cache_manager->get_connection();
-            $result = $connection->test_write_read();
+            $connection = $this->cache_manager->get_redis_connection();
+            $result = $connection->test_operations();
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -290,15 +290,15 @@ class API_Handler {
             
             if ($result) {
                 // Get updated stats
-                $connection = $this->cache_manager->get_connection();
-                $stats = $connection->get_cache_info();
+                $connection = $this->cache_manager->get_redis_connection();
+                $stats = $connection->get_status();
                 
                 return new \WP_REST_Response([
                     'success' => true,
                     'message' => $message,
                     'data' => [
-                        'cache_size' => $stats['cache_size'] ?? 'Unknown',
-                        'key_count' => $stats['key_count'] ?? 0
+                        'cache_size' => $stats['memory_usage'] ?? 'Unknown',
+                        'key_count' => $stats['connected_clients'] ?? 0
                     ]
                 ], 200);
             } else {
@@ -326,8 +326,8 @@ class API_Handler {
      */
     public function get_cache_stats($request) {
         try {
-            $connection = $this->cache_manager->get_connection();
-            $stats = $connection->get_cache_info();
+            $connection = $this->cache_manager->get_redis_connection();
+            $stats = $connection->get_status();
             
             return new \WP_REST_Response([
                 'success' => true,

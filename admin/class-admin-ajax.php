@@ -72,6 +72,18 @@ class AdminAjax {
             return;
         }
         
+        // Check if cache is enabled before attempting connection
+        if (empty($this->settings['enabled']) || !$this->redis_connection || !$this->cache_manager) {
+            $this->send_response([
+                'status' => 'Cache is disabled',
+                'connected' => false,
+                'size' => 0,
+                'size_kb' => 0,
+                'debug_info' => null
+            ]);
+            return;
+        }
+        
         try {
             $status = $this->redis_connection->get_status();
             $cache_stats = $this->cache_manager->get_cache_stats();
@@ -110,6 +122,15 @@ class AdminAjax {
             return;
         }
         
+        // Check if cache is enabled before attempting flush
+        if (empty($this->settings['enabled']) || !$this->cache_manager) {
+            $this->send_response([
+                'message' => 'Cache is disabled, nothing to flush',
+                'cleared' => 0
+            ]);
+            return;
+        }
+        
         try {
             $result = $this->cache_manager->clear_all_cache();
             $this->send_response($result);
@@ -131,6 +152,15 @@ class AdminAjax {
             return;
         }
         
+        // Check if cache is enabled before attempting flush
+        if (empty($this->settings['enabled']) || !$this->cache_manager) {
+            $this->send_response([
+                'message' => 'Cache is disabled, nothing to flush',
+                'cleared' => 0
+            ]);
+            return;
+        }
+        
         try {
             $result = $this->cache_manager->clear_block_cache();
             $this->send_response($result);
@@ -149,6 +179,15 @@ class AdminAjax {
     public function handle_test_write_request() {
         if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can('manage_options')) {
             $this->send_response('Unauthorized', false);
+            return;
+        }
+        
+        // Check if cache is enabled before attempting test
+        if (empty($this->settings['enabled']) || !$this->redis_connection) {
+            $this->send_response([
+                'success' => false,
+                'message' => 'Cache is disabled, cannot test Redis operations'
+            ], false);
             return;
         }
         
@@ -221,9 +260,9 @@ class AdminAjax {
                 return;
             }
             
-            // Clear cache if settings changed significantly
+            // Clear cache if settings changed significantly and cache is enabled
             $cache_cleared = false;
-            if ($this->should_clear_cache($old_settings, $validated_settings)) {
+            if ($this->should_clear_cache($old_settings, $validated_settings) && !empty($validated_settings['enabled'])) {
                 $redis_connection = new RedisConnection($validated_settings);
                 $cache_manager = new \AceMedia\RedisCache\CacheManager($redis_connection, $validated_settings);
                 $cache_manager->clear_all_cache();
@@ -313,9 +352,22 @@ class AdminAjax {
             return;
         }
 
+        // Check if cache is enabled before attempting connection
+        if (empty($this->settings['enabled'])) {
+            $this->send_response([
+                'cache_hit_rate' => '--',
+                'memory_usage' => '--',
+                'total_keys' => '--',
+                'connection_time' => '--',
+                'message' => 'Cache is disabled'
+            ]);
+            return;
+        }
+
         try {
             $redis_connection = new RedisConnection($this->settings);
-            $redis = $redis_connection->get_connection();
+            // Bypass circuit breaker for admin operations
+            $redis = $redis_connection->get_connection(false, true);
             
             if (!$redis) {
                 $this->send_response([

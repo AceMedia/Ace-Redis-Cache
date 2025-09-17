@@ -1,7 +1,7 @@
 /**
  * Ace Redis Cache Admin Styles
  * 
- * Modern Yoast-style admin interface with sidebar navigation
+ * Modern WordPress admin interface that respects user's chosen admin color scheme
  * for the Redis cache plugin settings page.
  *
  * @package AceMedia\RedisCache
@@ -14,25 +14,48 @@
 // Import components
 @import 'components/SaveBar';
 
-// Variables
-$primary-color: #0073aa;
-$primary-hover: #005a87;
-$success-color: #46b450;
-$error-color: #dc3232;
-$warning-color: #ffb900;
-$border-color: #e1e1e1;
-$background-light: #f9f9f9;
-$sidebar-bg: #f1f1f1;
-$text-color: #50575e;
-$text-color-light: #666;
+// Dynamic variables that respect WordPress admin color scheme
+// These will be injected as CSS custom properties by PHP directly from WordPress color array
+$wp-base: var(--wp-admin-base, #1d2327);           // WordPress colors[0] - base/sidebar color
+$wp-highlight: var(--wp-admin-highlight, #FFFFFF); // WordPress colors[1] - highlight color  
+$wp-primary: var(--wp-admin-primary, #2271b1);     // WordPress colors[2] - main theme color
+$wp-accent: var(--wp-admin-accent, #72aee6);       // WordPress colors[3] - accent color
+
+// Derived colors for consistency  
+$primary-color: $wp-primary;    // Light green (#67B650) for buttons, borders
+$primary-hover: var(--wp-admin-primary-hover, #135e96);
+$primary-light: var(--wp-admin-primary-light, #3582c4);
+$primary-dark: var(--wp-admin-primary-dark, #1e649a);
+$primary-extra-dark: var(--wp-admin-primary-extra-dark, #1b5a8b);
+$sidebar-color: var(--wp-admin-sidebar, #1d2327);     // Dark green for tabs/sidebar
+$sidebar-light: var(--wp-admin-sidebar-light, #2c3338);
+$success-color: var(--wp-admin-success, #00a32a);
+$success-light: var(--wp-admin-success-light, #00b52d);
+$success-dark: var(--wp-admin-success-dark, #009325);
+$success-extra-dark: var(--wp-admin-success-extra-dark, #008220);
+$error-color: var(--wp-admin-error, #d63638);
+$error-light: var(--wp-admin-error-light, #de4c4e);
+$error-dark: var(--wp-admin-error-dark, #c12e30);
+$error-extra-dark: var(--wp-admin-error-extra-dark, #ac2729);
+$warning-color: var(--wp-admin-warning, #dba617);
+$info-color: var(--wp-admin-info, #72aee6);
+$background-color: var(--wp-admin-background, #f0f0f1);
+$surface-color: var(--wp-admin-surface, #ffffff);
+$text-color: var(--wp-admin-text, #1d2327);           // Dark green for text
+$text-color-light: var(--wp-admin-text-light, #646970); // Lighter dark green for secondary text
+$border-color: var(--wp-admin-border, #c3c4c7);       // Light green for borders
+$border-light: var(--wp-admin-border-light, #d0d1d4);
+$border-dark: var(--wp-admin-border-dark, #b0b1b4);
+
+// Layout variables
 $sidebar-width: 250px;
 $mobile-breakpoint: 768px;
 
 // Mixins
-@mixin button-style($bg-color, $text-color: white) {
+@mixin button-style($bg-color, $text-color: white, $hover-color: null) {
     background-color: $bg-color;
     color: $text-color;
-    border: 1px solid color.adjust($bg-color, $lightness: -10%);
+    border: 1px solid if($hover-color, $hover-color, $bg-color);
     border-radius: 4px;
     padding: 8px 16px;
     cursor: pointer;
@@ -42,8 +65,8 @@ $mobile-breakpoint: 768px;
     display: inline-block;
     
     &:hover:not(:disabled) {
-        background-color: color.adjust($bg-color, $lightness: -5%);
-        border-color: color.adjust($bg-color, $lightness: -15%);
+        background-color: if($hover-color, $hover-color, $bg-color);
+        border-color: if($hover-color, $hover-color, $bg-color);
         color: $text-color;
         text-decoration: none;
     }
@@ -67,7 +90,7 @@ $mobile-breakpoint: 768px;
     margin: 0 20px 0 2px;
     
     .wrap > h1 {
-        color: #1d2327;
+        color: $text-color;
         margin-bottom: 24px;
         font-size: 23px;
         font-weight: 400;
@@ -79,7 +102,7 @@ $mobile-breakpoint: 768px;
         margin: 20px 0;
         padding: 15px;
         border-left: 4px solid $primary-color;
-        background: #f0f8ff;
+        background: rgba($info-color, 0.1);
         border-radius: 0 4px 4px 0;
         
         p {
@@ -88,12 +111,12 @@ $mobile-breakpoint: 768px;
         
         &.notice-error {
             border-left-color: $error-color;
-            background: #ffeaea;
+            background: rgba($error-color, 0.1);
         }
         
         &.notice-warning {
             border-left-color: $warning-color;
-            background: #fff8e5;
+            background: rgba($warning-color, 0.1);
         }
     }
     
@@ -132,7 +155,7 @@ $mobile-breakpoint: 768px;
                 display: flex;
                 overflow-x: auto;
                 border-radius: 8px 8px 0 0;
-                background: $sidebar-bg;
+                background: $background-color;
                 padding: 0;
             }
         }
@@ -205,7 +228,7 @@ $mobile-breakpoint: 768px;
             }
             
             &.nav-tab-active {
-                background: linear-gradient(135deg, $primary-color 0%, color.adjust($primary-color, $lightness: -10%) 100%); // GlossPress-style gradient
+                background: var(--wp-admin-sidebar); // Use sidebar color
                 color: white;
                 font-weight: 600;
                 box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1); // Subtle inner highlight
@@ -227,7 +250,7 @@ $mobile-breakpoint: 768px;
                     height: 0;
                     border-top: 10px solid transparent;
                     border-bottom: 10px solid transparent;
-                    border-left: 10px solid $primary-color;
+                    border-left: 10px solid $sidebar-color;
                     filter: drop-shadow(1px 0 2px rgba(0, 0, 0, 0.1));
                     
                     @media (max-width: $mobile-breakpoint) {
@@ -236,11 +259,11 @@ $mobile-breakpoint: 768px;
                 }
                 
                 &:hover {
-                    background: linear-gradient(135deg, $primary-color 0%, color.adjust($primary-color, $lightness: -5%) 100%);
+                    background: var(--wp-admin-sidebar);
                     color: white;
                     
                     &::after {
-                        border-left-color: $primary-color;
+                        border-left-color: $sidebar-color;
                     }
                 }
             }
@@ -253,7 +276,7 @@ $mobile-breakpoint: 768px;
         margin-top: 20px;
         padding: 20px;
         border-radius: 8px; // GlossPress rounded corners
-        background: linear-gradient(135deg, #ffffff 0%, #fafbfc 100%); // Subtle gradient
+        background: var(--wp-admin-surface); // Flat surface color
         border: 1px solid rgba($primary-color, 0.1); // Subtle colored border
         
         @media (max-width: $mobile-breakpoint) {
@@ -306,7 +329,7 @@ $mobile-breakpoint: 768px;
                     left: 0;
                     right: 0;
                     bottom: 0;
-                    background: linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.1) 75%);
+                    background: rgba(255, 255, 255, 0.1);
                     background-size: 20px 20px;
                     opacity: 0;
                     transition: opacity 0.2s ease;
@@ -321,7 +344,7 @@ $mobile-breakpoint: 768px;
                 }
                 
                 // Default button styling
-                @include button-style($primary-color);
+                @include button-style($primary-color, white, $primary-hover);
                 
                 &:hover:not(:disabled) {
                     transform: translateY(-2px); // More pronounced lift
@@ -339,13 +362,13 @@ $mobile-breakpoint: 768px;
                 
                 // Specific button styling
                 &#ace-redis-cache-flush-btn {
-                    @include button-style($error-color);
+                    @include button-style($error-color, white, $error-dark);
                     
                     &:hover:not(:disabled) {
                         box-shadow: 0 4px 12px rgba($error-color, 0.3);
                         
                         &::before {
-                            background: linear-gradient(45deg, rgba(255,255,255,0.2) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.2) 75%);
+                            background: rgba(255, 255, 255, 0.2);
                         }
                     }
                     
@@ -355,7 +378,7 @@ $mobile-breakpoint: 768px;
                 }
                 
                 &#ace-redis-cache-flush-blocks-btn {
-                    @include button-style($warning-color, #000);
+                    @include button-style($warning-color, $warning-color, #000);
                     
                     &:hover:not(:disabled) {
                         box-shadow: 0 4px 12px rgba($warning-color, 0.3);
@@ -418,7 +441,7 @@ $mobile-breakpoint: 768px;
         }
         
         .ace-redis-save-btn {
-            @include button-style($primary-color);
+            @include button-style($primary-color, white, $primary-hover);
             padding: 12px 24px;
             font-size: 14px;
             font-weight: 600;
@@ -457,7 +480,7 @@ $mobile-breakpoint: 768px;
     }
     
     h2 {
-        color: #1d2327;
+        color: $text-color;
         margin-bottom: 20px;
         padding-bottom: 10px;
         border-bottom: 2px solid $primary-color;
@@ -608,7 +631,7 @@ $mobile-breakpoint: 768px;
 .diagnostics-panel {
     @include card-style;
     margin: 20px 0;
-    background: $background-light;
+    background: $background-color;
     
     h4 {
         margin-top: 0;
@@ -675,7 +698,7 @@ $mobile-breakpoint: 768px;
     .metric-card {
         @include card-style;
         text-align: center;
-        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        background: var(--wp-admin-background);
         padding: 15px;
         
         h4 {
@@ -767,13 +790,13 @@ $mobile-breakpoint: 768px;
         &.notice-success {
             background: rgba($success-color, 0.1);
             border-left: 4px solid $success-color;
-            color: color.adjust($success-color, $lightness: -20%);
+            color: $success-extra-dark;
         }
         
         &.notice-error {
             background: rgba($error-color, 0.1);
             border-left: 4px solid $error-color;
-            color: color.adjust($error-color, $lightness: -10%);
+            color: $error-dark;
         }
     }
 }
@@ -852,14 +875,14 @@ $mobile-breakpoint: 768px;
         input[type="password"],
         select,
         textarea {
-            border: 1px solid $border-color;
+            border: 1px solid var(--wp-admin-border);    // Light green border
             border-radius: 4px;
             padding: 8px 12px;
             transition: border-color 0.3s ease, box-shadow 0.3s ease;
             
             &:focus {
-                border-color: $primary-color;
-                box-shadow: 0 0 0 2px rgba(0, 115, 170, 0.1);
+                border-color: var(--wp-admin-text);      // Dark green on focus
+                box-shadow: 0 0 0 2px rgba(var(--wp-admin-text), 0.1);
                 outline: none;
             }
             
@@ -959,7 +982,7 @@ $mobile-breakpoint: 768px;
 .diagnostics-panel {
     @include card-style;
     margin: 20px 0;
-    background: $background-light;
+    background: $background-color;
     
     h4 {
         margin-top: 0;
@@ -1069,7 +1092,7 @@ $mobile-breakpoint: 768px;
 // Exclusion help
 .exclusion-help {
     @include card-style;
-    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+    background: var(--wp-admin-surface);
     border-left: 4px solid $primary-color;
     margin-top: 20px;
     
@@ -1112,6 +1135,45 @@ $mobile-breakpoint: 768px;
     &:hover:not(:disabled) {
         transform: translateY(-1px);
         box-shadow: 0 4px 8px rgba(70, 180, 80, 0.3);
+    }
+}
+
+// Special handling for dark themes (like midnight)
+body.admin-color-midnight {
+    .ace-redis-save-bar {
+        background: var(--wp-admin-surface, #2c2c2c);
+        border-top-color: var(--wp-admin-border, #3c434a);
+        box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.3);
+    }
+    
+    .redis-cache-settings {
+        background: var(--wp-admin-background, #1e1e1e);
+        color: var(--wp-admin-text, #f0f0f1);
+        
+        .nav-tab-wrapper .nav-tab {
+            background: var(--wp-admin-surface, #2c2c2c);
+            color: var(--wp-admin-text, #f0f0f1);
+            border-color: var(--wp-admin-border, #3c434a);
+            
+            &.nav-tab-active {
+                background: var(--wp-admin-primary, #e14d43);
+                color: white;
+            }
+        }
+        
+        .form-table th,
+        .form-table td {
+            color: var(--wp-admin-text, #f0f0f1);
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        textarea,
+        select {
+            background: var(--wp-admin-surface, #2c2c2c);
+            color: var(--wp-admin-text, #f0f0f1);
+            border-color: var(--wp-admin-border, #3c434a);
+        }
     }
 }
 
@@ -1312,11 +1374,11 @@ $mobile-breakpoint: 768px;
             font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
             font-size: 13px;
             line-height: 1.4;
-            background: #f8f9fa;
-            border: 1px solid color.adjust($border-color, $lightness: -5%);
+            background: $background-color;
+            border: 1px solid $border-dark;
             
             &:focus {
-                background: white;
+                background: $surface-color;
             }
         }
     }
@@ -1369,13 +1431,13 @@ $mobile-breakpoint: 768px;
             transform: translate(-50%, -50%);
             width: 80%;
             height: 2px;
-            background: linear-gradient(90deg, transparent, rgba(0,0,0,0.1), transparent);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 1px;
         }
     }
     
     input:checked + .ace-slider {
-        background: linear-gradient(135deg, $success-color 0%, color.adjust($success-color, $lightness: 10%) 100%);
+        background: var(--wp-admin-success);
         
         &::before {
             transform: translateX(24px);
@@ -1383,7 +1445,7 @@ $mobile-breakpoint: 768px;
         }
         
         &::after {
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            background: rgba(255, 255, 255, 0.3);
         }
     }
     
@@ -1420,26 +1482,26 @@ $mobile-breakpoint: 768px;
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            background: rgba(255, 255, 255, 0.4);
             transition: left 0.5s ease;
         }
         
         &.notice-success {
-            background: linear-gradient(135deg, rgba($success-color, 0.1) 0%, rgba($success-color, 0.05) 100%);
+            background: rgba(var(--wp-admin-success), 0.1);
             border: 1px solid rgba($success-color, 0.2);
             border-left: 4px solid $success-color;
-            color: color.adjust($success-color, $lightness: -25%);
+            color: $success-extra-dark;
             
             &::before {
-                background: linear-gradient(90deg, transparent, rgba($success-color, 0.2), transparent);
+                background: rgba(var(--wp-admin-success), 0.2);
             }
         }
         
         &.notice-error {
-            background: linear-gradient(135deg, rgba($error-color, 0.1) 0%, rgba($error-color, 0.05) 100%);
+            background: rgba(var(--wp-admin-error), 0.1);
             border: 1px solid rgba($error-color, 0.2);
             border-left: 4px solid $error-color;
-            color: color.adjust($error-color, $lightness: -15%);
+            color: $error-extra-dark;
             animation: shake 0.5s ease-in-out; // Shake on error
         }
         
@@ -1459,7 +1521,7 @@ $mobile-breakpoint: 768px;
     .metric-card {
         @include card-style;
         text-align: center;
-        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+        background: var(--wp-admin-surface);
         padding: 20px;
         border-radius: 8px;
         transition: all 0.3s ease;
@@ -1483,7 +1545,7 @@ $mobile-breakpoint: 768px;
             left: 0;
             right: 0;
             height: 3px;
-            background: linear-gradient(90deg, $primary-color, color.adjust($primary-color, $lightness: 20%));
+            background: var(--wp-admin-primary);
         }
         
         h4 {

@@ -95,6 +95,9 @@ class AdminInterface {
                 [],
                 $this->plugin_version
             );
+            
+            // Add inline CSS with admin color scheme variables
+            wp_add_inline_style('ace-redis-cache-admin', $this->get_admin_color_scheme_css());
         }
         
         // Enqueue SaveBar component first (so it's available to main script)
@@ -428,5 +431,107 @@ class AdminInterface {
      */
     public function get_admin_url() {
         return admin_url('options-general.php?page=ace-redis-cache');
+    }
+    
+    /**
+     * Get admin color scheme CSS variables
+     *
+     * @return string CSS variables based on user's admin color scheme
+     */
+    private function get_admin_color_scheme_css() {
+        global $_wp_admin_css_colors;
+        
+        // Get current user's admin color scheme
+        $admin_color_scheme = get_user_option('admin_color');
+        if (!$admin_color_scheme || !isset($_wp_admin_css_colors[$admin_color_scheme])) {
+            $admin_color_scheme = 'fresh'; // Default WordPress color scheme
+        }
+        
+        // Get the actual colors from WordPress for the current scheme
+        $scheme_data = $_wp_admin_css_colors[$admin_color_scheme] ?? $_wp_admin_css_colors['fresh'];
+        $colors = $scheme_data->colors ?? [
+            '#1d2327', // Base background
+            '#2c3338', // Highlight background  
+            '#2271b1', // Notification background
+            '#72aee6'  // Highlight color
+        ];
+        
+        // Map WordPress color positions to our variables
+        // WordPress admin colors array: [base, highlight, notification, primary]
+        $base_color = $colors[0] ?? '#1d2327';      // Base color (usually black/dark)
+        $highlight_color = $colors[1] ?? '#FFFFFF'; // Highlight color (usually white/light)  
+        $notification_color = $colors[2] ?? '#2271b1'; // Notification color (main theme color)
+        $accent_color = $colors[3] ?? '#72aee6';    // Accent color (secondary theme color)
+        
+        // Generate colors based on the actual theme colors from the array
+        $scheme_colors = [
+            'base' => $base_color,           // Dynamic base color from theme
+            'highlight' => $highlight_color, // Dynamic highlight color from theme 
+            'primary' => $notification_color, // Dynamic primary color from theme
+            'accent' => $accent_color,       // Dynamic accent color from theme
+            'primary-hover' => $this->adjust_color_brightness($notification_color, -0.15),
+            'sidebar' => $base_color,        // Use dynamic base color for sidebar/tabs
+            'sidebar-light' => $this->adjust_color_brightness($base_color, 0.2),
+            'success' => '#00a32a', // Keep consistent success color
+            'error' => '#d63638',   // Keep consistent error color  
+            'warning' => '#dba617', // Keep consistent warning color
+            'info' => $highlight_color,
+            'background' => ($admin_color_scheme === 'midnight') ? '#1e1e1e' : '#f0f0f1',
+            'surface' => ($admin_color_scheme === 'midnight') ? '#2c2c2c' : '#ffffff',
+            'text' => $base_color,           // Use dynamic base color for text
+            'text-light' => $this->adjust_color_brightness($base_color, 0.3), // Lighter base color for secondary text
+            'border' => $notification_color  // Use dynamic primary color for borders
+        ];
+        
+        // Generate CSS variables
+        $css = ":root {\n";
+        $css .= "    /* Debug: Admin color scheme is '{$admin_color_scheme}' */\n";
+        $css .= "    /* Debug: Colors are [" . implode(', ', $colors) . "] */\n";
+        foreach ($scheme_colors as $name => $color) {
+            $css .= "    --wp-admin-" . str_replace('_', '-', $name) . ": {$color};\n";
+            
+            // Add adjusted color variants for SCSS compatibility
+            if (in_array($name, ['primary', 'sidebar', 'base', 'accent', 'success', 'error', 'border'])) {
+                // Lighter variants
+                $lighter = $this->adjust_color_brightness($color, 0.1);
+                $css .= "    --wp-admin-" . str_replace('_', '-', $name) . "-light: {$lighter};\n";
+                
+                // Darker variants  
+                $darker = $this->adjust_color_brightness($color, -0.1);
+                $css .= "    --wp-admin-" . str_replace('_', '-', $name) . "-dark: {$darker};\n";
+                
+                // Extra dark variants
+                $extra_dark = $this->adjust_color_brightness($color, -0.2);
+                $css .= "    --wp-admin-" . str_replace('_', '-', $name) . "-extra-dark: {$extra_dark};\n";
+            }
+        }
+        $css .= "}\n";
+        
+        return $css;
+    }
+    
+    /**
+     * Adjust color brightness
+     */
+    private function adjust_color_brightness($hex, $percent) {
+        // Remove # if present
+        $hex = ltrim($hex, '#');
+        
+        // Convert to RGB
+        if (strlen($hex) === 3) {
+            $hex = str_repeat(substr($hex,0,1), 2) . str_repeat(substr($hex,1,1), 2) . str_repeat(substr($hex,2,1), 2);
+        }
+        
+        $r = hexdec(substr($hex, 0, 2));
+        $g = hexdec(substr($hex, 2, 2));
+        $b = hexdec(substr($hex, 4, 2));
+        
+        // Adjust brightness
+        $r = max(0, min(255, $r + ($r * $percent)));
+        $g = max(0, min(255, $g + ($g * $percent)));
+        $b = max(0, min(255, $b + ($b * $percent)));
+        
+        // Convert back to hex
+        return sprintf('#%02x%02x%02x', round($r), round($g), round($b));
     }
 }

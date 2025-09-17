@@ -1,36 +1,32 @@
 /**
  * SaveBar Component Styles for Ace Redis Cache
  * 
- * Inspired by GlossPress SaveBar styling with Redis cache theme colo        input:checked + .toggle-slider {
-            background-color: $success-color;
-            
-            &:before {
-                transform: translateX(16px);
-            }
-            
-            // Add subtle pulsing animation when auto-save is active
-            animation: auto-save-pulse 2s ease-in-out infinite;
-        }* @package AceMedia\RedisCache  
+ * Inspired by GlossPress SaveBar styling with dynamic WordPress admin color scheme support
+ * @package AceMedia\RedisCache  
  * @since 0.5.0
  */
 
-// Variables (matching main admin.scss)
-$primary-color: #0073aa;
-$primary-hover: #005a87;
-$success-color: #46b450;
-$error-color: #dc3232;
-$warning-color: #ffb900;
-$border-color: #e1e1e1;
-$background-light: #f9f9f9;
-$text-color: #50575e;
-$text-color-light: #666;
+// Fallback variables (in case CSS custom properties aren't loaded)
+$primary-color: var(--wp-admin-primary, #2271b1);
+$primary-hover: var(--wp-admin-primary-hover, #135e96);
+$sidebar-color: var(--wp-admin-sidebar, #1d2327);
+$sidebar-light: var(--wp-admin-sidebar-light, #2c3338);
+$success-color: var(--wp-admin-success, #00a32a);
+$error-color: var(--wp-admin-error, #d63638);
+$warning-color: var(--wp-admin-warning, #dba617);
+$info-color: var(--wp-admin-info, #72aee6);
+$background-color: var(--wp-admin-background, #f0f0f1);
+$surface-color: var(--wp-admin-surface, #ffffff);
+$text-color: var(--wp-admin-text, #1d2327);
+$text-color-light: var(--wp-admin-text-light, #646970);
+$border-color: var(--wp-admin-border, #c3c4c7);
 
 .ace-redis-save-bar {
     position: fixed;
     bottom: 0;
     left: 0;
     right: 0;
-    background: #fff;
+    background: $surface-color;
     border-top: 1px solid $border-color;
     box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.1);
     z-index: 1000;
@@ -111,7 +107,7 @@ $text-color-light: #666;
             position: relative;
             width: 36px;
             height: 20px;
-            background-color: #ccc;
+            background-color: $border-color;
             border-radius: 20px;
             transition: background-color 0.3s ease;
             cursor: pointer;
@@ -152,7 +148,7 @@ $text-color-light: #666;
             font-weight: 500;
             border-radius: 4px;
             transition: all 0.3s ease;
-            border: 1px solid $primary-color;
+            border: 1px solid var(--wp-admin-border);     // Light green border
             min-width: 120px;
             justify-content: center;
             position: relative;
@@ -182,24 +178,24 @@ $text-color-light: #666;
             .button-text {
                 font-weight: 500;
             }        &:not(:disabled) {
-            background-color: $primary-color;
+            background-color: var(--wp-admin-border);     // Light green for save button
             color: white;
             
             &:hover {
-                background-color: $primary-hover;
-                border-color: $primary-hover;
+                background-color: var(--wp-admin-text);      // Dark green on hover
+                border-color: var(--wp-admin-text);
                 transform: translateY(-1px);
-                box-shadow: 0 2px 5px rgba($primary-color, 0.3);
+                box-shadow: 0 2px 5px rgba(var(--wp-admin-text), 0.3);
             }
             
             &:active {
                 transform: translateY(0);
-                box-shadow: 0 1px 2px rgba($primary-color, 0.2);
+                box-shadow: 0 1px 2px rgba(var(--wp-admin-text), 0.2);
             }
         }
 
         &:disabled {
-            background-color: #f0f0f1;
+            background-color: $background-color;
             color: $text-color-light;
             border-color: $border-color;
             cursor: not-allowed;
@@ -289,71 +285,12 @@ body.admin-color-scheme {
     }
 }
 
-// Integration with WordPress admin themes
-.admin-color-coffee .ace-redis-save-bar {
-    border-top-color: #c7a589;
-    
-    #save-bar-button {
-        &:not(:disabled) {
-            background-color: #c7a589;
-            border-color: #c7a589;
-            
-            &:hover {
-                background-color: #b8956c;
-                border-color: #b8956c;
-            }
-        }
-    }
-    
-    .auto-save-toggle input:checked + .toggle-slider {
-        background-color: #c7a589;
-    }
-}
-
-.admin-color-ocean .ace-redis-save-bar {
-    border-top-color: #9ebaa0;
-    
-    #save-bar-button {
-        &:not(:disabled) {
-            background-color: #9ebaa0;
-            border-color: #9ebaa0;
-            
-            &:hover {
-                background-color: #8aa08c;
-                border-color: #8aa08c;
-            }
-        }
-    }
-    
-    .auto-save-toggle input:checked + .toggle-slider {
-        background-color: #9ebaa0;
-    }
-}
-
-// Dark mode support (if WordPress ever adds it)
+// Dark mode support (WordPress midnight theme and system dark mode)
 @media (prefers-color-scheme: dark) {
     .ace-redis-save-bar {
-        background: #1e1e1e;
-        border-top-color: #404040;
-        color: #e0e0e0;
-        
-        .save-message {
-            color: #4caf50;
-            
-            &.error {
-                color: #f44336;
-            }
-        }
-        
-        .auto-save-toggle label {
-            color: #e0e0e0;
-        }
-        
-        #save-bar-button:disabled {
-            background-color: #333;
-            color: #888;
-            border-color: #555;
-        }
+        // CSS custom properties will handle theme colors automatically
+        // But we can add additional dark mode enhancements here if needed
+        box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.3);
     }
 }
 

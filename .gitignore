@@ -1,6 +1,5 @@
-# Ace Redis Cache - Build Files
+# Node/Dev junk
 /node_modules/
-/assets/dist/
 *.log
 .DS_Store
 .vscode/
@@ -8,11 +7,19 @@
 *.zip
 *.tar.gz
 
-# WordPress specific
-wp-config.php
-.htaccess
+# Build outputs we DO commit
+# (Don't ignore assets/dist — we want compiled files tracked)
+# Optionally ignore only noisy build artefacts:
+assets/dist/**/*.map
+assets/dist/**/*.LICENSE.txt
+assets/dist/**/*hot-update*
+assets/dist/**/.DS_Store
 
-# Development
+# WordPress-specific (shouldn't really exist in a plugin, but harmless)
+/wp-config.php
+/.htaccess
+
+# Development caches
 .sass-cache/
 /.pnp
 .pnp.js
@@ -22,7 +29,7 @@ wp-config.php
 phpunit.xml
 .phpunit.cache
 
-# Environment
+# Environment files
 .env
 .env.local
 .env.development.local

@@ -14,6 +14,7 @@
     // Main admin class
     class AceRedisCacheAdmin {
         constructor() {
+            this.originalFormData = null;
             this.init();
         }
 
@@ -27,6 +28,7 @@
             this.initPerformanceMetrics();
             this.initAjaxForm();
             this.initFormValidation();
+            this.initChangeTracking();
         }
 
         // Initialize tab navigation
@@ -459,41 +461,156 @@
             });
         }
 
-        // Save settings via AJAX
+        // Initialize change tracking for form fields
+        initChangeTracking() {
+            // Store original form data
+            setTimeout(() => {
+                // Store original button text
+                const $button = $('#ace-redis-save-btn');
+                if (!$button.data('original-text')) {
+                    $button.data('original-text', $button.val());
+                }
+                
+                this.captureOriginalFormData();
+                this.updateSaveButtonState();
+                
+                // Watch for changes
+                $('#ace-redis-settings-form input, #ace-redis-settings-form select, #ace-redis-settings-form textarea').on('input change', () => {
+                    setTimeout(() => this.updateSaveButtonState(), 10);
+                });
+            }, 100);
+        }
+        
+        // Capture original form data
+        captureOriginalFormData() {
+            this.originalFormData = this.getFormDataObject();
+        }
+        
+        // Check if form has changes
+        hasFormChanges() {
+            if (!this.originalFormData) return false;
+            
+            const currentData = this.getFormDataObject();
+            return JSON.stringify(this.originalFormData) !== JSON.stringify(currentData);
+        }
+        
+        // Update save button state based on changes
+        updateSaveButtonState() {
+            const $button = $('#ace-redis-save-btn');
+            const hasChanges = this.hasFormChanges();
+            
+            $button.prop('disabled', !hasChanges);
+            
+            if (!hasChanges) {
+                $button.val($button.data('original-text') || 'Save Changes (No Changes)');
+            } else {
+                $button.val($button.data('original-text') || 'Save Changes');
+            }
+        }
+        
+        // Get form data as object
+        getFormDataObject() {
+            const $form = $('#ace-redis-settings-form');
+            const formData = {};
+            
+            $form.serializeArray().forEach(field => {
+                if (field.name.startsWith('ace_redis_cache_settings[')) {
+                    const key = field.name.replace('ace_redis_cache_settings[', '').replace(']', '');
+                    formData[key] = field.value;
+                }
+            });
+
+            // Add checkbox values (unchecked boxes don't get serialized)
+            $form.find('input[type="checkbox"]').each(function() {
+                const name = $(this).attr('name');
+                if (name && name.startsWith('ace_redis_cache_settings[')) {
+                    const key = name.replace('ace_redis_cache_settings[', '').replace(']', '');
+                    formData[key] = $(this).is(':checked') ? '1' : '0';
+                }
+            });
+            
+            return formData;
+        }
+
+        // Save settings via REST API
         saveSettings() {
+            // Check for changes first
+            if (!this.hasFormChanges()) {
+                this.showMessage('Error: Failed to save settings. No changes detected or database error.', 'error');
+                return;
+            }
+            
             const $form = $('#ace-redis-settings-form');
             const $button = $('#ace-redis-save-btn');
             const $messages = $('#ace-redis-messages');
+            
+            console.log('REST API Save triggered...');
             
             // Show loading state
             const originalText = $button.val();
             $button.val('Saving...').prop('disabled', true);
             $messages.hide();
 
+            // Get form data
+            const formData = this.getFormDataObject();
+
+            console.log('Sending data:', formData);
+            console.log('REST URL:', ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings');
+
             $.ajax({
-                url: ace_redis_admin.ajax_url,
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
                 type: 'POST',
-                data: {
-                    action: 'ace_redis_cache_save_settings',
-                    nonce: ace_redis_admin.nonce,
-                    form_data: $form.serialize()
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    console.log('Set REST nonce:', ace_redis_admin.rest_nonce);
                 },
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    settings: formData,
+                    nonce: ace_redis_admin.nonce
+                }),
                 success: (response) => {
+                    console.log('Success response:', response);
                     if (response.success) {
-                        this.showMessage(response.data.message, 'success');
+                        this.showMessage(response.message || 'Settings saved successfully!', 'success');
                         
-                        // Refresh metrics if settings changed
-                        if (response.data.settings_changed) {
-                            setTimeout(() => {
-                                this.loadPerformanceMetrics();
-                            }, 1000);
-                        }
+                        // Update original form data and button state
+                        this.captureOriginalFormData();
+                        this.updateSaveButtonState();
+                        
+                        // Refresh connection status after save
+                        setTimeout(() => {
+                            if (typeof this.testConnection === 'function') {
+                                this.testConnection();
+                            }
+                        }, 1000);
                     } else {
-                        this.showMessage(response.data || 'Failed to save settings', 'error');
+                        this.showMessage(response.message || 'Failed to save settings', 'error');
                     }
                 },
                 error: (xhr, status, error) => {
-                    this.showMessage('Network error: ' + error, 'error');
+                    console.error('Save error:', {
+                        status: xhr.status,
+                        statusText: xhr.statusText,
+                        responseText: xhr.responseText,
+                        error: error
+                    });
+                    
+                    let errorMessage = 'Network error occurred';
+                    
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMessage = xhr.responseJSON.message;
+                    } else if (xhr.status === 504) {
+                        errorMessage = 'Gateway timeout - settings may still be saved. Please refresh the page.';
+                    } else if (xhr.status === 403) {
+                        errorMessage = 'Permission denied. Please refresh the page and try again.';
+                    } else if (xhr.status === 404) {
+                        errorMessage = 'REST API endpoint not found. The plugin may not be properly configured.';
+                    } else {
+                        errorMessage = `${error} (Status: ${xhr.status})`;
+                    }
+                    
+                    this.showMessage('Error: ' + errorMessage, 'error');
                 },
                 complete: () => {
                     // Reset button state

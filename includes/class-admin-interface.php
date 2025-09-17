@@ -108,7 +108,9 @@ class AdminInterface {
             // Localize script for AJAX - use our script handle and correct variable name
             wp_localize_script('ace-redis-cache-admin', 'ace_redis_admin', [
                 'ajax_url' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('ace_redis_admin_nonce')
+                'rest_url' => rest_url(),
+                'nonce' => wp_create_nonce('ace_redis_admin_nonce'),
+                'rest_nonce' => wp_create_nonce('wp_rest')
             ]);
         } else {
             // Fallback to inline JavaScript if compiled version doesn't exist
@@ -117,7 +119,9 @@ class AdminInterface {
             // Localize script for fallback too
             wp_localize_script('jquery', 'ace_redis_admin', [
                 'ajax_url' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('ace_redis_admin_nonce')
+                'rest_url' => rest_url(),
+                'nonce' => wp_create_nonce('ace_redis_admin_nonce'),
+                'rest_nonce' => wp_create_nonce('wp_rest')
             ]);
             
             add_action('admin_footer', [$this, 'inline_admin_scripts']);

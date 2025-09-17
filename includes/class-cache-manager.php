@@ -384,4 +384,13 @@ class CacheManager {
             return $redis->exists($key) > 0;
         }) ?: false;
     }
+    
+    /**
+     * Get Redis connection instance
+     *
+     * @return RedisConnection Redis connection instance
+     */
+    public function get_redis_connection() {
+        return $this->redis_connection;
+    }
 }

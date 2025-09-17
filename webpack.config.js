@@ -7,7 +7,7 @@ module.exports = (env, argv) => {
 
   return {
     entry: {
-      admin: './assets/src/js/admin.js',
+      admin: ['./assets/src/js/admin.js', './assets/src/js/rest-api-patch.js'],
       'admin-styles': './assets/src/css/admin.scss'
     },
     

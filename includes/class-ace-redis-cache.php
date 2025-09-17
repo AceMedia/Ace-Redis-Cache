@@ -22,6 +22,7 @@ class AceRedisCache {
     private $minification;
     private $admin_interface;
     private $admin_ajax;
+    private $api_handler;
     private $diagnostics;
     
     private $plugin_url;
@@ -81,6 +82,9 @@ class AceRedisCache {
         
         // Minification
         $this->minification = new Minification($this->settings);
+        
+        // REST API handlers (always available for API endpoints)
+        $this->api_handler = new \AceMedia\RedisCache\API_Handler($this->cache_manager, $this->redis_connection, $this->settings);
         
         // Admin interface (only for admin)
         if (is_admin()) {

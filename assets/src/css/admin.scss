@@ -11,6 +11,9 @@
 // Import modern color functions
 @use 'sass:color';
 
+// Import components
+@import 'components/SaveBar';
+
 // Variables
 $primary-color: #0073aa;
 $primary-hover: #005a87;
@@ -106,7 +109,7 @@ $mobile-breakpoint: 768px;
         }
     }
     
-    // Left sidebar navigation
+    // Left sidebar navigation  
     .ace-redis-sidebar {
         width: $sidebar-width;
         flex-shrink: 0;
@@ -121,13 +124,14 @@ $mobile-breakpoint: 768px;
             padding: 0;
             margin: 0;
             background: white;
-            border-radius: 6px;
+            border-radius: 8px; // Inspired by GlossPress rounded corners
             overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08); // Enhanced shadow like GlossPress
             
             @media (max-width: $mobile-breakpoint) {
                 display: flex;
                 overflow-x: auto;
-                border-radius: 6px 6px 0 0;
+                border-radius: 8px 8px 0 0;
                 background: $sidebar-bg;
                 padding: 0;
             }
@@ -141,7 +145,7 @@ $mobile-breakpoint: 768px;
             border-bottom: 1px solid $border-color;
             color: $text-color;
             text-decoration: none;
-            padding: 16px 20px;
+            padding: 18px 20px; // Increased padding like GlossPress
             margin: 0;
             border-radius: 0;
             transition: all 0.2s ease;
@@ -149,6 +153,23 @@ $mobile-breakpoint: 768px;
             font-size: 14px;
             font-weight: 500;
             position: relative;
+            
+            // Add subtle icon styling inspired by GlossPress
+            &::before {
+                content: '';
+                position: absolute;
+                left: 20px;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 4px;
+                height: 4px;
+                border-radius: 50%;
+                background: rgba($primary-color, 0.3);
+                transition: all 0.2s ease;
+            }
+            
+            // Adjust text positioning for icon
+            padding-left: 35px;
             
             @media (max-width: $mobile-breakpoint) {
                 display: inline-block;
@@ -159,6 +180,10 @@ $mobile-breakpoint: 768px;
                 min-width: 120px;
                 text-align: center;
                 padding: 12px 16px;
+                
+                &::before {
+                    display: none; // Hide icon on mobile
+                }
             }
             
             &:last-child {
@@ -172,14 +197,27 @@ $mobile-breakpoint: 768px;
             &:hover {
                 background: rgba($primary-color, 0.05);
                 color: $primary-color;
+                
+                &::before {
+                    background: $primary-color;
+                    transform: translateY(-50%) scale(1.3);
+                }
             }
             
             &.nav-tab-active {
-                background: $primary-color;
+                background: linear-gradient(135deg, $primary-color 0%, color.adjust($primary-color, $lightness: -10%) 100%); // GlossPress-style gradient
                 color: white;
                 font-weight: 600;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1); // Subtle inner highlight
                 
                 &::before {
+                    background: white;
+                    transform: translateY(-50%) scale(1.5);
+                    box-shadow: 0 0 0 2px rgba(white, 0.3);
+                }
+                
+                // Modern arrow indicator inspired by GlossPress
+                &::after {
                     content: '';
                     position: absolute;
                     right: -1px;
@@ -187,9 +225,10 @@ $mobile-breakpoint: 768px;
                     transform: translateY(-50%);
                     width: 0;
                     height: 0;
-                    border-top: 8px solid transparent;
-                    border-bottom: 8px solid transparent;
-                    border-left: 8px solid $primary-color;
+                    border-top: 10px solid transparent;
+                    border-bottom: 10px solid transparent;
+                    border-left: 10px solid $primary-color;
+                    filter: drop-shadow(1px 0 2px rgba(0, 0, 0, 0.1));
                     
                     @media (max-width: $mobile-breakpoint) {
                         display: none;
@@ -197,18 +236,25 @@ $mobile-breakpoint: 768px;
                 }
                 
                 &:hover {
-                    background: $primary-color;
+                    background: linear-gradient(135deg, $primary-color 0%, color.adjust($primary-color, $lightness: -5%) 100%);
                     color: white;
+                    
+                    &::after {
+                        border-left-color: $primary-color;
+                    }
                 }
             }
         }
     }
     
-    // Cache action buttons panel
+    // Cache action buttons panel - Enhanced GlossPress style
     .cache-actions-panel {
         @include card-style;
         margin-top: 20px;
         padding: 20px;
+        border-radius: 8px; // GlossPress rounded corners
+        background: linear-gradient(135deg, #ffffff 0%, #fafbfc 100%); // Subtle gradient
+        border: 1px solid rgba($primary-color, 0.1); // Subtle colored border
         
         @media (max-width: $mobile-breakpoint) {
             margin-top: 15px;
@@ -217,46 +263,94 @@ $mobile-breakpoint: 768px;
         
         h4 {
             margin: 0 0 15px 0;
-            color: $text-color;
-            font-size: 14px;
+            color: $primary-color; // Use primary color like GlossPress
+            font-size: 15px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            
+            // Add icon before text like GlossPress
+            &::before {
+                content: '⚡';
+                margin-right: 8px;
+                font-size: 16px;
+            }
         }
         
         .cache-action-buttons {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 12px; // Slightly increased gap
             
             .cache-action-btn {
-                @include button-style($primary-color);
                 width: 100%;
                 justify-content: flex-start;
-                padding: 12px 16px;
+                padding: 14px 18px; // More padding like GlossPress
                 font-size: 13px;
                 font-weight: 500;
                 text-align: left;
                 display: flex;
                 align-items: center;
+                border-radius: 6px; // GlossPress rounded buttons
+                transition: all 0.2s ease;
+                position: relative;
+                overflow: hidden;
+                
+                // Add subtle background pattern
+                &::before {
+                    content: '';
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.1) 75%);
+                    background-size: 20px 20px;
+                    opacity: 0;
+                    transition: opacity 0.2s ease;
+                }
                 
                 .dashicons {
-                    margin-right: 8px;
+                    margin-right: 10px;
                     font-size: 16px;
                     width: 16px;
                     height: 16px;
+                    flex-shrink: 0; // Prevent icon shrinking
                 }
+                
+                // Default button styling
+                @include button-style($primary-color);
                 
                 &:hover:not(:disabled) {
-                    transform: translateY(-1px);
-                    box-shadow: 0 3px 8px rgba($primary-color, 0.3);
+                    transform: translateY(-2px); // More pronounced lift
+                    box-shadow: 0 4px 12px rgba($primary-color, 0.25);
+                    
+                    &::before {
+                        opacity: 1; // Show pattern on hover
+                    }
                 }
                 
+                &:active {
+                    transform: translateY(0);
+                    box-shadow: 0 2px 6px rgba($primary-color, 0.2);
+                }
+                
+                // Specific button styling
                 &#ace-redis-cache-flush-btn {
                     @include button-style($error-color);
                     
                     &:hover:not(:disabled) {
-                        box-shadow: 0 3px 8px rgba($error-color, 0.3);
+                        box-shadow: 0 4px 12px rgba($error-color, 0.3);
+                        
+                        &::before {
+                            background: linear-gradient(45deg, rgba(255,255,255,0.2) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.2) 75%);
+                        }
+                    }
+                    
+                    .dashicons {
+                        animation: pulse 2s infinite; // Subtle warning animation
                     }
                 }
                 
@@ -264,7 +358,7 @@ $mobile-breakpoint: 768px;
                     @include button-style($warning-color, #000);
                     
                     &:hover:not(:disabled) {
-                        box-shadow: 0 3px 8px rgba($warning-color, 0.3);
+                        box-shadow: 0 4px 12px rgba($warning-color, 0.3);
                     }
                 }
             }
@@ -1104,4 +1198,317 @@ $mobile-breakpoint: 768px;
 // Hide WordPress footer with important
 #wpfooter {
     display: none !important;
+}
+
+// Keyframe animations inspired by GlossPress
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scale(1.05);
+    }
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+    20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+@keyframes glow {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba($primary-color, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 20px rgba($primary-color, 0.8), 0 0 30px rgba($primary-color, 0.6);
+    }
+}
+
+// Enhanced form styling inspired by GlossPress
+.ace-redis-form {
+    .form-table {
+        th {
+            width: 200px;
+            font-weight: 600;
+            color: $text-color;
+            vertical-align: top;
+            padding-top: 20px;
+            font-size: 14px;
+            
+            label {
+                font-weight: 600;
+                color: $primary-color; // GlossPress colored labels
+                font-size: 14px !important;
+                text-transform: none !important;
+                margin-bottom: 5px;
+                display: block;
+            }
+        }
+        
+        td {
+            padding-bottom: 20px;
+        }
+        
+        .description {
+            color: $text-color-light;
+            font-style: italic;
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.5;
+            
+            // Style like GlossPress descriptions
+            background: rgba($primary-color, 0.05);
+            padding: 8px 12px;
+            border-radius: 4px;
+            border-left: 3px solid rgba($primary-color, 0.3);
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        input[type="password"],
+        select,
+        textarea {
+            border: 1px solid $border-color;
+            border-radius: 6px; // GlossPress rounded inputs
+            padding: 10px 14px;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            background: white;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05); // Subtle inner shadow like GlossPress
+            
+            &:focus {
+                border-color: $primary-color;
+                box-shadow: 0 0 0 3px rgba($primary-color, 0.1), inset 0 1px 2px rgba(0, 0, 0, 0.05);
+                outline: none;
+            }
+            
+            &.error {
+                border-color: $error-color;
+                box-shadow: 0 0 0 3px rgba($error-color, 0.1);
+                animation: shake 0.5s ease-in-out;
+            }
+            
+            &:valid {
+                border-color: $success-color;
+            }
+        }
+        
+        // Special styling for code/textarea fields
+        textarea.code {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            background: #f8f9fa;
+            border: 1px solid color.adjust($border-color, $lightness: -5%);
+            
+            &:focus {
+                background: white;
+            }
+        }
+    }
+}
+
+// Enhanced toggle switch styling inspired by GlossPress
+.ace-switch {
+    position: relative;
+    display: inline-block;
+    width: 52px; // Slightly larger than original
+    height: 28px;
+    
+    input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .ace-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ddd;
+        transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); // Smoother transition
+        border-radius: 28px;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1); // Inner shadow like GlossPress
+        
+        &::before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 50%;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15); // Enhanced shadow
+        }
+        
+        // Add subtle pattern like GlossPress
+        &::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(0,0,0,0.1), transparent);
+            border-radius: 1px;
+        }
+    }
+    
+    input:checked + .ace-slider {
+        background: linear-gradient(135deg, $success-color 0%, color.adjust($success-color, $lightness: 10%) 100%);
+        
+        &::before {
+            transform: translateX(24px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        &::after {
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+        }
+    }
+    
+    input:focus + .ace-slider {
+        box-shadow: 0 0 0 3px rgba($primary-color, 0.2), inset 0 2px 4px rgba(0, 0, 0, 0.1);
+        outline: none;
+    }
+    
+    input:focus + .ace-slider {
+        box-shadow: 0 0 0 2px rgba(0, 115, 170, 0.1);
+        outline: none;
+    }
+}
+
+// Message styling improvements
+#ace-redis-messages {
+    margin: 20px 0;
+    animation: slideInUp 0.3s ease-out; // Smooth entrance
+    
+    .notice {
+        display: block;
+        margin: 10px 0;
+        padding: 15px 18px; // More padding like GlossPress
+        border-radius: 6px; // Rounded corners
+        font-weight: 500;
+        position: relative;
+        overflow: hidden;
+        
+        // Add subtle animation
+        &::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            transition: left 0.5s ease;
+        }
+        
+        &.notice-success {
+            background: linear-gradient(135deg, rgba($success-color, 0.1) 0%, rgba($success-color, 0.05) 100%);
+            border: 1px solid rgba($success-color, 0.2);
+            border-left: 4px solid $success-color;
+            color: color.adjust($success-color, $lightness: -25%);
+            
+            &::before {
+                background: linear-gradient(90deg, transparent, rgba($success-color, 0.2), transparent);
+            }
+        }
+        
+        &.notice-error {
+            background: linear-gradient(135deg, rgba($error-color, 0.1) 0%, rgba($error-color, 0.05) 100%);
+            border: 1px solid rgba($error-color, 0.2);
+            border-left: 4px solid $error-color;
+            color: color.adjust($error-color, $lightness: -15%);
+            animation: shake 0.5s ease-in-out; // Shake on error
+        }
+        
+        &:hover::before {
+            left: 100%;
+        }
+    }
+}
+
+// Enhanced metrics display
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin: 25px 0;
+    
+    .metric-card {
+        @include card-style;
+        text-align: center;
+        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+        padding: 20px;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+        
+        // Hover effect inspired by GlossPress
+        &:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            
+            .metric-value {
+                animation: glow 1s ease-in-out;
+            }
+        }
+        
+        &::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, $primary-color, color.adjust($primary-color, $lightness: 20%));
+        }
+        
+        h4 {
+            font-size: 12px;
+            color: $text-color-light;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin: 0 0 10px 0;
+        }
+        
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: $primary-color;
+            margin-bottom: 8px;
+            line-height: 1.2;
+            transition: all 0.3s ease;
+        }
+        
+        .metric-description {
+            font-size: 11px;
+            color: $text-color-light;
+            opacity: 0.8;
+            line-height: 1.4;
+        }
+    }
 }

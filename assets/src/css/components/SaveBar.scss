@@ -1,0 +1,387 @@
+/**
+ * SaveBar Component Styles for Ace Redis Cache
+ * 
+ * Inspired by GlossPress SaveBar styling with Redis cache theme colo        input:checked + .toggle-slider {
+            background-color: $success-color;
+            
+            &:before {
+                transform: translateX(16px);
+            }
+            
+            // Add subtle pulsing animation when auto-save is active
+            animation: auto-save-pulse 2s ease-in-out infinite;
+        }* @package AceMedia\RedisCache  
+ * @since 0.5.0
+ */
+
+// Variables (matching main admin.scss)
+$primary-color: #0073aa;
+$primary-hover: #005a87;
+$success-color: #46b450;
+$error-color: #dc3232;
+$warning-color: #ffb900;
+$border-color: #e1e1e1;
+$background-light: #f9f9f9;
+$text-color: #50575e;
+$text-color-light: #666;
+
+.ace-redis-save-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border-top: 1px solid $border-color;
+    box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    transition: left 0.3s ease;
+
+    .save-bar-content {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 20px;
+        max-width: 100%;
+        margin: 0 auto;
+        
+        @media (max-width: 768px) {
+            padding: 10px 15px;
+            flex-direction: column;
+            gap: 10px;
+            align-items: stretch;
+        }
+    }
+
+    .save-bar-left {
+        flex: 1;
+        
+        .save-message {
+            font-size: 14px;
+            color: $success-color;
+            font-weight: 500;
+            opacity: 0;
+            transition: opacity 0.3s ease, color 0.3s ease;
+            
+            &.visible {
+                opacity: 1;
+            }
+            
+            &.success {
+                color: $success-color;
+            }
+            
+            &.error {
+                color: $error-color;
+            }
+            
+            &.info {
+                color: $primary-color;
+            }
+        }
+    }
+
+    .save-bar-right {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        
+        @media (max-width: 768px) {
+            justify-content: space-between;
+            width: 100%;
+        }
+    }
+
+    .auto-save-toggle {
+        label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: $text-color;
+            cursor: pointer;
+            user-select: none;
+            margin: 0;
+        }
+
+        input[type="checkbox"] {
+            display: none;
+        }
+
+        .toggle-slider {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            background-color: #ccc;
+            border-radius: 20px;
+            transition: background-color 0.3s ease;
+            cursor: pointer;
+            
+            &::before {
+                content: '';
+                position: absolute;
+                width: 16px;
+                height: 16px;
+                border-radius: 50%;
+                background-color: white;
+                top: 2px;
+                left: 2px;
+                transition: transform 0.3s ease;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            }
+        }
+
+        input:checked + .toggle-slider {
+            background-color: $success-color;
+            
+            &::before {
+                transform: translateX(16px);
+            }
+        }
+
+        input:focus + .toggle-slider {
+            box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
+        }
+    }
+
+        #save-bar-button {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+            border: 1px solid $primary-color;
+            min-width: 120px;
+            justify-content: center;
+            position: relative;
+            
+            // Auto-save indicator
+            &.auto-saving::after {
+                content: '';
+                position: absolute;
+                top: 2px;
+                right: 2px;
+                width: 8px;
+                height: 8px;
+                background-color: $success-color;
+                border-radius: 50%;
+                animation: auto-save-pulse 1s ease-in-out infinite;
+            }
+            
+            .dashicons {
+                font-size: 16px;
+                line-height: 1;
+                
+                &.dashicons-update {
+                    animation: spin 1s linear infinite;
+                }
+            }
+
+            .button-text {
+                font-weight: 500;
+            }        &:not(:disabled) {
+            background-color: $primary-color;
+            color: white;
+            
+            &:hover {
+                background-color: $primary-hover;
+                border-color: $primary-hover;
+                transform: translateY(-1px);
+                box-shadow: 0 2px 5px rgba($primary-color, 0.3);
+            }
+            
+            &:active {
+                transform: translateY(0);
+                box-shadow: 0 1px 2px rgba($primary-color, 0.2);
+            }
+        }
+
+        &:disabled {
+            background-color: #f0f0f1;
+            color: $text-color-light;
+            border-color: $border-color;
+            cursor: not-allowed;
+            
+            &.success {
+                background-color: $success-color;
+                color: white;
+                border-color: $success-color;
+                animation: success-pulse 0.5s ease-in-out;
+                
+                .dashicons-yes-alt {
+                    color: white;
+                }
+            }
+        }
+        
+        @media (max-width: 768px) {
+            min-width: 100px;
+            padding: 10px 14px;
+        }
+    }
+
+    // Success animation
+    @keyframes success-pulse {
+        0% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.05);
+        }
+        100% {
+            transform: scale(1);
+        }
+    }
+    
+    // Auto-save toggle pulse animation
+    @keyframes auto-save-pulse {
+        0%, 100% {
+            box-shadow: 0 0 0 0 rgba($success-color, 0.4);
+        }
+        50% {
+            box-shadow: 0 0 0 4px rgba($success-color, 0.1);
+        }
+    }
+
+    // Spin animation for loading icon
+    @keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+        100% {
+            transform: rotate(360deg);
+        }
+    }
+
+    // Responsive adjustments
+    @media (max-width: 480px) {
+        .save-bar-content {
+            padding: 8px 12px;
+        }
+        
+        .auto-save-toggle label {
+            font-size: 12px;
+        }
+        
+        #save-bar-button {
+            font-size: 13px;
+            padding: 8px 12px;
+            min-width: 90px;
+        }
+    }
+}
+
+// Hide WordPress footer when SaveBar is present
+body.admin-color-scheme {
+    #wpfooter {
+        display: none !important;
+    }
+}
+
+// Adjust main content to account for SaveBar
+.ace-redis-settings {
+    padding-bottom: 80px; // Make room for SaveBar
+    
+    @media (max-width: 768px) {
+        padding-bottom: 100px; // More space on mobile due to stacked layout
+    }
+}
+
+// Integration with WordPress admin themes
+.admin-color-coffee .ace-redis-save-bar {
+    border-top-color: #c7a589;
+    
+    #save-bar-button {
+        &:not(:disabled) {
+            background-color: #c7a589;
+            border-color: #c7a589;
+            
+            &:hover {
+                background-color: #b8956c;
+                border-color: #b8956c;
+            }
+        }
+    }
+    
+    .auto-save-toggle input:checked + .toggle-slider {
+        background-color: #c7a589;
+    }
+}
+
+.admin-color-ocean .ace-redis-save-bar {
+    border-top-color: #9ebaa0;
+    
+    #save-bar-button {
+        &:not(:disabled) {
+            background-color: #9ebaa0;
+            border-color: #9ebaa0;
+            
+            &:hover {
+                background-color: #8aa08c;
+                border-color: #8aa08c;
+            }
+        }
+    }
+    
+    .auto-save-toggle input:checked + .toggle-slider {
+        background-color: #9ebaa0;
+    }
+}
+
+// Dark mode support (if WordPress ever adds it)
+@media (prefers-color-scheme: dark) {
+    .ace-redis-save-bar {
+        background: #1e1e1e;
+        border-top-color: #404040;
+        color: #e0e0e0;
+        
+        .save-message {
+            color: #4caf50;
+            
+            &.error {
+                color: #f44336;
+            }
+        }
+        
+        .auto-save-toggle label {
+            color: #e0e0e0;
+        }
+        
+        #save-bar-button:disabled {
+            background-color: #333;
+            color: #888;
+            border-color: #555;
+        }
+    }
+}
+
+// High contrast accessibility support
+@media (prefers-contrast: high) {
+    .ace-redis-save-bar {
+        border-top: 2px solid #000;
+        
+        #save-bar-button {
+            border-width: 2px;
+            font-weight: 600;
+        }
+        
+        .auto-save-toggle .toggle-slider {
+            border: 2px solid #000;
+        }
+    }
+}
+
+// Focus styles for accessibility
+.ace-redis-save-bar {
+    #save-bar-button:focus {
+        outline: 2px solid $primary-color;
+        outline-offset: 2px;
+    }
+    
+    .auto-save-toggle input:focus + .toggle-slider {
+        outline: 2px solid $primary-color;
+        outline-offset: 2px;
+    }
+}

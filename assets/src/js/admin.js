@@ -8,8 +8,14 @@
  * @since 0.5.0
  */
 
+// Import SaveBar component
+import SaveBar from './components/SaveBar.js';
+
 (function($) {
     'use strict';
+
+    // Make SaveBar available globally for WordPress integration
+    window.AceRedisCacheSaveBar = SaveBar;
 
     // Main admin class
     class AceRedisCacheAdmin {
@@ -29,6 +35,79 @@
             this.initAjaxForm();
             this.initFormValidation();
             this.initChangeTracking();
+            this.initSaveBar(); // Initialize the SaveBar component
+        }
+
+        // Initialize SaveBar component
+        initSaveBar() {
+            // Wait for SaveBar component to be available
+            if (typeof window.AceRedisCacheSaveBar !== 'undefined') {
+                this.saveBar = new window.AceRedisCacheSaveBar({
+                    containerSelector: '#ace-redis-settings-form',
+                    saveButtonSelector: '#ace-redis-save-btn',
+                    messageContainerSelector: '#ace-redis-messages',
+                    onSave: () => this.saveSettingsViaSaveBar(),
+                    autoSaveEnabled: false,
+                    autoSaveInterval: 15000 // 15 seconds - shorter interval for better UX
+                });
+                console.log('SaveBar initialized successfully');
+            } else {
+                // Fallback if SaveBar component isn't loaded
+                console.warn('SaveBar component not loaded, falling back to standard save handling');
+            }
+        }
+
+        // Save settings specifically for SaveBar component
+        async saveSettingsViaSaveBar() {
+            try {
+                const success = await this.performSaveSettings();
+                
+                if (success) {
+                    // Refresh connection status after successful save
+                    setTimeout(() => {
+                        if (typeof this.testConnection === 'function') {
+                            this.testConnection();
+                        }
+                    }, 1000);
+                }
+                
+                return success;
+            } catch (error) {
+                console.error('SaveBar save error:', error);
+                return false;
+            }
+        }
+
+        // Extracted save logic that can be used by both SaveBar and regular form
+        async performSaveSettings() {
+            return new Promise((resolve) => {
+                const $form = $('#ace-redis-settings-form');
+                const formData = this.getFormDataObject();
+
+                $.ajax({
+                    url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
+                    type: 'POST',
+                    beforeSend: function(xhr) {
+                        xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    },
+                    data: {
+                        settings: formData,
+                        nonce: ace_redis_admin.nonce
+                    },
+                    success: (response) => {
+                        if (response.success) {
+                            // Update the original form data for change tracking
+                            this.captureOriginalFormData();
+                            resolve(true);
+                        } else {
+                            resolve(false);
+                        }
+                    },
+                    error: () => {
+                        resolve(false);
+                    }
+                });
+            });
         }
 
         // Initialize tab navigation
@@ -602,6 +681,19 @@
 
         // Save settings via REST API
         saveSettings() {
+            // Check if SaveBar is handling saves
+            if (this.saveBar) {
+                // Let SaveBar handle the save
+                this.saveBar.handleSave();
+                return;
+            }
+            
+            // Fallback to original save logic
+            this.performOriginalSave();
+        }
+
+        // Original save method for backward compatibility
+        performOriginalSave() {
             // Check for changes first
             if (!this.hasFormChanges()) {
                 this.showMessage('Error: Failed to save settings. No changes detected or database error.', 'error');

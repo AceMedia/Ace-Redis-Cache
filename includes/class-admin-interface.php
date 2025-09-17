@@ -86,6 +86,7 @@ class AdminInterface {
         // Check if compiled assets exist, otherwise use inline styles
         $css_file = $this->plugin_url . 'assets/dist/admin-styles.min.css';
         $js_file = $this->plugin_url . 'assets/dist/admin.min.js';
+        $savebar_js_file = $this->plugin_url . 'assets/src/js/components/SaveBar.js';
         
         if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $css_file))) {
             wp_enqueue_style(
@@ -96,11 +97,22 @@ class AdminInterface {
             );
         }
         
+        // Enqueue SaveBar component first (so it's available to main script)
+        if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $savebar_js_file))) {
+            wp_enqueue_script(
+                'ace-redis-cache-savebar',
+                $savebar_js_file,
+                ['jquery'],
+                $this->plugin_version,
+                true
+            );
+        }
+        
         if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $js_file))) {
             wp_enqueue_script(
                 'ace-redis-cache-admin',
                 $js_file,
-                ['jquery'],
+                ['jquery', 'ace-redis-cache-savebar'], // Depend on SaveBar component
                 $this->plugin_version,
                 true
             );
@@ -115,6 +127,17 @@ class AdminInterface {
         } else {
             // Fallback to inline JavaScript if compiled version doesn't exist
             wp_enqueue_script('jquery');
+            
+            // Enqueue SaveBar component in fallback mode too
+            if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $savebar_js_file))) {
+                wp_enqueue_script(
+                    'ace-redis-cache-savebar-fallback',
+                    $savebar_js_file,
+                    ['jquery'],
+                    $this->plugin_version,
+                    true
+                );
+            }
             
             // Localize script for fallback too
             wp_localize_script('jquery', 'ace_redis_admin', [

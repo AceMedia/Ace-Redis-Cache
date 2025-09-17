@@ -33,6 +33,7 @@ class AceRedisCache {
             'enabled' => 1,
             'enable_tls' => 1, // Enable TLS by default for AWS Valkey/ElastiCache
             'enable_block_caching' => 0, // Enable WordPress Block API caching
+            'enable_minification' => 0, // Enable HTML/CSS/JS minification
             'custom_cache_exclusions' => '', // Custom cache key exclusions
             'custom_transient_exclusions' => '', // Custom transient exclusions
             'custom_content_exclusions' => '', // Custom content exclusions
@@ -617,9 +618,11 @@ class AceRedisCache {
                 return $cached;
             }
             
-            // Cache the rendered block
-            $this->rtry(function($redis) use ($cache_key, $block_content) {
-                return $redis->setex($cache_key, intval($this->settings['ttl']), $block_content);
+            // Cache the rendered block (apply minification if enabled)
+            $content_to_cache = $this->minify_content($block_content);
+            
+            $this->rtry(function($redis) use ($cache_key, $content_to_cache) {
+                return $redis->setex($cache_key, intval($this->settings['ttl']), $content_to_cache);
             });
             
             return $block_content;
@@ -1006,6 +1009,15 @@ class AceRedisCache {
                             <input type="checkbox" name="ace_redis_cache_settings[enable_block_caching]" value="1" <?php checked($opts['enable_block_caching'] ?? 0, 1); ?>>
                             <p class="description">Use WordPress Block API to cache individual blocks instead of full pages. This allows dynamic blocks to stay fresh while static content is cached. <strong>Only available in Object Cache mode.</strong></p>
                             <p class="description"><strong>Auto-Exclusions:</strong> When enabled, automatically excludes dynamic WordPress blocks like <code>core/latest-posts</code>, <code>core/query</code>, <code>core/comments</code>, and all <code>woocommerce/*</code> blocks to prevent stale content in loops and dynamic widgets.</p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th>Enable HTML/CSS/JS Minification</th>
+                        <td>
+                            <input type="checkbox" name="ace_redis_cache_settings[enable_minification]" value="1" <?php checked($opts['enable_minification'] ?? 0, 1); ?>>
+                            <p class="description">Minify inline HTML, CSS, and JavaScript before caching to reduce file sizes and improve TTFB. <strong>Only affects inline code, not external files.</strong></p>
+                            <p class="description"><strong>Features:</strong> Removes comments, unnecessary whitespace, and formatting while preserving functionality. Applied to cached content for optimal performance.</p>
                         </td>
                     </tr>
                 </table>
@@ -1643,6 +1655,133 @@ class AceRedisCache {
         wp_send_json_success(['diagnostics' => implode("\n", $diagnostics)]);
     }
 
+    /** HTML/CSS/JS Minification **/
+    
+    /**
+     * Minify HTML content by removing unnecessary whitespace, comments, and line breaks
+     */
+    private function minify_html($html) {
+        if (empty($this->settings['enable_minification'])) {
+            return $html;
+        }
+
+        // Preserve pre, code, textarea, and script content
+        $preserve_tags = [];
+        $preserve_patterns = [
+            '/<(pre|code|textarea|script|style)[^>]*>.*?<\/\1>/is'
+        ];
+        
+        foreach ($preserve_patterns as $i => $pattern) {
+            if (preg_match_all($pattern, $html, $matches)) {
+                foreach ($matches[0] as $j => $match) {
+                    $placeholder = "___PRESERVE_TAG_{$i}_{$j}___";
+                    $preserve_tags[$placeholder] = $match;
+                    $html = str_replace($match, $placeholder, $html);
+                }
+            }
+        }
+
+        // Remove HTML comments (but preserve conditional comments)
+        $html = preg_replace('/<!--(?!\[if|<!\[endif).*?-->/s', '', $html);
+        
+        // Remove unnecessary whitespace between tags
+        $html = preg_replace('/>\s+</', '><', $html);
+        
+        // Remove whitespace at the beginning/end of lines
+        $html = preg_replace('/^\s+|\s+$/m', '', $html);
+        
+        // Collapse multiple whitespace characters into single space
+        $html = preg_replace('/\s+/', ' ', $html);
+        
+        // Remove whitespace around specific elements
+        $html = preg_replace('/\s*(<\/?(html|head|body|title|meta|link|script|style)[^>]*>)\s*/i', '$1', $html);
+        
+        // Restore preserved content
+        foreach ($preserve_tags as $placeholder => $content) {
+            $html = str_replace($placeholder, $content, $html);
+        }
+
+        return trim($html);
+    }
+
+    /**
+     * Minify inline CSS by removing comments, unnecessary whitespace, and formatting
+     */
+    private function minify_inline_css($html) {
+        if (empty($this->settings['enable_minification'])) {
+            return $html;
+        }
+
+        return preg_replace_callback('/<style[^>]*>(.*?)<\/style>/is', function($matches) {
+            $css = $matches[1];
+            
+            // Remove CSS comments
+            $css = preg_replace('/\/\*.*?\*\//s', '', $css);
+            
+            // Remove unnecessary whitespace
+            $css = preg_replace('/\s+/', ' ', $css);
+            
+            // Remove whitespace around specific characters
+            $css = preg_replace('/\s*([{}:;,>+~])\s*/', '$1', $css);
+            
+            // Remove trailing semicolons before closing braces
+            $css = preg_replace('/;+\s*}/', '}', $css);
+            
+            return '<style' . (isset($matches[0]) ? substr($matches[0], 6, strpos($matches[0], '>') - 6) : '') . '>' . trim($css) . '</style>';
+        }, $html);
+    }
+
+    /**
+     * Minify inline JavaScript by removing comments, unnecessary whitespace, and formatting
+     */
+    private function minify_inline_js($html) {
+        if (empty($this->settings['enable_minification'])) {
+            return $html;
+        }
+
+        return preg_replace_callback('/<script[^>]*(?!.*src=)[^>]*>(.*?)<\/script>/is', function($matches) {
+            $js = $matches[1];
+            
+            // Skip if script has src attribute (external file)
+            if (strpos($matches[0], 'src=') !== false) {
+                return $matches[0];
+            }
+            
+            // Remove single-line comments (// comments)
+            $js = preg_replace('/\/\/.*?$/m', '', $js);
+            
+            // Remove multi-line comments (/* comments */)
+            $js = preg_replace('/\/\*.*?\*\//s', '', $js);
+            
+            // Remove unnecessary whitespace (but preserve strings)
+            $js = preg_replace('/\s+/', ' ', $js);
+            
+            // Remove whitespace around operators and punctuation
+            $js = preg_replace('/\s*([{}();:,=+\-*\/])\s*/', '$1', $js);
+            
+            // Remove leading/trailing whitespace
+            $js = trim($js);
+            
+            return '<script' . (isset($matches[0]) ? substr($matches[0], 7, strpos($matches[0], '>') - 7) : '') . '>' . $js . '</script>';
+        }, $html);
+    }
+
+    /**
+     * Apply all minification techniques to HTML content
+     */
+    private function minify_content($html) {
+        if (empty($this->settings['enable_minification'])) {
+            return $html;
+        }
+
+        // Apply minification in order: CSS first, then JS, then HTML
+        $html = $this->minify_inline_css($html);
+        $html = $this->minify_inline_js($html);
+        $html = $this->minify_html($html);
+        
+        return $html;
+    }
+
     /** Full Page Cache **/
     private function setup_full_page_cache() {
         add_action('template_redirect', function () {
@@ -1678,8 +1817,11 @@ class AceRedisCache {
                         // Cache the content if it doesn't contain excluded patterns
                         if (!$this->should_exclude_content_from_cache($buffer)) {
                             try {
-                                $this->rtry(function($redis) use ($cacheKey, $buffer) {
-                                    return $redis->setex($cacheKey, intval($this->settings['ttl']), $buffer);
+                                // Apply minification before caching
+                                $minified_buffer = $this->minify_content($buffer);
+                                
+                                $this->rtry(function($redis) use ($cacheKey, $minified_buffer) {
+                                    return $redis->setex($cacheKey, intval($this->settings['ttl']), $minified_buffer);
                                 });
                             } catch (Exception $e) {
                                 error_log('Page cache storage failed: ' . $e->getMessage());

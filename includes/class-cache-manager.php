@@ -239,13 +239,24 @@ class CacheManager {
      * @return array Result with count of cleared keys
      */
     public function clear_all_cache() {
-        $cache_keys = $this->scan_keys($this->cache_prefix . '*');
-        $deleted_count = $this->delete_keys_chunked($cache_keys);
-        
+        // Collect all plugin-managed keys across prefixes
+        $all_keys = [];
+        // Full page cache
+        $all_keys = array_merge($all_keys, $this->scan_keys($this->cache_prefix . '*'));
+        // Minified page cache
+        $all_keys = array_merge($all_keys, $this->scan_keys($this->minified_cache_prefix . '*'));
+        // Block cache
+        $all_keys = array_merge($all_keys, $this->scan_keys('block_cache:*'));
+        // Transient cache set by this plugin (guests)
+        $all_keys = array_merge($all_keys, $this->scan_keys('transient:*'));
+
+        $all_keys = array_unique($all_keys);
+        $deleted_count = $this->delete_keys_chunked($all_keys);
+
         return [
             'success' => true,
             'cleared' => $deleted_count,
-            'message' => sprintf('Cleared %d cache keys', $deleted_count)
+            'message' => sprintf('Cleared %d plugin cache keys', $deleted_count)
         ];
     }
     
@@ -320,6 +331,60 @@ class CacheManager {
         }
         
         return round(pow(1024, $base - floor($base)), $precision) . ' ' . $suffixes[floor($base)];
+    }
+
+    /**
+     * Get memory usage breakdown for plugin-managed keys
+     * Sums Redis MEMORY USAGE for keys under our prefixes
+     *
+     * @return array Breakdown with bytes and human strings
+     */
+    public function get_memory_usage_breakdown() {
+        $prefixes = [
+            'page' => $this->cache_prefix,
+            'minified' => $this->minified_cache_prefix,
+            'blocks' => 'block_cache:',
+            'transients' => 'transient:'
+        ];
+
+        $result = [
+            'page_bytes' => 0,
+            'minified_bytes' => 0,
+            'blocks_bytes' => 0,
+            'transients_bytes' => 0,
+            'total_bytes' => 0,
+        ];
+
+        $this->redis_connection->retry_operation(function($redis) use ($prefixes, &$result) {
+            foreach ($prefixes as $key => $prefix) {
+                $sum = 0;
+                $keys = $this->scan_keys($prefix . '*');
+                if (!empty($keys)) {
+                    foreach ($keys as $k) {
+                        try {
+                            // Use rawCommand for broad compatibility
+                            $bytes = $redis->rawCommand('MEMORY', 'USAGE', $k);
+                            if (is_int($bytes)) {
+                                $sum += $bytes;
+                            }
+                        } catch (\Exception $e) {
+                            // Ignore per-key errors and continue
+                        }
+                    }
+                }
+                $result[$key . '_bytes'] = $sum;
+                $result['total_bytes'] += $sum;
+            }
+        });
+
+        // Add human readable values
+        $result['page_human'] = $this->format_bytes($result['page_bytes']);
+        $result['minified_human'] = $this->format_bytes($result['minified_bytes']);
+        $result['blocks_human'] = $this->format_bytes($result['blocks_bytes']);
+        $result['transients_human'] = $this->format_bytes($result['transients_bytes']);
+        $result['total_human'] = $this->format_bytes($result['total_bytes']);
+
+        return $result;
     }
     
     /**

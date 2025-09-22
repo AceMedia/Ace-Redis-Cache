@@ -202,12 +202,16 @@ import SaveBar from './components/SaveBar.js';
                 const cacheMode = $('#cache-mode-select').val();
                 const $blockCachingRow = $('#block-caching-row');
                 const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
+                const $transientRow = $('#transient-cache-row');
+                const $transientCheckbox = $('input[name="ace_redis_cache_settings[enable_transient_cache]"]');
 
-                if (cacheMode === 'object') {
-                    $blockCachingRow.show();
-                } else {
-                    $blockCachingRow.hide();
+                const show = cacheMode === 'object';
+                $blockCachingRow.toggle(show);
+                $transientRow.toggle(show);
+                // no query cache row
+                if (!show) {
                     $blockCachingCheckbox.prop('checked', false);
+                    $transientCheckbox.prop('checked', false);
                 }
             };
 
@@ -359,11 +363,6 @@ import SaveBar from './components/SaveBar.js';
                 e.preventDefault();
                 this.clearAllCache();
             });
-
-            $('#ace-redis-cache-flush-blocks-btn').on('click', (e) => {
-                e.preventDefault();
-                this.clearBlockCache();
-            });
         }
 
         // Clear all cache
@@ -404,44 +403,7 @@ import SaveBar from './components/SaveBar.js';
                 });
         }
 
-        // Clear block cache
-        clearBlockCache() {
-            if (!confirm('Clear all block cache? This will remove cached Gutenberg blocks.')) {
-                return;
-            }
-
-            const $btn = $('#ace-redis-cache-flush-blocks-btn');
-            const originalText = $btn.text();
-
-            $btn.text('Clearing...').prop('disabled', true);
-
-            $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
-                type: 'POST',
-                beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
-                },
-                data: {
-                    nonce: ace_redis_admin.nonce,
-                    type: 'blocks'
-                }
-            })
-                .done((response) => {
-                    if (response.success) {
-                        this.showNotification(`✅ ${response.data.message || 'Block cache cleared'}`, 'success');
-                        // Refresh status
-                        setTimeout(() => this.testConnection(), 500);
-                    } else {
-                        this.showNotification(`❌ Failed to clear block cache: ${response.data}`, 'error');
-                    }
-                })
-                .fail(() => {
-                    this.showNotification('❌ REST API request failed', 'error');
-                })
-                .always(() => {
-                    $btn.text(originalText).prop('disabled', false);
-                });
-        }
+    // Note: clearBlockCache removed; single Clear All handles all plugin-managed keys.
 
         // Initialize diagnostics
         initDiagnostics() {
@@ -948,6 +910,13 @@ import SaveBar from './components/SaveBar.js';
 
         // Update metrics display
         updateMetricsDisplay(metrics) {
+            // Add debug logging for keyspace stats
+            console.log('Debug keyspace stats:', {
+                hits: metrics.debug_keyspace_hits,
+                misses: metrics.debug_keyspace_misses,
+                hit_rate: metrics.cache_hit_rate
+            });
+            
             $('#performance-metrics .metric-card').each(function() {
                 const $card = $(this);
                 const $value = $card.find('.metric-value');
@@ -963,6 +932,19 @@ import SaveBar from './components/SaveBar.js';
                         break;
                     case 'Memory Usage':
                         newValue = metrics.memory_usage || '--';
+                        break;
+                    case 'Plugin Memory':
+                        newValue = metrics.plugin_memory_total || '--';
+                        // Also update description with breakdown if available
+                        const $desc = $card.find('.metric-description');
+                        const parts = [];
+                        if (metrics.plugin_memory_page) parts.push(`Page ${metrics.plugin_memory_page}`);
+                        if (metrics.plugin_memory_minified) parts.push(`Minified ${metrics.plugin_memory_minified}`);
+                        if (metrics.plugin_memory_blocks) parts.push(`Blocks ${metrics.plugin_memory_blocks}`);
+                        if (metrics.plugin_memory_transients) parts.push(`Transients ${metrics.plugin_memory_transients}`);
+                        if (parts.length) {
+                            $desc.text(parts.join(' | '));
+                        }
                         break;
                     case 'Response Time':
                         newValue = metrics.response_time || '--';

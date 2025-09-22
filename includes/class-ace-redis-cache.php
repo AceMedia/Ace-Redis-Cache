@@ -59,6 +59,7 @@ class AceRedisCache {
             'enabled' => 1,
             'enable_tls' => 0, // Changed default to 0 (disabled)
             'enable_block_caching' => 0,
+            'enable_transient_cache' => 1,
             'enable_minification' => 0,
             'custom_cache_exclusions' => '',
             'custom_transient_exclusions' => '',
@@ -198,7 +199,7 @@ class AceRedisCache {
             $this->minification->setup_hooks();
         }
         
-        // Setup exclusion filters for transients and cache operations
+        // Setup exclusion filters for transients and cache operations (object mode only)
         $this->setup_exclusion_filters();
     }
     
@@ -215,19 +216,33 @@ class AceRedisCache {
      * Setup object caching
      */
     private function setup_object_cache() {
-        // Hook into WordPress object cache functions
-        add_filter('pre_transient_*', [$this, 'get_transient'], 10, 2);
-        add_filter('pre_set_transient_*', [$this, 'set_transient'], 10, 3);
-        add_filter('pre_delete_transient_*', [$this, 'delete_transient'], 10, 2);
+        // Transients (optional toggle, guests only)
+        if (($this->settings['enable_transient_cache'] ?? 1) && !is_user_logged_in()) {
+            add_filter('pre_transient_*', [$this, 'get_transient'], 10, 2);
+            add_filter('pre_set_transient_*', [$this, 'set_transient'], 10, 3);
+            add_filter('pre_delete_transient_*', [$this, 'delete_transient'], 10, 2);
+            add_filter('pre_set_transient', [$this, 'filter_set_transient'], 10, 3);
+            add_filter('pre_get_transient', [$this, 'filter_get_transient'], 10, 2);
+            add_filter('pre_delete_transient', [$this, 'filter_delete_transient'], 10, 2);
+        }
+
+        // Query caching removed (too many edge-cases with Query Loop and dynamics)
     }
     
     /**
      * Setup exclusion filters
      */
     private function setup_exclusion_filters() {
-        add_filter('pre_set_transient', [$this, 'filter_set_transient'], 10, 3);
-        add_filter('pre_get_transient', [$this, 'filter_get_transient'], 10, 2);
-        add_filter('pre_delete_transient', [$this, 'filter_delete_transient'], 10, 2);
+        // Only in object cache mode, guest-only, and when transient cache toggle is on
+        if (
+            ($this->settings['mode'] ?? 'full') === 'object'
+            && ($this->settings['enable_transient_cache'] ?? 1)
+            && !is_user_logged_in()
+        ) {
+            add_filter('pre_set_transient', [$this, 'filter_set_transient'], 10, 3);
+            add_filter('pre_get_transient', [$this, 'filter_get_transient'], 10, 2);
+            add_filter('pre_delete_transient', [$this, 'filter_delete_transient'], 10, 2);
+        }
     }
     
     /**
@@ -372,9 +387,12 @@ class AceRedisCache {
         if ($this->cache_manager->should_exclude_transient($transient)) {
             return null; // Continue with WordPress default
         }
-        
         return $this->delete_transient($value, $transient);
     }
+
+    /**
+     * Decide if a WP_Query should be cached (guests only), with safe exclusions
+     */
     
     /**
      * Handle plugin activation

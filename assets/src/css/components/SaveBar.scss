@@ -30,7 +30,6 @@ $border-color: var(--wp-admin-border, #c3c4c7);
     border-top: 1px solid $border-color;
     box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.1);
     z-index: 1000;
-    transition: left 0.3s ease;
 
     .save-bar-content {
         display: flex;
@@ -85,61 +84,31 @@ $border-color: var(--wp-admin-border, #c3c4c7);
             justify-content: space-between;
             width: 100%;
         }
-    }
-
-    .auto-save-toggle {
-        label {
+        
+        .auto-save-toggle-wrapper {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 13px;
-            color: $text-color;
-            cursor: pointer;
-            user-select: none;
-            margin: 0;
-        }
-
-        input[type="checkbox"] {
-            display: none;
-        }
-
-        .toggle-slider {
-            position: relative;
-            width: 36px;
-            height: 20px;
-            background-color: $border-color;
-            border-radius: 20px;
-            transition: background-color 0.3s ease;
-            cursor: pointer;
             
-            &::before {
-                content: '';
-                position: absolute;
-                width: 16px;
-                height: 16px;
-                border-radius: 50%;
-                background-color: white;
-                top: 2px;
-                left: 2px;
-                transition: transform 0.3s ease;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            .toggle-label {
+                font-size: 13px;
+                color: $text-color;
+                font-weight: 500;
+                white-space: nowrap;
+                user-select: none;
             }
-        }
-
-        input:checked + .toggle-slider {
-            background-color: $success-color;
             
-            &::before {
-                transform: translateX(16px);
+            @media (max-width: 768px) {
+                gap: 6px;
+                
+                .toggle-label {
+                    font-size: 12px;
+                }
             }
-        }
-
-        input:focus + .toggle-slider {
-            box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
         }
     }
 
-        #save-bar-button {
+    #save-bar-button {
             display: flex;
             align-items: center;
             gap: 6px;
@@ -257,7 +226,7 @@ $border-color: var(--wp-admin-border, #c3c4c7);
             padding: 8px 12px;
         }
         
-        .auto-save-toggle label {
+        .auto-save-toggle-wrapper .toggle-label {
             font-size: 12px;
         }
         
@@ -304,7 +273,7 @@ body.admin-color-scheme {
             font-weight: 600;
         }
         
-        .auto-save-toggle .toggle-slider {
+        .ace-switch .ace-slider {
             border: 2px solid #000;
         }
     }
@@ -317,7 +286,7 @@ body.admin-color-scheme {
         outline-offset: 2px;
     }
     
-    .auto-save-toggle input:focus + .toggle-slider {
+    .ace-switch input:focus + .ace-slider {
         outline: 2px solid $primary-color;
         outline-offset: 2px;
     }

@@ -166,12 +166,17 @@ class AdminInterface {
                 const cacheMode = $('#cache-mode-select').val();
                 const blockCachingRow = $('#block-caching-row');
                 const blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
+                const transientRow = $('#transient-cache-row');
+                const transientCheckbox = $('input[name="ace_redis_cache_settings[enable_transient_cache]"]');
                 
                 if (cacheMode === 'object') {
                     blockCachingRow.show();
+                    transientRow.show();
                 } else {
                     blockCachingRow.hide();
                     blockCachingCheckbox.prop('checked', false);
+                    transientRow.hide();
+                    transientCheckbox.prop('checked', false);
                 }
             }
             
@@ -413,6 +418,7 @@ class AdminInterface {
         $sanitized['ttl'] = max(60, intval($input['ttl']));
         $sanitized['enable_tls'] = !empty($input['enable_tls']) ? 1 : 0;
         $sanitized['enable_block_caching'] = !empty($input['enable_block_caching']) ? 1 : 0;
+    $sanitized['enable_transient_cache'] = !empty($input['enable_transient_cache']) ? 1 : 0;
         $sanitized['enable_minification'] = !empty($input['enable_minification']) ? 1 : 0;
         
         // Sanitize exclusion patterns

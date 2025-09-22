@@ -485,7 +485,11 @@ class API_Handler {
                 'uptime' => '--',
                 'connected_clients' => '--',
                 'ops_per_sec' => '--',
-                'response_time' => '--'
+                'response_time' => '--',
+                // Plugin-specific counts (filled when CacheManager available)
+                'plugin_total_keys' => 0,
+                'plugin_page_keys' => 0,
+                'plugin_block_keys' => 0
             ];
             
             // Check if cache is enabled before attempting any connections
@@ -510,36 +514,73 @@ class API_Handler {
                         
                         if ($redis_instance) {
                             $start_time = microtime(true);
+                            // Some clients support sectioned info; fetch both flat and sections
                             $info = $redis_instance->info();
                             $keyspace_info = $redis_instance->info('keyspace');
+                            $stats_info = $redis_instance->info('stats');
+                            $clients_info = $redis_instance->info('clients');
+                            $memory_info = $redis_instance->info('memory');
+                            $server_info = $redis_instance->info('server');
                             $response_time = round((microtime(true) - $start_time) * 1000, 2);
                             
                             if ($info) {
-                                // Look for database keys in keyspace info
+                                // Normalize sections (phpredis returns capitalized section keys)
+                                $stats = $info['Stats'] ?? $info['stats'] ?? $stats_info ?? [];
+                                $memory = $info['Memory'] ?? $info['memory'] ?? $memory_info ?? [];
+                                $clients = $info['Clients'] ?? $info['clients'] ?? $clients_info ?? [];
+                                $server = $info['Server'] ?? $info['server'] ?? $server_info ?? [];
+                                
+                                // Extract hits/misses robustly
+                                $hits = (int) ($stats['keyspace_hits'] ?? ($info['keyspace_hits'] ?? 0));
+                                $misses = (int) ($stats['keyspace_misses'] ?? ($info['keyspace_misses'] ?? 0));
+                                $den = $hits + $misses;
+                                $hit_rate = $den > 0 ? round(($hits / $den) * 100, 1) . '%' : '--';
+                                
+                                // Look for database keys in keyspace info (array or string values)
                                 $total_keys = 0;
                                 if ($keyspace_info) {
                                     foreach ($keyspace_info as $key => $value) {
-                                        if (strpos($key, 'db') === 0) {
-                                            // Parse "keys=60,expires=60,avg_ttl=8791544" format
-                                            if (preg_match('/keys=(\d+)/', $value, $matches)) {
-                                                $total_keys += intval($matches[1]);
+                                        if (strpos((string)$key, 'db') === 0) {
+                                            if (is_array($value) && isset($value['keys'])) {
+                                                $total_keys += (int) $value['keys'];
+                                            } elseif (is_string($value) && preg_match('/keys=(\d+)/', $value, $matches)) {
+                                                $total_keys += (int) $matches[1];
                                             }
                                         }
                                     }
                                 }
                                 
-                                // Extract key metrics
+                                // Extract key metrics with fallbacks across sectioned/flat formats
                                 $metrics = [
-                                    'cache_hit_rate' => isset($info['keyspace_hits'], $info['keyspace_misses']) 
-                                        ? round(($info['keyspace_hits'] / max(1, $info['keyspace_hits'] + $info['keyspace_misses'])) * 100, 1) . '%'
-                                        : '--',
+                                    'cache_hit_rate' => $hit_rate,
                                     'total_keys' => $total_keys,
-                                    'memory_usage' => isset($info['used_memory_human']) ? $info['used_memory_human'] : '--',
-                                    'uptime' => isset($info['uptime_in_seconds']) ? gmdate("H:i:s", $info['uptime_in_seconds']) : '--',
-                                    'connected_clients' => $info['connected_clients'] ?? '--',
-                                    'ops_per_sec' => $info['instantaneous_ops_per_sec'] ?? '--',
+                                    'memory_usage' => $memory['used_memory_human'] ?? ($info['used_memory_human'] ?? '--'),
+                                    'uptime' => isset($server['uptime_in_seconds']) ? gmdate('H:i:s', (int)$server['uptime_in_seconds']) : (isset($info['uptime_in_seconds']) ? gmdate('H:i:s', (int)$info['uptime_in_seconds']) : '--'),
+                                    'connected_clients' => $clients['connected_clients'] ?? ($info['connected_clients'] ?? '--'),
+                                    'ops_per_sec' => $stats['instantaneous_ops_per_sec'] ?? ($info['instantaneous_ops_per_sec'] ?? '--'),
                                     'response_time' => $response_time . 'ms'
                                 ];
+
+                                // Add plugin-specific key counts (pages + blocks) via CacheManager (uses SCAN safely)
+                                try {
+                                    $page_keys = 0;
+                                    $block_keys = 0;
+                                    $page_keys += count($this->cache_manager->scan_keys('page_cache:*'));
+                                    $page_keys += count($this->cache_manager->scan_keys('page_cache_min:*'));
+                                    $block_keys = count($this->cache_manager->scan_keys('block_cache:*'));
+                                    $metrics['plugin_page_keys'] = $page_keys;
+                                    $metrics['plugin_block_keys'] = $block_keys;
+                                    $metrics['plugin_total_keys'] = $page_keys + $block_keys;
+                                    // Memory breakdown for our prefixes
+                                    $mem = $this->cache_manager->get_memory_usage_breakdown();
+                                    $metrics['plugin_memory_total'] = $mem['total_human'];
+                                    $metrics['plugin_memory_page'] = $mem['page_human'];
+                                    $metrics['plugin_memory_minified'] = $mem['minified_human'];
+                                    $metrics['plugin_memory_blocks'] = $mem['blocks_human'];
+                                    $metrics['plugin_memory_transients'] = $mem['transients_human'];
+                                } catch (\Exception $e) {
+                                    // Leave defaults if scan fails
+                                }
                             }
                         }
                     } else {
@@ -552,54 +593,67 @@ class API_Handler {
                 // Try to create a temporary Redis connection directly only if cache is enabled
                 if (!empty($settings['enabled'])) {
                     try {
-                    
-                    if (!empty($settings['host']) && !empty($settings['port'])) {
-                        $redis = new \Redis();
-                        $connected = $redis->connect($settings['host'], $settings['port'], 2); // 2 second timeout
-                        
-                        if ($connected && !empty($settings['password'])) {
-                            $auth_result = $redis->auth($settings['password']);
-                        }
-                        
-                        if ($connected) {
-                            $start_time = microtime(true);
-                            $info = $redis->info();
-                            $keyspace_info = $redis->info('keyspace');
-                            $response_time = round((microtime(true) - $start_time) * 1000, 2);
+                        if (!empty($settings['host']) && !empty($settings['port'])) {
+                            $redis = new \Redis();
+                            $connected = $redis->connect($settings['host'], $settings['port'], 2); // 2 second timeout
                             
-                            if ($info) {
-                                // Look for database keys in keyspace info
-                                $total_keys = 0;
-                                if ($keyspace_info) {
-                                    foreach ($keyspace_info as $key => $value) {
-                                        if (strpos($key, 'db') === 0) {
-                                            // Parse "keys=60,expires=60,avg_ttl=8791544" format
-                                            if (preg_match('/keys=(\d+)/', $value, $matches)) {
-                                                $total_keys += intval($matches[1]);
+                            if ($connected && !empty($settings['password'])) {
+                                $auth_result = $redis->auth($settings['password']);
+                            }
+                            
+                            if ($connected) {
+                                $start_time = microtime(true);
+                                $info = $redis->info();
+                                $keyspace_info = $redis->info('keyspace');
+                                $stats_info = $redis->info('stats');
+                                $clients_info = $redis->info('clients');
+                                $memory_info = $redis->info('memory');
+                                $server_info = $redis->info('server');
+                                $response_time = round((microtime(true) - $start_time) * 1000, 2);
+                                
+                                if ($info) {
+                                    $stats = $info['Stats'] ?? $info['stats'] ?? $stats_info ?? [];
+                                    $memory = $info['Memory'] ?? $info['memory'] ?? $memory_info ?? [];
+                                    $clients = $info['Clients'] ?? $info['clients'] ?? $clients_info ?? [];
+                                    $server = $info['Server'] ?? $info['server'] ?? $server_info ?? [];
+                                    
+                                    $hits = (int) ($stats['keyspace_hits'] ?? ($info['keyspace_hits'] ?? 0));
+                                    $misses = (int) ($stats['keyspace_misses'] ?? ($info['keyspace_misses'] ?? 0));
+                                    $den = $hits + $misses;
+                                    $hit_rate = $den > 0 ? round(($hits / $den) * 100, 1) . '%' : '--';
+                                    
+                                    $total_keys = 0;
+                                    if ($keyspace_info) {
+                                        foreach ($keyspace_info as $key => $value) {
+                                            if (strpos((string)$key, 'db') === 0) {
+                                                if (is_array($value) && isset($value['keys'])) {
+                                                    $total_keys += (int) $value['keys'];
+                                                } elseif (is_string($value) && preg_match('/keys=(\d+)/', $value, $matches)) {
+                                                    $total_keys += (int) $matches[1];
+                                                }
                                             }
                                         }
                                     }
+                                    
+                                    $metrics = [
+                                        'cache_hit_rate' => $hit_rate,
+                                        'total_keys' => $total_keys,
+                                        'memory_usage' => $memory['used_memory_human'] ?? ($info['used_memory_human'] ?? '--'),
+                                        'uptime' => isset($server['uptime_in_seconds']) ? gmdate('H:i:s', (int)$server['uptime_in_seconds']) : (isset($info['uptime_in_seconds']) ? gmdate('H:i:s', (int)$info['uptime_in_seconds']) : '--'),
+                                        'connected_clients' => $clients['connected_clients'] ?? ($info['connected_clients'] ?? '--'),
+                                        'ops_per_sec' => $stats['instantaneous_ops_per_sec'] ?? ($info['instantaneous_ops_per_sec'] ?? '--'),
+                                        'response_time' => $response_time . 'ms'
+                                    ];
+
+                                    // Without CacheManager we avoid heavy SCANs; leave plugin_* counts at defaults
                                 }
-                                
-                                $metrics = [
-                                    'cache_hit_rate' => isset($info['keyspace_hits'], $info['keyspace_misses']) 
-                                        ? round(($info['keyspace_hits'] / max(1, $info['keyspace_hits'] + $info['keyspace_misses'])) * 100, 1) . '%'
-                                        : '--',
-                                    'total_keys' => $total_keys,
-                                    'memory_usage' => isset($info['used_memory_human']) ? $info['used_memory_human'] : '--',
-                                    'uptime' => isset($info['uptime_in_seconds']) ? gmdate("H:i:s", $info['uptime_in_seconds']) : '--',
-                                    'connected_clients' => $info['connected_clients'] ?? '--',
-                                    'ops_per_sec' => $info['instantaneous_ops_per_sec'] ?? '--',
-                                    'response_time' => $response_time . 'ms'
-                                ];
+                                $redis->close();
+                            } else {
+                                // Direct Redis connection failed
                             }
-                            $redis->close();
                         } else {
-                            // Direct Redis connection failed
+                            // Missing Redis host or port in settings
                         }
-                    } else {
-                        // Missing Redis host or port in settings
-                    }
                     } catch (\Exception $e) {
                         // Log error but continue with default metrics
                     }
@@ -649,6 +703,7 @@ class API_Handler {
         $sanitized['ttl'] = max(60, intval($input['ttl']));
         $sanitized['enable_tls'] = !empty($input['enable_tls']) ? 1 : 0;
         $sanitized['enable_block_caching'] = !empty($input['enable_block_caching']) ? 1 : 0;
+    $sanitized['enable_transient_cache'] = !empty($input['enable_transient_cache']) ? 1 : 0;
         $sanitized['enable_minification'] = !empty($input['enable_minification']) ? 1 : 0;
         
         // Sanitize exclusion patterns

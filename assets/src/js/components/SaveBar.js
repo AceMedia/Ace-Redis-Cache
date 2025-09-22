@@ -2,7 +2,7 @@
  * SaveBar Component for Ace Redis Cache
  * 
  * Inspired by GlossPress SaveBar - provides a fixed bottom save bar
- * with save status messages, auto-save toggle, and unsaved changes tracking
+ * with save status messages, unsaved changes tracking and immediate auto-save
  *
  * @package AceMedia\RedisCache
  * @since 0.5.0
@@ -15,19 +15,17 @@ class SaveBar {
             saveButtonSelector: '#ace-redis-save-btn',
             messageContainerSelector: '#ace-redis-messages',
             onSave: null,
-            autoSaveEnabled: false,
-            autoSaveInterval: 30000, // 30 seconds
             ...options
         };
 
         this.isInitialized = false;
         this.hasUnsavedChanges = false;
         this.isSaving = false;
+        this.isAutoSaveEnabled = localStorage.getItem('ace_redis_auto_save_enabled') !== '0'; // Default to enabled
         this.isSuccess = false;
         this.message = '';
         this.elapsedTime = 0;
         this.intervalId = null;
-        this.autoSaveIntervalId = null;
         this.originalFormData = null;
 
         this.init();
@@ -49,11 +47,7 @@ class SaveBar {
             return;
         }
 
-        // Load auto-save preference from localStorage
-        const savedAutoSave = localStorage.getItem('ace_redis_cache_auto_save_enabled');
-        if (savedAutoSave !== null) {
-            this.options.autoSaveEnabled = savedAutoSave === '1';
-        }
+        const autoSaveToggle = this.isAutoSaveEnabled ? 'checked' : '';
 
         const saveBarHTML = `
             <div class="ace-redis-save-bar">
@@ -62,12 +56,12 @@ class SaveBar {
                         <span class="save-message"></span>
                     </div>
                     <div class="save-bar-right">
-                        <div class="auto-save-toggle">
-                            <label>
-                                <input type="checkbox" id="auto-save-toggle" ${this.options.autoSaveEnabled ? 'checked' : ''}>
-                                <span class="toggle-slider"></span>
-                                Auto Save (${this.options.autoSaveInterval / 1000}s)
+                        <div class="auto-save-toggle-wrapper">
+                            <label class="ace-switch" for="auto-save-toggle">
+                                <input type="checkbox" id="auto-save-toggle" ${autoSaveToggle}>
+                                <span class="ace-slider"></span>
                             </label>
+                            <span class="toggle-label">Auto-save</span>
                         </div>
                         <button type="button" id="save-bar-button" class="button button-primary" disabled>
                             <span class="dashicons dashicons-admin-settings"></span>
@@ -81,11 +75,6 @@ class SaveBar {
         // Insert SaveBar into DOM
         document.body.insertAdjacentHTML('beforeend', saveBarHTML);
         this.updateFixedPosition();
-        
-        // Initialize auto-save if enabled
-        if (this.options.autoSaveEnabled) {
-            this.startAutoSave();
-        }
     }
 
     setupEventListeners() {
@@ -100,20 +89,9 @@ class SaveBar {
             this.handleSave();
         });
 
-        // Auto-save toggle
-        $(document).on('change', '#auto-save-toggle', (e) => {
-            this.options.autoSaveEnabled = e.target.checked;
+        // Auto-save toggle click
+        $(document).on('change', '#auto-save-toggle', () => {
             this.toggleAutoSave();
-            
-            // Save auto-save preference to localStorage
-            localStorage.setItem('ace_redis_cache_auto_save_enabled', this.options.autoSaveEnabled ? '1' : '0');
-            
-            // Show feedback message
-            if (this.options.autoSaveEnabled) {
-                this.showMessage(`Auto-save enabled! Changes will be saved every ${this.options.autoSaveInterval / 1000} seconds.`, 'info');
-            } else {
-                this.showMessage('Auto-save disabled.', 'info');
-            }
         });
 
         // Window events for positioning
@@ -185,8 +163,20 @@ class SaveBar {
     }
 
     setUnsavedChanges(hasChanges) {
-        this.hasUnsavedChanges = hasChanges;
-        this.updateSaveButtonState();
+        if (this.hasUnsavedChanges !== hasChanges) {
+            this.hasUnsavedChanges = hasChanges;
+            this.updateSaveButtonState();
+            
+            if (hasChanges) {
+                this.startElapsedTimeTracking();
+                // Auto-save immediately when changes are detected (if enabled)
+                if (this.isAutoSaveEnabled) {
+                    setTimeout(() => this.handleAutoSave(), 500); // Small delay to avoid rapid saves
+                }
+            } else {
+                this.stopElapsedTimeTracking();
+            }
+        }
     }
 
     updateSaveButtonState() {
@@ -203,16 +193,9 @@ class SaveBar {
             $buttonText.text('Saved!');
             $icon.removeClass('dashicons-admin-settings dashicons-update').addClass('dashicons-yes-alt');
         } else if (this.hasUnsavedChanges) {
-            $button.prop('disabled', this.options.autoSaveEnabled).removeClass('success'); // Disable if auto-save is on
-            $buttonText.text(this.options.autoSaveEnabled ? 'Auto-saving...' : 'Save Changes');
+            $button.prop('disabled', false).removeClass('success');
+            $buttonText.text('Save Changes');
             $icon.removeClass('dashicons-update dashicons-yes-alt').addClass('dashicons-admin-settings');
-            
-            // Add auto-saving visual indicator
-            if (this.options.autoSaveEnabled) {
-                $button.addClass('auto-saving');
-            } else {
-                $button.removeClass('auto-saving');
-            }
         } else {
             $button.prop('disabled', true).removeClass('success');
             $buttonText.text('Saved');
@@ -220,7 +203,7 @@ class SaveBar {
         }
     }
 
-    async handleSave(isAutoSave = false) {
+    async handleSave() {
         if (!this.hasUnsavedChanges || this.isSaving) return;
 
         this.setSaving(true);
@@ -236,47 +219,49 @@ class SaveBar {
             }
 
             if (success) {
-                const message = isAutoSave ? 
-                    `Auto-saved successfully! (${new Date().toLocaleTimeString()})` : 
-                    'Settings saved successfully!';
-                    
-                this.showMessage(message, 'success');
+                this.showMessage('Settings saved successfully!', 'success');
                 this.setSuccess(true);
                 this.captureOriginalFormData();
                 this.setUnsavedChanges(false);
                 
-                // Clear success state after 3 seconds for manual saves, 2 seconds for auto-save
-                setTimeout(() => this.setSuccess(false), isAutoSave ? 2000 : 3000);
+                // Clear success state after 3 seconds
+                setTimeout(() => this.setSuccess(false), 3000);
             } else {
-                const message = isAutoSave ? 
-                    'Auto-save failed. Please save manually.' : 
-                    'Failed to save settings. Please try again.';
-                this.showMessage(message, 'error');
-                
-                // If auto-save fails, disable it temporarily
-                if (isAutoSave) {
-                    this.options.autoSaveEnabled = false;
-                    $('#auto-save-toggle').prop('checked', false);
-                    this.stopAutoSave();
-                    localStorage.setItem('ace_redis_cache_auto_save_enabled', '0');
-                }
+                this.showMessage('Save failed. Please try again.', 'error');
             }
         } catch (error) {
             console.error('Save error:', error);
-            const message = isAutoSave ? 
-                'Auto-save error occurred. Auto-save disabled.' : 
-                'An error occurred while saving. Please try again.';
-            this.showMessage(message, 'error');
-            
-            // Disable auto-save on error
-            if (isAutoSave) {
-                this.options.autoSaveEnabled = false;
-                $('#auto-save-toggle').prop('checked', false);
-                this.stopAutoSave();
-                localStorage.setItem('ace_redis_cache_auto_save_enabled', '0');
-            }
+            this.showMessage('An error occurred while saving.', 'error');
         } finally {
             this.setSaving(false);
+        }
+    }
+
+    async handleAutoSave() {
+        if (!this.hasUnsavedChanges || this.isSaving) return;
+
+        console.log('[SaveBar] Auto-saving changes...');
+        this.showMessage('Auto-saving...', 'info');
+
+        try {
+            let success = false;
+            
+            if (this.options.onSave && typeof this.options.onSave === 'function') {
+                success = await this.options.onSave();
+            } else {
+                success = await this.defaultSave();
+            }
+
+            if (success) {
+                this.showMessage('Changes auto-saved!', 'success');
+                this.captureOriginalFormData();
+                this.setUnsavedChanges(false);
+            } else {
+                this.showMessage('Auto-save failed', 'error');
+            }
+        } catch (error) {
+            console.error('[SaveBar] Auto-save error:', error);
+            this.showMessage('Auto-save error occurred', 'error');
         }
     }
 
@@ -378,47 +363,27 @@ class SaveBar {
     }
 
     formatElapsedTime(seconds) {
-        if (seconds < 60) return `Saved ${seconds} seconds ago`;
-        if (seconds < 3600) return `Saved ${Math.floor(seconds / 60)} minutes ago`;
-        return `Saved ${Math.floor(seconds / 3600)} hours ago`;
+        if (seconds < 60) return `${seconds}s ago`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        return `${Math.floor(seconds / 3600)}h ago`;
     }
 
     toggleAutoSave() {
-        if (this.options.autoSaveEnabled) {
-            this.startAutoSave();
+        const $toggle = $('#auto-save-toggle');
+        this.isAutoSaveEnabled = $toggle.is(':checked');
+        
+        if (this.isAutoSaveEnabled) {
+            this.showMessage('Auto-save enabled - changes will be saved automatically', 'success');
         } else {
-            this.stopAutoSave();
+            this.showMessage('Auto-save disabled - manual save required', 'info');
         }
-    }
-
-    startAutoSave() {
-        this.stopAutoSave();
         
-        console.log(`Starting auto-save with ${this.options.autoSaveInterval / 1000}s interval`);
-        
-        this.autoSaveIntervalId = setInterval(() => {
-            if (this.hasUnsavedChanges && !this.isSaving) {
-                console.log('Auto-save triggered - saving changes...');
-                this.showMessage(`Auto-saving changes...`, 'info');
-                this.handleSave(true); // Pass true to indicate auto-save
-            }
-        }, this.options.autoSaveInterval);
-        
-        // Show confirmation message
-        this.showMessage(`Auto-save started! Changes will be saved every ${this.options.autoSaveInterval / 1000} seconds.`, 'success');
-    }
-
-    stopAutoSave() {
-        if (this.autoSaveIntervalId) {
-            console.log('Stopping auto-save');
-            clearInterval(this.autoSaveIntervalId);
-            this.autoSaveIntervalId = null;
-        }
+        // Store the preference
+        localStorage.setItem('ace_redis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
     }
 
     destroy() {
         this.stopElapsedTimeTracking();
-        this.stopAutoSave();
         
         // Remove event listeners
         $(this.options.containerSelector).off('input change');

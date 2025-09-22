@@ -6,9 +6,9 @@
   "scripts": {
     "build": "webpack --mode=production",
     "dev": "webpack --mode=development --watch",
-    "build:css": "sass assets/src/css/admin.scss assets/dist/admin.css --style=compressed --source-map",
+    "build:css": "sass assets/src/css/admin.scss assets/dist/admin-styles.min.css --style=compressed --source-map",
     "build:js": "webpack --mode=production --entry=./assets/src/js/admin.js --output-path=./assets/dist/",
-    "watch:css": "sass assets/src/css/admin.scss assets/dist/admin.css --style=expanded --source-map --watch",
+    "watch:css": "sass assets/src/css/admin.scss assets/dist/admin-styles.min.css --style=compressed --source-map --watch",
     "watch:js": "webpack --mode=development --watch --entry=./assets/src/js/admin.js --output-path=./assets/dist/",
     "lint:js": "eslint assets/src/js --ext .js",
     "lint:css": "stylelint assets/src/css/**/*.scss",

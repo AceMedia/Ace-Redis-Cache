@@ -42,12 +42,23 @@ import SaveBar from './components/SaveBar.js';
         initSaveBar() {
             // Wait for SaveBar component to be available
             if (typeof window.AceRedisCacheSaveBar !== 'undefined') {
+                // Read any prior preference to seed the component correctly
+                let initialAuto = true;
+                if (typeof ace_redis_admin !== 'undefined' && ace_redis_admin.user_auto_save !== null) {
+                    initialAuto = !!ace_redis_admin.user_auto_save;
+                } else {
+                    try {
+                        const stored = localStorage.getItem('ace_redis_auto_save_enabled');
+                        if (stored !== null) initialAuto = (stored === '1');
+                    } catch (e) { /* ignore */ }
+                }
+
                 this.saveBar = new window.AceRedisCacheSaveBar({
                     containerSelector: '#ace-redis-settings-form',
                     saveButtonSelector: '#ace-redis-save-btn',
                     messageContainerSelector: '#ace-redis-messages',
                     onSave: () => this.saveSettingsViaSaveBar(),
-                    autoSaveEnabled: false,
+                    autoSaveEnabled: initialAuto,
                     autoSaveInterval: 15000 // 15 seconds - shorter interval for better UX
                 });
                 console.log('SaveBar initialized successfully');

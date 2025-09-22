@@ -84,9 +84,8 @@ class AdminInterface {
         }
         
         // Check if compiled assets exist, otherwise use inline styles
-        $css_file = $this->plugin_url . 'assets/dist/admin-styles.min.css';
-        $js_file = $this->plugin_url . 'assets/dist/admin.min.js';
-        $savebar_js_file = $this->plugin_url . 'assets/src/js/components/SaveBar.js';
+    $css_file = $this->plugin_url . 'assets/dist/admin-styles.min.css';
+    $js_file = $this->plugin_url . 'assets/dist/admin.min.js';
         
         if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $css_file))) {
             wp_enqueue_style(
@@ -100,54 +99,36 @@ class AdminInterface {
             wp_add_inline_style('ace-redis-cache-admin', $this->get_admin_color_scheme_css());
         }
         
-        // Enqueue SaveBar component first (so it's available to main script)
-        if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $savebar_js_file))) {
-            wp_enqueue_script(
-                'ace-redis-cache-savebar',
-                $savebar_js_file,
-                ['jquery'],
-                $this->plugin_version,
-                true
-            );
-        }
-        
         if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $js_file))) {
             wp_enqueue_script(
                 'ace-redis-cache-admin',
                 $js_file,
-                ['jquery', 'ace-redis-cache-savebar'], // Depend on SaveBar component
+                ['jquery'],
                 $this->plugin_version,
                 true
             );
             
             // Localize script for AJAX - use our script handle and correct variable name
+            $user_auto = get_user_meta(get_current_user_id(), 'ace_rc_auto_save_enabled', true);
             wp_localize_script('ace-redis-cache-admin', 'ace_redis_admin', [
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'rest_url' => rest_url(),
                 'nonce' => wp_create_nonce('ace_redis_admin_nonce'),
-                'rest_nonce' => wp_create_nonce('wp_rest')
+                'rest_nonce' => wp_create_nonce('wp_rest'),
+                'user_auto_save' => ($user_auto === '' ? null : (int) (bool) $user_auto)
             ]);
         } else {
             // Fallback to inline JavaScript if compiled version doesn't exist
             wp_enqueue_script('jquery');
             
-            // Enqueue SaveBar component in fallback mode too
-            if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $savebar_js_file))) {
-                wp_enqueue_script(
-                    'ace-redis-cache-savebar-fallback',
-                    $savebar_js_file,
-                    ['jquery'],
-                    $this->plugin_version,
-                    true
-                );
-            }
-            
             // Localize script for fallback too
+            $user_auto = get_user_meta(get_current_user_id(), 'ace_rc_auto_save_enabled', true);
             wp_localize_script('jquery', 'ace_redis_admin', [
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'rest_url' => rest_url(),
                 'nonce' => wp_create_nonce('ace_redis_admin_nonce'),
-                'rest_nonce' => wp_create_nonce('wp_rest')
+                'rest_nonce' => wp_create_nonce('wp_rest'),
+                'user_auto_save' => ($user_auto === '' ? null : (int) (bool) $user_auto)
             ]);
             
             add_action('admin_footer', [$this, 'inline_admin_scripts']);

@@ -47,6 +47,7 @@ class AdminAjax {
         add_action('wp_ajax_ace_redis_cache_metrics', [$this, 'handle_metrics_request']);
         add_action('wp_ajax_ace_redis_cache_save_settings', [$this, 'handle_save_settings']);
         add_action('wp_ajax_ace_redis_dismiss_notice', [$this, 'handle_dismiss_notice']);
+        add_action('wp_ajax_ace_redis_toggle_autosave', [$this, 'handle_toggle_autosave']);
     }
     
     /**
@@ -440,6 +441,19 @@ class AdminAjax {
         } else {
             $this->send_response('Invalid version', false);
         }
+    }
+
+    /**
+     * Persist user auto-save preference
+     */
+    public function handle_toggle_autosave() {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can('manage_options')) {
+            $this->send_response('Unauthorized', false);
+            return;
+        }
+        $enabled = isset($_POST['enabled']) ? (int) !!$_POST['enabled'] : 1;
+        update_user_meta(get_current_user_id(), 'ace_rc_auto_save_enabled', $enabled);
+        $this->send_response(['enabled' => $enabled]);
     }
     
     /**

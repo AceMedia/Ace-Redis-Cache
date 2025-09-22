@@ -21,7 +21,25 @@ class SaveBar {
         this.isInitialized = false;
         this.hasUnsavedChanges = false;
         this.isSaving = false;
-        this.isAutoSaveEnabled = localStorage.getItem('ace_redis_auto_save_enabled') !== '0'; // Default to enabled
+        // Determine auto-save preference from localStorage; default to enabled on first run
+        try {
+            const stored = localStorage.getItem('ace_redis_auto_save_enabled');
+            if (stored === null) {
+                // Allow an explicit initial option to set the first-run default
+                if (typeof this.options.autoSaveEnabled === 'boolean') {
+                    this.isAutoSaveEnabled = this.options.autoSaveEnabled;
+                } else {
+                    this.isAutoSaveEnabled = true; // sensible default
+                }
+                // Persist the initial choice
+                localStorage.setItem('ace_redis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
+            } else {
+                this.isAutoSaveEnabled = (stored === '1');
+            }
+        } catch (e) {
+            // Fallback if storage not available
+            this.isAutoSaveEnabled = true;
+        }
         this.isSuccess = false;
         this.message = '';
         this.elapsedTime = 0;
@@ -47,7 +65,7 @@ class SaveBar {
             return;
         }
 
-        const autoSaveToggle = this.isAutoSaveEnabled ? 'checked' : '';
+    const autoSaveToggle = this.isAutoSaveEnabled ? 'checked' : '';
 
         const saveBarHTML = `
             <div class="ace-redis-save-bar">
@@ -370,7 +388,7 @@ class SaveBar {
 
     toggleAutoSave() {
         const $toggle = $('#auto-save-toggle');
-        this.isAutoSaveEnabled = $toggle.is(':checked');
+    this.isAutoSaveEnabled = $toggle.is(':checked');
         
         if (this.isAutoSaveEnabled) {
             this.showMessage('Auto-save enabled - changes will be saved automatically', 'success');
@@ -379,7 +397,20 @@ class SaveBar {
         }
         
         // Store the preference
-        localStorage.setItem('ace_redis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
+        try {
+            localStorage.setItem('ace_redis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
+        } catch (e) { /* ignore */ }
+
+        // Also persist per-user server-side so it survives devices/browsers
+        if (typeof ace_redis_admin !== 'undefined' && ace_redis_admin.ajax_url) {
+            try {
+                jQuery.post(ace_redis_admin.ajax_url, {
+                    action: 'ace_redis_toggle_autosave',
+                    nonce: ace_redis_admin.nonce,
+                    enabled: this.isAutoSaveEnabled ? 1 : 0
+                });
+            } catch (e) { /* ignore */ }
+        }
     }
 
     destroy() {

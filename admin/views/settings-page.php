@@ -187,6 +187,35 @@ if (!defined('ABSPATH')) exit;
                             <p class="description">Enable HTML, CSS, and JavaScript minification</p>
                         </div>
                     </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="enable_compression">Compression</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[enable_compression]" id="enable_compression" value="1" <?php checked($settings['enable_compression'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Compress cached content to reduce size and bandwidth</p>
+                            <?php
+                                $brotli_available = function_exists('brotli_compress');
+                                $gzip_available = function_exists('gzencode') || function_exists('gzcompress');
+                                $method = $settings['compression_method'] ?? 'brotli';
+                            ?>
+                            <div class="compression-methods" style="margin-top:8px;">
+                                <label style="margin-right: 12px; opacity: <?php echo $brotli_available ? '1' : '0.5'; ?>;">
+                                    <input type="radio" name="ace_redis_cache_settings[compression_method]" value="brotli" <?php checked($method, 'brotli'); ?> <?php disabled(!$brotli_available); ?> />
+                                    Brotli <?php if (!$brotli_available) echo '(not available)'; ?>
+                                </label>
+                                <label style="opacity: <?php echo $gzip_available ? '1' : '0.5'; ?>;">
+                                    <input type="radio" name="ace_redis_cache_settings[compression_method]" value="gzip" <?php checked($method, 'gzip'); ?> <?php disabled(!$gzip_available); ?> />
+                                    Gzip <?php if (!$gzip_available) echo '(not available)'; ?>
+                                </label>
+                            </div>
+                            <p class="description">If a method is unavailable in PHP, it will be greyed out.</p>
+                        </div>
+                    </div>
                 </div>
             </div>
             

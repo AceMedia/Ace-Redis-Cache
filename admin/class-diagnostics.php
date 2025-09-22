@@ -91,6 +91,33 @@ class Diagnostics {
             $diagnostics[] = "Memory Usage: " . $cache_stats['memory_usage_human'];
         }
         $diagnostics[] = "";
+
+        // Compression info
+        $diagnostics[] = "=== Compression Levels ===";
+        $comp = method_exists($this->cache_manager, 'get_compression_info') ? $this->cache_manager->get_compression_info() : null;
+        if ($comp) {
+            $diagnostics[] = "Enabled: " . (!empty($comp['enabled']) ? 'YES' : 'NO');
+            $diagnostics[] = "Active Codec: " . strtoupper($comp['codec']);
+            $diagnostics[] = sprintf(
+                'Object Levels — br:%s, gz:%s',
+                $comp['levels']['object']['brotli'] ?? '-',
+                $comp['levels']['object']['gzip'] ?? '-'
+            );
+            $diagnostics[] = sprintf(
+                'Page Levels — br:%s, gz:%s',
+                $comp['levels']['page']['brotli'] ?? '-',
+                $comp['levels']['page']['gzip'] ?? '-'
+            );
+            $diagnostics[] = 'Min Size: ' . ($comp['min_size'] ?? 512) . ' bytes';
+            $diagnostics[] = sprintf(
+                'Functions — brotli:%s, gzip:%s',
+                !empty($comp['functions']['brotli']) ? 'YES' : 'NO',
+                !empty($comp['functions']['gzip']) ? 'YES' : 'NO'
+            );
+        } else {
+            $diagnostics[] = 'Compression info not available';
+        }
+        $diagnostics[] = "";
         
         // Exclusion rules
         $diagnostics[] = "=== Exclusion Rules ===";

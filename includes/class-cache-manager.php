@@ -19,6 +19,45 @@ class CacheManager {
     private $settings;
     private $cache_prefix = 'page_cache:';
     private $minified_cache_prefix = 'page_cache_min:';
+    private $compression_marker_prefixes = ['br:' => 'brotli', 'gz:' => 'gzip', 'raw:' => 'raw'];
+
+    /**
+     * Compression level filters usage examples
+     *
+     * Example override in theme or mu-plugin:
+     *
+     * add_filter('ace_rc_brotli_level_page', function() { return 11; });
+     * add_filter('ace_rc_brotli_level_object', function() { return 6; });
+     * add_filter('ace_rc_gzip_level_page', function() { return 7; });
+     * add_filter('ace_rc_min_compress_size', function($size) { return 1024; });
+     */
+    
+    /**
+     * Get prefixes that represent keys managed by this plugin for reporting/cleanup.
+     * Allows customization via the 'ace_redis_cache_reporting_prefixes' filter.
+     *
+     * @return array Associative array label => prefix (without wildcard)
+     */
+    private function get_reporting_prefixes() {
+        $prefixes = [
+            'page' => $this->cache_prefix,
+            'minified' => $this->minified_cache_prefix,
+            'blocks' => 'block_cache:',
+        ];
+        
+        // Include transients only if this feature is enabled
+        if (!empty($this->settings['enable_transient_cache'])) {
+            $prefixes['transients'] = 'transient:';
+        }
+        
+        /**
+         * Filter the list of prefixes used by the plugin for metrics and cleanup.
+         *
+         * @param array $prefixes  Associative array of label => prefix
+         * @param array $settings  Plugin settings array
+         */
+        return apply_filters('ace_redis_cache_reporting_prefixes', $prefixes, $this->settings);
+    }
     
     /**
      * Constructor
@@ -196,38 +235,39 @@ class CacheManager {
      * @return array Cache statistics
      */
     public function get_cache_stats() {
+        // Only report counts and memory for keys this plugin manages
+        // using our known prefixes, instead of the entire Redis DB.
         return $this->redis_connection->retry_operation(function($redis) {
+            $prefixes = $this->get_reporting_prefixes();
+            
+            // Count keys per prefix label
+            $counts = [];
             $total_keys = 0;
-            $cache_keys = 0;
-            $minified_cache_keys = 0;
-            $total_size = 0;
+            foreach ($prefixes as $label => $prefix) {
+                $keys = $this->scan_keys($prefix . '*');
+                $counts[$label] = is_array($keys) ? count($keys) : 0;
+                $total_keys += $counts[$label];
+            }
             
-            // Count total keys
-            $all_keys = $this->scan_keys('*');
-            $total_keys = count($all_keys);
-            
-            // Count regular cache keys
-            $cache_pattern_keys = $this->scan_keys($this->cache_prefix . '*');
-            $cache_keys = count($cache_pattern_keys);
-            
-            // Count minified cache keys
-            $minified_cache_pattern_keys = $this->scan_keys($this->minified_cache_prefix . '*');
-            $minified_cache_keys = count($minified_cache_pattern_keys);
-            
-            // Estimate total memory usage (rough calculation)
-            $info = $redis->info('memory');
-            $used_memory = isset($info['used_memory']) ? $info['used_memory'] : 0;
+            // Compute precise memory usage for our keys only
+            $breakdown = $this->get_memory_usage_breakdown();
+            $used_memory = $breakdown['total_bytes'] ?? 0;
             
             return [
                 'total_keys' => $total_keys,
-                'cache_keys' => $cache_keys,
-                'minified_cache_keys' => $minified_cache_keys,
+                'cache_keys' => $counts['page'] ?? 0,
+                'minified_cache_keys' => $counts['minified'] ?? 0,
+                'block_cache_keys' => $counts['blocks'] ?? 0,
+                'transient_keys' => $counts['transients'] ?? 0,
                 'memory_usage' => $used_memory,
                 'memory_usage_human' => $this->format_bytes($used_memory)
             ];
         }) ?: [
             'total_keys' => 0,
             'cache_keys' => 0,
+            'minified_cache_keys' => 0,
+            'block_cache_keys' => 0,
+            'transient_keys' => 0,
             'memory_usage' => 0,
             'memory_usage_human' => '0 B'
         ];
@@ -241,14 +281,9 @@ class CacheManager {
     public function clear_all_cache() {
         // Collect all plugin-managed keys across prefixes
         $all_keys = [];
-        // Full page cache
-        $all_keys = array_merge($all_keys, $this->scan_keys($this->cache_prefix . '*'));
-        // Minified page cache
-        $all_keys = array_merge($all_keys, $this->scan_keys($this->minified_cache_prefix . '*'));
-        // Block cache
-        $all_keys = array_merge($all_keys, $this->scan_keys('block_cache:*'));
-        // Transient cache set by this plugin (guests)
-        $all_keys = array_merge($all_keys, $this->scan_keys('transient:*'));
+        foreach ($this->get_reporting_prefixes() as $prefix) {
+            $all_keys = array_merge($all_keys, $this->scan_keys($prefix . '*'));
+        }
 
         $all_keys = array_unique($all_keys);
         $deleted_count = $this->delete_keys_chunked($all_keys);
@@ -344,8 +379,11 @@ class CacheManager {
             'page' => $this->cache_prefix,
             'minified' => $this->minified_cache_prefix,
             'blocks' => 'block_cache:',
-            'transients' => 'transient:'
         ];
+        // Only consider transients if this feature is enabled in settings
+        if (!empty($this->settings['enable_transient_cache'])) {
+            $prefixes['transients'] = 'transient:';
+        }
 
         $result = [
             'page_bytes' => 0,
@@ -381,7 +419,7 @@ class CacheManager {
         $result['page_human'] = $this->format_bytes($result['page_bytes']);
         $result['minified_human'] = $this->format_bytes($result['minified_bytes']);
         $result['blocks_human'] = $this->format_bytes($result['blocks_bytes']);
-        $result['transients_human'] = $this->format_bytes($result['transients_bytes']);
+    $result['transients_human'] = $this->format_bytes($result['transients_bytes']);
         $result['total_human'] = $this->format_bytes($result['total_bytes']);
 
         return $result;
@@ -403,8 +441,10 @@ class CacheManager {
         $ttl = $ttl ?: $this->settings['ttl'];
         
         return $this->redis_connection->retry_operation(function($redis) use ($key, $value, $ttl) {
-            $serialized_value = serialize($value);
-            return $redis->setex($key, $ttl, $serialized_value);
+            // For non-string values, serialize before compression decision
+            $payload = is_string($value) ? $value : serialize($value);
+            $store = $this->maybe_compress($payload, 'object');
+            return $redis->setex($key, $ttl, $store);
         }) ?: false;
     }
     
@@ -427,7 +467,10 @@ class CacheManager {
             return null;
         }
         
-        return unserialize($result);
+        $decoded = $this->maybe_decompress($result);
+        // If we stored serialized data originally, attempt to unserialize
+        $unser = @unserialize($decoded);
+        return ($unser !== false || $decoded === 'b:0;') ? $unser : $decoded;
     }
     
     /**
@@ -540,11 +583,11 @@ class CacheManager {
                 
                 // Store minified version with separate key
                 $minified_key = $this->minified_cache_prefix . $key;
-                $redis->setex($minified_key, $this->get_cache_expiry(), $minified_content);
+                $redis->setex($minified_key, $this->get_cache_expiry(), $this->maybe_compress($minified_content, 'page'));
                 
                 // Store original version (as fallback)
                 $original_key = $this->cache_prefix . $key;
-                $redis->setex($original_key, $this->get_cache_expiry(), $content);
+                $redis->setex($original_key, $this->get_cache_expiry(), $this->maybe_compress($content, 'page'));
                 
                 return true;
             } catch (\Exception $e) {
@@ -553,7 +596,12 @@ class CacheManager {
             }
         } else {
             // Store original version only
-            return $this->set($key, $content);
+            // Store under the raw key (compat with get_with_minification fallback), using page context
+            try {
+                return $redis->setex($key, $this->get_cache_expiry(), $this->maybe_compress($content, 'page'));
+            } catch (\Exception $e) {
+                return false;
+            }
         }
     }
     
@@ -578,12 +626,22 @@ class CacheManager {
             $content = $redis->get($minified_key);
             
             if ($content !== false) {
-                return $content;
+                return $this->maybe_decompress($content, true);
             }
         }
         
-        // Fall back to original version
-        return $this->get($key);
+        // Fall back to original version stored under the page prefix
+        $original_key = $this->cache_prefix . $key;
+        $content = $redis->get($original_key);
+        if ($content !== false) {
+            return $this->maybe_decompress($content, true);
+        }
+        // Back-compat: try legacy unprefixed key
+        $legacy = $redis->get($key);
+        if ($legacy !== false) {
+            return $this->maybe_decompress($legacy, true);
+        }
+        return null;
     }
     
     /**
@@ -593,6 +651,183 @@ class CacheManager {
      */
     private function get_cache_expiry() {
         return $this->settings['ttl'] ?? 3600; // Default 1 hour
+    }
+
+    /**
+     * Determine best available compression method based on settings and environment
+     * @return string 'brotli'|'gzip'|'off'
+     */
+    private function get_active_compression_codec() {
+        if (empty($this->settings['enable_compression'])) return 'off';
+        $method = $this->settings['compression_method'] ?? 'brotli';
+        if ($method === 'brotli' && function_exists('brotli_compress')) return 'brotli';
+        if ($method === 'gzip' && (function_exists('gzencode') || function_exists('gzcompress'))) return 'gzip';
+        // fallback: try any available
+        if (function_exists('brotli_compress')) return 'brotli';
+        if (function_exists('gzencode') || function_exists('gzcompress')) return 'gzip';
+        return 'off';
+    }
+
+    /**
+     * Get compression level by codec and context, allowing filters to override.
+     * Context values: 'object' or 'page'
+     *
+     * Filters:
+     * - ace_rc_brotli_level_object (default 5)
+     * - ace_rc_brotli_level_page (default 9)
+     * - ace_rc_gzip_level_object (default 6)
+     * - ace_rc_gzip_level_page (default 6)
+     *
+     * @param string $codec 'brotli'|'gzip'|'off'
+     * @param string $context 'object'|'page'
+     * @return int Level 0-11 for brotli, 0-9 for gzip (we clamp to valid ranges)
+     */
+    private function get_level_for($codec, $context) {
+        $context = ($context === 'page') ? 'page' : 'object';
+        if ($codec === 'brotli') {
+            $default = ($context === 'page') ? 9 : 5;
+            $level = (int) apply_filters('ace_rc_brotli_level_' . $context, $default);
+            return max(0, min(11, $level));
+        }
+        if ($codec === 'gzip') {
+            $default = 6;
+            $level = (int) apply_filters('ace_rc_gzip_level_' . $context, $default);
+            return max(0, min(9, $level));
+        }
+        return 0;
+    }
+
+    /**
+     * Compress payload, prefixing with marker including codec+level. Threshold is filterable.
+     *
+     * Marker formats (back-compat aware):
+     * - brX: (e.g., br5:, br9:) then compressed bytes
+     * - gzX: (e.g., gz6:) then compressed bytes
+     * - br: / gz: legacy markers (still accepted on read)
+     * - raw: then plain bytes
+     *
+     * @param string $payload
+     * @param string $context 'object'|'page'
+     * @return string stored value with marker
+     */
+    private function maybe_compress($payload, $context = 'object') {
+        if (!is_string($payload)) $payload = (string)$payload;
+        // Avoid double-compress if already marked with known markers
+        if (preg_match('/^(?:br\d{0,2}|gz\d{0,2}|br|gz|raw):/', $payload) === 1) {
+            return $payload;
+        }
+        $codec = $this->get_active_compression_codec();
+        $threshold = (int) apply_filters('ace_rc_min_compress_size', $this->settings['min_compress_size'] ?? 512);
+        if ($codec === 'off' || strlen($payload) < $threshold) {
+            return 'raw:' . $payload;
+        }
+        if ($codec === 'brotli') {
+            $level = $this->get_level_for('brotli', $context);
+            if (function_exists('brotli_compress')) {
+                $out = @brotli_compress($payload, $level);
+                if ($out !== false) return 'br' . $level . ':' . $out;
+            }
+        }
+        if ($codec === 'gzip') {
+            $level = $this->get_level_for('gzip', $context);
+            if (function_exists('gzencode')) {
+                $out = @gzencode($payload, $level);
+                if ($out !== false) return 'gz' . $level . ':' . $out;
+            } elseif (function_exists('gzcompress')) {
+                $out = @gzcompress($payload, $level);
+                if ($out !== false) return 'gz' . $level . ':' . $out;
+            }
+        }
+        return 'raw:' . $payload;
+    }
+
+    /**
+     * Decompress based on marker; when for_html is true, also set headers for Content-Encoding if applicable
+     */
+    private function maybe_decompress($stored, $for_html = false) {
+        if (!is_string($stored)) return $stored;
+        static $logged_once = false;
+        // Detect marker
+        if (preg_match('/^br(\d{0,2}):/', $stored, $m) === 1) {
+            // Accept both br: (no level) and brX: with level
+            $prefix_len = strlen($m[0]);
+            $data = substr($stored, $prefix_len);
+            if ($for_html) {
+                // Serve compressed bytes directly if client accepts br
+                if (isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
+                    if (!headers_sent()) {
+                        header('Content-Encoding: br');
+                        header('Vary: Accept-Encoding');
+                        // Remove any existing Content-Length and set correct one for compressed bytes
+                        if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                        header('Content-Length: ' . strlen($data));
+                    }
+                    return $data;
+                }
+            }
+            if (function_exists('brotli_uncompress')) {
+                $out = @brotli_uncompress($data);
+                if ($out !== false) return $out;
+            }
+            if (!$logged_once && (defined('WP_DEBUG') && WP_DEBUG)) { $logged_once = true; error_log('Ace-Redis-Cache: brotli decompress failed; serving raw.'); }
+            return $data;
+        }
+        if (preg_match('/^gz(\d{0,2}):/', $stored, $m) === 1) {
+            $prefix_len = strlen($m[0]);
+            $data = substr($stored, $prefix_len);
+            if ($for_html) {
+                // Only serve as gzip if client accepts it AND bytes look like gzip (1F 8B)
+                if (isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false && substr($data, 0, 2) === "\x1f\x8b") {
+                    if (!headers_sent()) {
+                        header('Content-Encoding: gzip');
+                        header('Vary: Accept-Encoding');
+                        if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                        header('Content-Length: ' . strlen($data));
+                    }
+                    return $data;
+                }
+            }
+            $out = @gzdecode($data);
+            if ($out !== false) return $out;
+            if (function_exists('gzuncompress')) {
+                $out2 = @gzuncompress($data);
+                if ($out2 !== false) return $out2;
+            }
+            if (!$logged_once && (defined('WP_DEBUG') && WP_DEBUG)) { $logged_once = true; error_log('Ace-Redis-Cache: gzip decompress failed; serving raw.'); }
+            return $data;
+        }
+        if (str_starts_with($stored, 'raw:')) {
+            return substr($stored, 4);
+        }
+        // Unknown format: return as-is
+        return $stored;
+    }
+
+    /**
+     * Get a brief compression capabilities/levels summary for diagnostics.
+     *
+     * @return array
+     */
+    public function get_compression_info() {
+        $codec = $this->get_active_compression_codec();
+        $obj_br = (int) apply_filters('ace_rc_brotli_level_object', 5);
+        $pg_br = (int) apply_filters('ace_rc_brotli_level_page', 9);
+        $obj_gz = (int) apply_filters('ace_rc_gzip_level_object', 6);
+        $pg_gz = (int) apply_filters('ace_rc_gzip_level_page', 6);
+        $min = (int) apply_filters('ace_rc_min_compress_size', $this->settings['min_compress_size'] ?? 512);
+        return [
+            'enabled' => !empty($this->settings['enable_compression']),
+            'codec' => $codec,
+            'functions' => [
+                'brotli' => function_exists('brotli_compress') && function_exists('brotli_uncompress'),
+                'gzip' => function_exists('gzencode') && function_exists('gzdecode'),
+            ],
+            'levels' => [
+                'object' => [ 'brotli' => $obj_br, 'gzip' => $obj_gz ],
+                'page'   => [ 'brotli' => $pg_br, 'gzip' => $pg_gz ],
+            ],
+            'min_size' => $min,
+        ];
     }
     
     /**

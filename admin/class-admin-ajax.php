@@ -301,7 +301,9 @@ class AdminAjax {
         
         // Boolean settings - match form field names
         $validated['enabled'] = !empty($settings['enabled']);
-        $validated['enable_compression'] = !empty($settings['enable_compression']);
+    $validated['enable_compression'] = !empty($settings['enable_compression']);
+    $method = sanitize_text_field($settings['compression_method'] ?? 'brotli');
+    $validated['compression_method'] = in_array($method, ['brotli','gzip']) ? $method : 'brotli';
         $validated['enable_tls'] = !empty($settings['enable_tls']);
         $validated['enable_block_caching'] = !empty($settings['enable_block_caching']);
         $validated['enable_minification'] = !empty($settings['enable_minification']);
@@ -317,6 +319,14 @@ class AdminAjax {
         $validated['exclude_urls'] = sanitize_textarea_field($settings['exclude_urls'] ?? '');
         $validated['exclude_user_agents'] = sanitize_textarea_field($settings['exclude_user_agents'] ?? '');
         
+        // Optional compression level overrides and size threshold (ignored unless provided)
+        // We store them to settings for reference but runtime levels are filter-driven.
+        if (isset($settings['brotli_level_object'])) $validated['brotli_level_object'] = absint($settings['brotli_level_object']);
+        if (isset($settings['brotli_level_page'])) $validated['brotli_level_page'] = absint($settings['brotli_level_page']);
+        if (isset($settings['gzip_level_object'])) $validated['gzip_level_object'] = absint($settings['gzip_level_object']);
+        if (isset($settings['gzip_level_page'])) $validated['gzip_level_page'] = absint($settings['gzip_level_page']);
+        if (isset($settings['min_compress_size'])) $validated['min_compress_size'] = max(0, absint($settings['min_compress_size']));
+
         return $validated;
     }
     
@@ -329,7 +339,7 @@ class AdminAjax {
      */
     private function should_clear_cache($old_settings, $new_settings) {
         $cache_affecting_keys = [
-            'host', 'port', 'password', 'enabled', 'enable_compression',
+            'host', 'port', 'password', 'enabled', 'enable_compression', 'compression_method',
             'mode', 'enable_block_caching', 'exclude_pages', 'exclude_posts',
             'exclude_urls', 'exclude_user_agents'
         ];
@@ -368,7 +378,7 @@ class AdminAjax {
             $redis_connection = new RedisConnection($this->settings);
             // Bypass circuit breaker for admin operations
             $redis = $redis_connection->get_connection(false, true);
-            
+
             if (!$redis) {
                 $this->send_response([
                     'cache_hit_rate' => '--',
@@ -379,28 +389,28 @@ class AdminAjax {
                 return;
             }
 
+            // Measure info call response time
             $start_time = microtime(true);
             $info = $redis->info();
             $connection_time = round((microtime(true) - $start_time) * 1000, 2);
-            
+
             // Calculate hit rate from stats
             $hits = isset($info['keyspace_hits']) ? (int)$info['keyspace_hits'] : 0;
             $misses = isset($info['keyspace_misses']) ? (int)$info['keyspace_misses'] : 0;
             $total_requests = $hits + $misses;
             $hit_rate = $total_requests > 0 ? round(($hits / $total_requests) * 100, 1) : 0;
-            
-            // Get memory usage
-            $memory_usage = isset($info['used_memory_human']) ? $info['used_memory_human'] : '0B';
-            
-            // Count keys in our namespace
-            $keys = $redis->keys('ace_redis_cache:*');
-            $total_keys = is_array($keys) ? count($keys) : 0;
+
+            // Use plugin-scoped stats only
+            $cache_manager = new \AceMedia\RedisCache\CacheManager($redis_connection, $this->settings);
+            $cache_stats = $cache_manager->get_cache_stats();
+            $memory_breakdown = $cache_manager->get_memory_usage_breakdown();
 
             $this->send_response([
                 'cache_hit_rate' => $hit_rate . '%',
-                'memory_usage' => $memory_usage,
-                'total_keys' => number_format($total_keys),
-                'connection_time' => $connection_time . 'ms'
+                'memory_usage' => $memory_breakdown['total_human'] ?? $cache_stats['memory_usage_human'],
+                'total_keys' => number_format($cache_stats['total_keys']),
+                'connection_time' => $connection_time . 'ms',
+                'plugin_memory_breakdown' => $memory_breakdown
             ]);
 
         } catch (Exception $e) {

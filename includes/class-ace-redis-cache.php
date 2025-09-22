@@ -61,6 +61,16 @@ class AceRedisCache {
             'enable_block_caching' => 0,
             'enable_transient_cache' => 1,
             'enable_minification' => 0,
+            'enable_compression' => 0,
+            'compression_method' => 'brotli', // brotli | gzip
+            // Compression level defaults (stored but not exposed in UI by default)
+            // These act as documentation and optional overrides; runtime uses filters first.
+            'brotli_level_object' => 5,
+            'brotli_level_page'   => 9,
+            'gzip_level_object'   => 6,
+            'gzip_level_page'     => 6,
+            // Minimum payload size to consider compression (bytes)
+            'min_compress_size'   => 512,
             'custom_cache_exclusions' => '',
             'custom_transient_exclusions' => '',
             'custom_content_exclusions' => '',

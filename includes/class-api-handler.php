@@ -326,12 +326,21 @@ class API_Handler {
      */
     public function get_cache_stats($request) {
         try {
-            $connection = $this->cache_manager->get_redis_connection();
-            $stats = $connection->get_status();
+            // Return plugin-scoped stats only
+            $stats = $this->cache_manager->get_cache_stats();
+            $memory = $this->cache_manager->get_memory_usage_breakdown();
             
             return new \WP_REST_Response([
                 'success' => true,
-                'data' => $stats
+                'data' => [
+                    'total_keys' => $stats['total_keys'] ?? 0,
+                    'cache_keys' => $stats['cache_keys'] ?? 0,
+                    'minified_cache_keys' => $stats['minified_cache_keys'] ?? 0,
+                    'block_cache_keys' => $stats['block_cache_keys'] ?? 0,
+                    'memory_usage' => $stats['memory_usage'] ?? 0,
+                    'memory_usage_human' => $stats['memory_usage_human'] ?? '0 B',
+                    'memory_breakdown' => $memory
+                ]
             ], 200);
             
         } catch (\Exception $e) {

@@ -705,12 +705,22 @@ class API_Handler {
         $sanitized['enable_block_caching'] = !empty($input['enable_block_caching']) ? 1 : 0;
     $sanitized['enable_transient_cache'] = !empty($input['enable_transient_cache']) ? 1 : 0;
         $sanitized['enable_minification'] = !empty($input['enable_minification']) ? 1 : 0;
+    $sanitized['enable_compression'] = !empty($input['enable_compression']) ? 1 : 0;
+    $method = sanitize_text_field($input['compression_method'] ?? 'brotli');
+    $sanitized['compression_method'] = in_array($method, ['brotli','gzip']) ? $method : 'brotli';
         
         // Sanitize exclusion patterns
         $sanitized['custom_cache_exclusions'] = sanitize_textarea_field($input['custom_cache_exclusions'] ?? '');
         $sanitized['custom_transient_exclusions'] = sanitize_textarea_field($input['custom_transient_exclusions'] ?? '');
         $sanitized['custom_content_exclusions'] = sanitize_textarea_field($input['custom_content_exclusions'] ?? '');
         $sanitized['excluded_blocks'] = sanitize_textarea_field($input['excluded_blocks'] ?? '');
+
+        // Optional compression level overrides
+        if (isset($input['brotli_level_object'])) $sanitized['brotli_level_object'] = intval($input['brotli_level_object']);
+        if (isset($input['brotli_level_page'])) $sanitized['brotli_level_page'] = intval($input['brotli_level_page']);
+        if (isset($input['gzip_level_object'])) $sanitized['gzip_level_object'] = intval($input['gzip_level_object']);
+        if (isset($input['gzip_level_page'])) $sanitized['gzip_level_page'] = intval($input['gzip_level_page']);
+        if (isset($input['min_compress_size'])) $sanitized['min_compress_size'] = max(0, intval($input['min_compress_size']));
         
         return $sanitized;
     }

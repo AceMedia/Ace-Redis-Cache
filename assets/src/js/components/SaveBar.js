@@ -8,6 +8,10 @@
  * @since 0.5.0
  */
 
+// Ensure `$` refers to jQuery even when WordPress runs in noConflict mode
+// eslint-disable-next-line no-undef
+const $ = window.jQuery;
+
 class SaveBar {
     constructor(options = {}) {
         this.options = {

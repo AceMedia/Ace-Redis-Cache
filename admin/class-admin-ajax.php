@@ -309,6 +309,7 @@ class AdminAjax {
         $validated['enable_block_caching'] = !empty($settings['enable_block_caching']);
         $validated['enable_minification'] = !empty($settings['enable_minification']);
         $validated['debug_mode'] = !empty($settings['debug_mode']);
+        $validated['exclude_basic_blocks'] = !empty($settings['exclude_basic_blocks']);
         
         // Cache mode - match form field name
         $cache_mode = sanitize_text_field($settings['mode'] ?? 'full');
@@ -319,6 +320,7 @@ class AdminAjax {
         $validated['exclude_posts'] = sanitize_textarea_field($settings['exclude_posts'] ?? '');
         $validated['exclude_urls'] = sanitize_textarea_field($settings['exclude_urls'] ?? '');
         $validated['exclude_user_agents'] = sanitize_textarea_field($settings['exclude_user_agents'] ?? '');
+    $validated['excluded_blocks'] = sanitize_textarea_field($settings['excluded_blocks'] ?? '');
         
         // Optional compression level overrides and size threshold (ignored unless provided)
         // We store them to settings for reference but runtime levels are filter-driven.
@@ -463,6 +465,11 @@ class AdminAjax {
      * @return string Formatted uptime
      */
     private function format_uptime($seconds) {
+        // Guard against non-numeric values such as 'N/A'
+        if (!is_numeric($seconds)) {
+            return 'N/A';
+        }
+        $seconds = (int) $seconds;
         if ($seconds < 60) {
             return $seconds . 's';
         } elseif ($seconds < 3600) {

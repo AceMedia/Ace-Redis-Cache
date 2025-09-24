@@ -34,9 +34,10 @@ class Minification {
             return;
         }
         
-        // Only setup output buffering if not in full page cache mode
+        // Only setup output buffering if page cache is not active
         // (full page cache will handle minification directly)
-        if ($this->settings['mode'] !== 'full') {
+        $page_cache_on = !empty($this->settings['enable_page_cache']) || (($this->settings['mode'] ?? 'full') === 'full');
+        if (!$page_cache_on) {
             add_action('template_redirect', [$this, 'start_output_buffering'], 1);
         }
     }
@@ -191,8 +192,9 @@ class Minification {
             }, $html);
         }
         
-        // Remove regular HTML comments (but keep IE conditionals)
-        $html = preg_replace('/<!--(?!\s*(?:\[if|\[endif)).*?-->/s', '', $html);
+    // Remove regular HTML comments but keep IE conditionals and our dynamic block placeholders
+    // Preserve comments that begin with ACE_BLOCK_DYNAMIC: (legacy) and ACE_DYNAMIC blk: (second-iteration placeholders)
+    $html = preg_replace('/<!--(?!\s*(?:\[if|\[endif)|ACE_BLOCK_DYNAMIC:|ACE_DYNAMIC blk:).*?-->/s', '', $html);
         
         // Remove ALL blank lines (lines with only whitespace)
         $html = preg_replace('/^\s*$/m', '', $html);

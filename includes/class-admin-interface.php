@@ -79,15 +79,24 @@ class AdminInterface {
      * @param string $hook Current admin page hook
      */
     public function enqueue_admin_scripts($hook) {
-        if ($hook !== 'settings_page_ace-redis-cache') {
-            return;
+
+        // In case the actual hook differs slightly (network admin, etc.), we allow any hook
+        // containing our slug. The original strict equality may have prevented loading if the
+        // suffix changed (e.g. multisite or translation context).
+        if (strpos($hook, 'ace-redis-cache') === false) {
+            return; // Not our page at all.
         }
         
         // Check if compiled assets exist, otherwise use inline styles
     $css_file = $this->plugin_url . 'assets/dist/admin-styles.min.css';
     $js_file = $this->plugin_url . 'assets/dist/admin.min.js';
         
-        if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $css_file))) {
+        $css_path = str_replace($this->plugin_url, dirname(__DIR__) . '/', $css_file);
+        $js_path  = str_replace($this->plugin_url, dirname(__DIR__) . '/', $js_file);
+
+        // (Former debug logging removed after stabilization.)
+
+        if (file_exists($css_path)) {
             wp_enqueue_style(
                 'ace-redis-cache-admin',
                 $css_file,
@@ -99,7 +108,7 @@ class AdminInterface {
             wp_add_inline_style('ace-redis-cache-admin', $this->get_admin_color_scheme_css());
         }
         
-        if (file_exists(str_replace($this->plugin_url, dirname(__DIR__) . '/', $js_file))) {
+        if (file_exists($js_path)) {
             wp_enqueue_script(
                 'ace-redis-cache-admin',
                 $js_file,
@@ -132,6 +141,9 @@ class AdminInterface {
             ]);
             
             add_action('admin_footer', [$this, 'inline_admin_scripts']);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('[Ace-Redis-Cache] Using inline fallback (compiled JS not found).');
+            }
         }
     }
     
@@ -142,30 +154,38 @@ class AdminInterface {
         ?>
         <script>
         jQuery(function($) {
-            // Show/hide block caching option based on cache mode
-            function toggleBlockCachingOption() {
-                const cacheMode = $('#cache-mode-select').val();
-                const blockCachingRow = $('#block-caching-row');
-                const blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
-                const transientRow = $('#transient-cache-row');
-                const transientCheckbox = $('input[name="ace_redis_cache_settings[enable_transient_cache]"]');
-                
-                if (cacheMode === 'object') {
-                    blockCachingRow.show();
-                    transientRow.show();
-                } else {
-                    blockCachingRow.hide();
-                    blockCachingCheckbox.prop('checked', false);
-                    transientRow.hide();
-                    transientCheckbox.prop('checked', false);
+            // Show/hide rows based on dual toggles (fallback when compiled JS not present)
+            function toggleBasedOnToggles() {
+                const objectOn = $('#enable_object_cache').is(':checked');
+                const $blockCachingRow = $('#block-caching-row');
+                const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
+                const $transientRow = $('#transient-cache-row');
+                $blockCachingRow.toggle(!!objectOn);
+                $transientRow.toggle(!!objectOn);
+                if (!objectOn) { $blockCachingCheckbox.prop('checked', false); }
+            }
+
+            toggleBasedOnToggles();
+            $(document).on('change', '#enable_object_cache', toggleBasedOnToggles);
+
+            // Compression sub-options visibility (fallback)
+            function toggleCompressionSubOptions() {
+                const enabled = $('#enable_compression').is(':checked');
+                const $field = $('#enable_compression').closest('.setting-field');
+                if ($field.length) {
+                    $field.find('.compression-methods').toggle(!!enabled);
+                    $field.find('.compression-methods').next('p.description').toggle(!!enabled);
                 }
             }
-            
-            // Initialize on page load
-            toggleBlockCachingOption();
-            
-            // Handle cache mode changes
-            $('#cache-mode-select').on('change', toggleBlockCachingOption);
+            toggleCompressionSubOptions();
+            $(document).on('change', '#enable_compression', toggleCompressionSubOptions);
+
+            // Basic TTL validation fallback
+            function validateTTLField($field) {
+                const v = parseInt($field.val(), 10);
+                if (!v || v < 60) { $field.addClass('error'); } else { $field.removeClass('error'); }
+            }
+            $('#ttl_page, #ttl_object').on('blur', function(){ validateTTLField($(this)); });
         });
         </script>
         <?php
@@ -287,7 +307,7 @@ class AdminInterface {
                     <tr>
                         <th scope="row">Redis Status</th>
                         <td>
-                            <button type="button" id="ace-redis-cache-test-btn" class="button">Test Redis Connection</button>
+                            <button type="button" id="ace-redis-cache-test-btn" class="button" <?php echo empty($this->settings['enabled']) ? 'disabled' : ''; ?>>Test Redis Connection</button>
                             <p><strong>Status:</strong> <span id="ace-redis-cache-connection">Unknown</span></p>
                             <p><strong>Cache Size:</strong> <span id="ace-redis-cache-size">Unknown</span></p>
                         </td>
@@ -299,11 +319,30 @@ class AdminInterface {
                     <tr>
                         <th scope="row">Clear Cache</th>
                         <td>
-                            <button type="button" id="ace-redis-cache-flush-btn" class="button button-secondary">Clear All Cache</button>
-                            <button type="button" id="ace-redis-cache-flush-blocks-btn" class="button button-secondary">Clear Block Cache</button>
+                            <div id="ace-redis-inline-cache-actions" style="<?php echo empty($this->settings['enabled']) ? 'display:none;' : ''; ?>">
+                                <button type="button" id="ace-redis-cache-flush-btn" class="button button-secondary">Clear All Cache</button>
+                                <button type="button" id="ace-redis-cache-flush-blocks-btn" class="button button-secondary">Clear Block Cache</button>
+                            </div>
                         </td>
                     </tr>
                 </table>
+                <script>
+                (function(){
+                    var enableInputs = document.querySelectorAll('input[name="ace_redis_cache_settings[enabled]"]');
+                    var actions = document.getElementById('ace-redis-inline-cache-actions');
+                    if (enableInputs.length && actions) {
+                        var update = function(){
+                            var checked = false;
+                            enableInputs.forEach(function(el){ if (el.checked) checked = true; });
+                            actions.style.display = checked ? '' : 'none';
+                            var testBtn = document.getElementById('ace-redis-cache-test-btn');
+                            if (testBtn) testBtn.disabled = !checked;
+                        };
+                        enableInputs.forEach(function(el){ el.addEventListener('change', update); });
+                        update();
+                    }
+                })();
+                </script>
                 
                 <?php submit_button(); ?>
             </form>
@@ -390,16 +429,36 @@ class AdminInterface {
      */
     public function sanitize_settings($input) {
         $sanitized = [];
+        if (defined('WP_DEBUG') && WP_DEBUG && isset($input['enable_transient_cache'])) {
+            error_log('Ace-Redis-Cache: admin sanitize incoming enable_transient_cache=' . (int)!empty($input['enable_transient_cache']));
+        }
         
         $sanitized['enabled'] = !empty($input['enabled']) ? 1 : 0;
-        $sanitized['mode'] = in_array($input['mode'] ?? 'full', ['full', 'object']) ? ($input['mode'] ?? 'full') : 'full';
+    $sanitized['mode'] = in_array($input['mode'] ?? 'full', ['full', 'object']) ? ($input['mode'] ?? 'full') : 'full';
         $sanitized['host'] = sanitize_text_field($input['host']);
         $sanitized['port'] = intval($input['port']);
         $sanitized['password'] = sanitize_text_field($input['password']);
-        $sanitized['ttl'] = max(60, intval($input['ttl']));
+    $sanitized['ttl'] = max(60, intval($input['ttl']));
+    // New dual-cache toggles and TTLs
+    $sanitized['enable_page_cache'] = !empty($input['enable_page_cache']) ? 1 : 0;
+    $sanitized['enable_object_cache'] = !empty($input['enable_object_cache']) ? 1 : 0;
+    $sanitized['ttl_page'] = max(60, intval($input['ttl_page'] ?? ($sanitized['ttl'] ?? 3600)));
+    $sanitized['ttl_object'] = max(60, intval($input['ttl_object'] ?? ($sanitized['ttl'] ?? 3600)));
         $sanitized['enable_tls'] = !empty($input['enable_tls']) ? 1 : 0;
         $sanitized['enable_block_caching'] = !empty($input['enable_block_caching']) ? 1 : 0;
-    $sanitized['enable_transient_cache'] = !empty($input['enable_transient_cache']) ? 1 : 0;
+        $sanitized['enable_transient_cache'] = !empty($input['enable_transient_cache']) ? 1 : 0; 
+        // Keep drop-in enabled whenever transient caching is enabled so transients persist
+        $sanitized['enable_object_cache_dropin'] = !empty($sanitized['enable_transient_cache']) ? 1 : 0;
+        // If object cache was enabled but transient flag missing from POST (unchecked or JS omission), preserve previous stored state
+        if ($sanitized['enable_object_cache'] && !isset($input['enable_transient_cache'])) {
+            $prev = get_option('ace_redis_cache_settings', []);
+            if (isset($prev['enable_transient_cache'])) {
+                $sanitized['enable_transient_cache'] = (int)!empty($prev['enable_transient_cache']);
+                if (!empty($sanitized['enable_transient_cache'])) {
+                    $sanitized['enable_object_cache_dropin'] = 1;
+                }
+            }
+        }
         $sanitized['enable_minification'] = !empty($input['enable_minification']) ? 1 : 0;
         
         // Sanitize exclusion patterns
@@ -407,7 +466,13 @@ class AdminInterface {
         $sanitized['custom_transient_exclusions'] = sanitize_textarea_field($input['custom_transient_exclusions'] ?? '');
         $sanitized['custom_content_exclusions'] = sanitize_textarea_field($input['custom_content_exclusions'] ?? '');
         $sanitized['excluded_blocks'] = sanitize_textarea_field($input['excluded_blocks'] ?? '');
+    $sanitized['exclude_basic_blocks'] = !empty($input['exclude_basic_blocks']) ? 1 : 0;
+    // Unified dynamic runtime mode: treat excluded blocks as dynamic
+    $sanitized['dynamic_excluded_blocks'] = !empty($input['dynamic_excluded_blocks']) ? 1 : 0;
         
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Ace-Redis-Cache: admin sanitize outgoing enable_transient_cache=' . ($sanitized['enable_transient_cache'] ?? 'NA') . ' dropin=' . ($sanitized['enable_object_cache_dropin'] ?? 'NA'));
+        }
         return $sanitized;
     }
     
@@ -520,5 +585,64 @@ class AdminInterface {
         
         // Convert back to hex
         return sprintf('#%02x%02x%02x', round($r), round($g), round($b));
+    }
+
+
+    /**
+     * Render simple cache health page
+     */
+    public function render_health_page() {
+        if (!current_user_can('manage_options')) { wp_die('Insufficient permissions'); }
+        $health = [ 'connected' => null, 'status' => 'unknown' ];
+        $stats = [];
+        $slow_ops = get_transient('ace_rc_slow_op_count');
+        $slow_ops = $slow_ops !== false ? (int)$slow_ops : 0;
+    $runtime_bypass = (isset($wp_object_cache) && method_exists($wp_object_cache,'is_bypassed') && $wp_object_cache->is_bypassed());
+    $bypass = (defined('ACE_OC_BYPASS') && ACE_OC_BYPASS) || $runtime_bypass;
+        $prof = defined('ACE_OC_PROF') && ACE_OC_PROF;
+        // Attempt to derive connection info from global object cache
+        global $wp_object_cache; $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
+        $dropin_connected = false;
+        if ($using_dropin && isset($wp_object_cache) && is_object($wp_object_cache)) {
+            if (method_exists($wp_object_cache, 'is_connected')) {
+                $dropin_connected = (bool)$wp_object_cache->is_connected();
+            } elseif (property_exists($wp_object_cache, 'redis') && isset($wp_object_cache->redis)) {
+                // Heuristic: attempt lightweight info() call; if it succeeds we treat as connected
+                try { $wp_object_cache->redis->ping(); $dropin_connected = true; } catch (\Throwable $t) { $dropin_connected = false; }
+            }
+        }
+        $transport = 'unknown';
+    if ($dropin_connected && isset($wp_object_cache->redis)) {
+            try { $info = $wp_object_cache->redis->info(); $transport = !empty($info['redis_mode']) ? $info['redis_mode'] : 'tcp'; } catch (\Throwable $t) {}
+        }
+        // Basic environment
+        $autoload_size = $this->estimate_autoload_size();
+        ?>
+        <div class="wrap">
+            <h1>Ace Redis Cache Health</h1>
+            <table class="widefat fixed striped" style="max-width:900px;">
+                <tbody>
+                    <tr><th>Object Cache Drop-In</th><td><?php echo $using_dropin ? 'Present' : 'Not Detected'; ?></td></tr>
+                    <tr><th>Drop-In Connected</th><td><?php echo $dropin_connected ? '<span style="color:green">YES</span>' : '<span style="color:#cc0000">NO</span>'; ?></td></tr>
+                    <tr><th>Transport</th><td><?php echo esc_html($transport); ?></td></tr>
+                    <tr><th>Bypass Flag</th><td><?php echo $bypass ? '<span style="color:#cc0000">ACTIVE</span>' : 'off'; ?><?php if($runtime_bypass && !(defined('ACE_OC_BYPASS') && ACE_OC_BYPASS)) { echo ' <span style="color:#666;">(auto fail-open)</span>'; } ?></td></tr>
+                    <?php if(isset($wp_object_cache) && method_exists($wp_object_cache,'connection_details')) { $cd = $wp_object_cache->connection_details(); if(!$cd['connected'] && !empty($cd['error'])) { ?>
+                    <tr><th>Connection Error</th><td><code style="font-size:11px;"><?php echo esc_html($cd['error']); ?></code></td></tr>
+                    <?php } elseif($cd['connected']) { ?>
+                    <tr><th>Connection Via</th><td><?php echo esc_html($cd['via']); ?></td></tr>
+                    <?php } } ?>
+                    <tr><th>Profiling</th><td><?php echo $prof ? 'enabled' : 'disabled'; ?></td></tr>
+                    <tr><th>Slow Ops (>=100ms)</th><td><?php echo (int)$slow_ops; ?></td></tr>
+                    <tr><th>Autoload Option Size (approx)</th><td><?php echo esc_html(size_format($autoload_size)); ?></td></tr>
+                </tbody>
+            </table>
+            <p class="description">Slow op counter increments when ACE_OC_PROF is enabled and an op exceeds threshold; stored transiently for visibility.</p>
+        </div>
+        <?php
+    }
+
+    private function estimate_autoload_size() {
+        global $wpdb; $row = $wpdb->get_row("SELECT SUM(LENGTH(option_value)) AS sz FROM {$wpdb->options} WHERE autoload='yes'");
+        return $row && isset($row->sz) ? (int)$row->sz : 0;
     }
 }

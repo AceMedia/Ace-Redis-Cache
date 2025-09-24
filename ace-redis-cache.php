@@ -139,20 +139,32 @@ class AceRedisCacheBootstrap {
             $class = str_replace('AceMedia\\RedisCache\\', '', $class);
             
             // Convert class name to file name (handle CamelCase)
-            $class_file = 'class-' . strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $class)) . '.php';
+            $converted = preg_replace('/([a-z])([A-Z])/', '$1-$2', $class);
+            // Primary variant (original convention): lowercase, dashes from camelCase
+            $class_file = 'class-' . strtolower($converted) . '.php';
+            // Accept underscores by also trying a hyphenated variant (Plugin_Manager -> class-plugin-manager.php)
+            $alt_file = 'class-' . strtolower(str_replace('_', '-', $converted)) . '.php';
             
             // Try includes directory first
-            $includes_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'includes/' . $class_file;
-            if (file_exists($includes_file)) {
-                require_once $includes_file;
-                return;
+            foreach ([$class_file, $alt_file] as $candidate) {
+                $includes_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'includes/' . $candidate;
+                if (file_exists($includes_file)) {
+                    require_once $includes_file;
+                    return;
+                }
+                $admin_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'admin/' . $candidate;
+                if (file_exists($admin_file)) {
+                    require_once $admin_file;
+                    return;
+                }
             }
-            
-            // Try admin directory
-            $admin_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'admin/' . $class_file;
-            if (file_exists($admin_file)) {
-                require_once $admin_file;
-                return;
+            // If we reach here and WP_DEBUG enabled, log miss once.
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                static $logged = [];
+                if (!isset($logged[$class])) {
+                    error_log('[Ace-Redis-Cache] Autoloader miss for class ' . $class . ' tried [' . $class_file . ', ' . $alt_file . ']');
+                    $logged[$class] = true;
+                }
             }
         });
     }
@@ -163,6 +175,8 @@ class AceRedisCacheBootstrap {
     public function load_plugin() {
         if (class_exists('AceMedia\\RedisCache\\AceRedisCache')) {
             $this->plugin = new \AceMedia\RedisCache\AceRedisCache();
+            // Register CLI commands if available
+            if (class_exists('AceMedia\\RedisCache\\Admin_CLI')) { \AceMedia\RedisCache\Admin_CLI::register(); }
         } else {
             add_action('admin_notices', function() {
                 echo '<div class="notice notice-error"><p>';
@@ -187,6 +201,7 @@ class AceRedisCacheBootstrap {
             );
         }
         
+
         // Load plugin if not already loaded
         if (!$this->plugin) {
             $this->load_plugin();
@@ -196,6 +211,7 @@ class AceRedisCacheBootstrap {
         if ($this->plugin && method_exists($this->plugin, 'on_activation')) {
             $this->plugin->on_activation();
         }
+
         
         // Flush rewrite rules
         flush_rewrite_rules();

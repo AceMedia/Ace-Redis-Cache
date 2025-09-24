@@ -37,12 +37,19 @@ class BlockCaching {
             return;
         }
         
-        // Hook into block rendering
-        add_filter('pre_render_block', [$this, 'control_block_caching'], 10, 2);
-        add_filter('render_block', [$this, 'cache_block_output'], 10, 2);
-        
-        // Modify block cache support
-        add_filter('block_type_supports', [$this, 'modify_block_cache_support'], 10, 3);
+        // Only attach render-time caching hooks for guest frontend requests
+        if (!\is_admin() && !\is_user_logged_in() && !\wp_doing_ajax() && !(defined('REST_REQUEST') && REST_REQUEST)) {
+            // Hook into block rendering
+            add_filter('pre_render_block', [$this, 'control_block_caching'], 10, 2);
+            add_filter('render_block', [$this, 'cache_block_output'], 10, 2);
+
+            // Modify block cache support
+            add_filter('block_type_supports', [$this, 'modify_block_cache_support'], 10, 3);
+        }
+
+        // Per-post invalidation: clear cached blocks when a post is saved/deleted (always active)
+        add_action('save_post', [$this, 'invalidate_post_blocks'], 20, 1);
+        add_action('deleted_post', [$this, 'invalidate_post_blocks'], 20, 1);
     }
     
     /**
@@ -154,6 +161,18 @@ class BlockCaching {
                 }
             }
         }
+
+        // Optional: exclude a set of basic static blocks globally
+        if (!empty($this->settings['exclude_basic_blocks'])) {
+            $basic = [
+                'core/paragraph',
+                'core/heading',
+                'core/list',
+                'core/image',
+                'core/gallery',
+            ];
+            $exclusions = array_merge($exclusions, $basic);
+        }
         
         return $exclusions;
     }
@@ -199,9 +218,11 @@ class BlockCaching {
      * @return string Cache key
      */
     private function generate_block_cache_key($block_name, $block, $block_content = '') {
+        $post_id = (int) (get_the_ID() ?: 0);
         $key_components = [
             'block_cache',
             $block_name,
+            'post-' . $post_id,
             md5(serialize($block['attrs'] ?? [])),
             md5($block['innerHTML'] ?? ''),
         ];
@@ -213,7 +234,7 @@ class BlockCaching {
         
         // Add context-specific data
         $context_data = [
-            'post_id' => get_the_ID(),
+            'post_id' => $post_id,
             'is_single' => is_single(),
             'is_page' => is_page(),
             'is_home' => is_home(),
@@ -225,6 +246,23 @@ class BlockCaching {
         
         return implode(':', $key_components);
     }
+
+    /**
+     * Invalidate cached blocks for a specific post.
+     *
+     * @param int $post_id Post ID
+     */
+    public function invalidate_post_blocks($post_id) {
+        if (!$post_id || wp_is_post_revision($post_id)) {
+            return;
+        }
+        // Pattern matches keys built as: block_cache:{block}:{post-<id>}:*
+        $pattern = 'block_cache:*:post-' . (int)$post_id . ':*';
+        $keys = $this->cache_manager->scan_keys($pattern);
+        if (!empty($keys)) {
+            $this->cache_manager->delete_keys_chunked($keys);
+        }
+    }
     
     /**
      * Get cache TTL for specific block type
@@ -233,8 +271,8 @@ class BlockCaching {
      * @return int TTL in seconds
      */
     private function get_block_cache_ttl($block_name) {
-        // Default TTL from settings
-        $default_ttl = $this->settings['ttl'] ?? 3600;
+    // Default TTL from settings (object-level TTL preferred)
+    $default_ttl = isset($this->settings['ttl_object']) ? (int)$this->settings['ttl_object'] : (int)($this->settings['ttl'] ?? 3600);
         
         // Specific TTLs for different block types
         $block_ttls = [

@@ -76,8 +76,10 @@ class Diagnostics {
         // Plugin settings
         $diagnostics[] = "=== Plugin Settings ===";
         $diagnostics[] = "Cache Enabled: " . ($this->settings['enabled'] ? 'YES' : 'NO');
-        $diagnostics[] = "Cache Mode: " . strtoupper($this->settings['mode']);
-        $diagnostics[] = "Cache TTL: " . $this->settings['ttl'] . " seconds";
+    $diagnostics[] = "Cache Mode: " . strtoupper($this->settings['mode']);
+    // Dual-cache display
+    $diagnostics[] = "Page Cache: " . (!empty($this->settings['enable_page_cache']) ? 'ENABLED' : 'DISABLED') . ", TTL: " . (int)($this->settings['ttl_page'] ?? ($this->settings['ttl'] ?? 3600)) . "s";
+    $diagnostics[] = "Object Cache: " . (!empty($this->settings['enable_object_cache']) ? 'ENABLED' : 'DISABLED') . ", TTL: " . (int)($this->settings['ttl_object'] ?? ($this->settings['ttl'] ?? 3600)) . "s";
         $diagnostics[] = "Block Caching: " . ($this->settings['enable_block_caching'] ? 'YES' : 'NO');
         $diagnostics[] = "Minification: " . ($this->settings['enable_minification'] ? 'YES' : 'NO');
         $diagnostics[] = "";
@@ -214,6 +216,13 @@ class Diagnostics {
      * @return string Formatted uptime
      */
     private function format_uptime($seconds) {
+        // Guard against non-numeric inputs like 'N/A'
+        if (!is_numeric($seconds)) {
+            return 'N/A';
+        }
+
+        $seconds = (int) $seconds;
+
         if ($seconds < 60) {
             return $seconds . ' seconds';
         } elseif ($seconds < 3600) {

@@ -32,7 +32,7 @@ if (!defined('ABSPATH')) exit;
             <!-- Cache Action Buttons -->
             <div class="cache-actions-panel">
                 <h4>Cache Actions</h4>
-                <div class="cache-action-buttons">
+                <div class="cache-action-buttons" style="<?php echo empty($settings['enabled']) ? 'display:none;' : ''; ?>">
                     <button type="button" id="ace-redis-cache-flush-btn" class="button button-secondary cache-action-btn">
                         <span class="dashicons dashicons-admin-generic"></span>
                         Clear All Cache
@@ -49,7 +49,8 @@ if (!defined('ABSPATH')) exit;
             <div id="ace-redis-messages" style="display: none;"></div>
             
             <form id="ace-redis-settings-form" method="post" class="ace-redis-form">
-            
+
+                        
                 <!-- Connection Tab -->
                 <div id="connection" class="tab-content active">
                     <h2>Redis Connection Settings</h2>
@@ -87,7 +88,8 @@ if (!defined('ABSPATH')) exit;
                             <p class="description">Redis server port (default: 6379)</p>
                         </div>
                     </div>
-                    
+
+            
                     <div class="setting-row">
                         <div class="setting-label">
                             <label for="redis_password">Password</label>
@@ -112,6 +114,27 @@ if (!defined('ABSPATH')) exit;
                     </div>
                 </div>
             </div>
+            <script>
+            (function(){
+                // Toggle visibility of Clear Cache button based on Enable Cache checkbox
+                var enableCb = document.getElementById('enable_cache');
+                var actionsPanel = document.querySelector('.cache-actions-panel .cache-action-buttons');
+                if (enableCb && actionsPanel) {
+                    var updateVisibility = function() {
+                        var enabled = !!enableCb.checked;
+                        actionsPanel.style.display = enabled ? '' : 'none';
+                        // Toggle diagnostics test buttons state
+                        var testBtn = document.getElementById('ace-redis-cache-test-btn');
+                        var testWRBtn = document.getElementById('ace-redis-cache-test-write-btn');
+                        if (testBtn) testBtn.disabled = !enabled;
+                        if (testWRBtn) testWRBtn.disabled = !enabled;
+                    };
+                    enableCb.addEventListener('change', updateVisibility);
+                    // Ensure correct state on load as well (in case PHP didn't render expected state)
+                    updateVisibility();
+                }
+            })();
+            </script>
             
             <!-- Caching Tab -->
             <div id="caching" class="tab-content">
@@ -120,34 +143,60 @@ if (!defined('ABSPATH')) exit;
                 <div class="settings-form">
                     <div class="setting-row">
                         <div class="setting-label">
-                            <label for="cache_mode">Cache Mode</label>
+                            <label>Cache Types</label>
                         </div>
                         <div class="setting-field">
-                            <select name="ace_redis_cache_settings[mode]" id="cache-mode-select" class="regular-text">
-                                <option value="full" <?php selected($settings['mode'], 'full'); ?>>Full Page Cache</option>
-                                <option value="object" <?php selected($settings['mode'], 'object'); ?>>Object Cache Only</option>
-                            </select>
-                            <p class="description">
-                                <strong>Full Page Cache:</strong> Maximum performance but may conflict with dynamic content<br>
-                                <strong>Object Cache:</strong> Cache transients and database queries only
-                            </p>
-                        </div>
-                    </div>
-                    
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <label for="cache_ttl">Cache TTL</label>
-                        </div>
-                        <div class="setting-field">
-                            <div class="input-group">
-                                <input type="number" name="ace_redis_cache_settings[ttl]" id="cache_ttl" value="<?php echo esc_attr($settings['ttl']); ?>" min="60" max="604800" class="small-text" />
-                                <span>seconds</span>
+                            <!-- Page Cache toggle + options -->
+                            <div class="cache-type-group" style="margin-bottom:16px;">
+                                <div class="cache-type-toggle">
+                                    <label class="ace-switch" style="margin-right:16px;">
+                                        <input type="checkbox" name="ace_redis_cache_settings[enable_page_cache]" id="enable_page_cache" value="1" <?php checked($settings['enable_page_cache'] ?? (($settings['mode'] ?? 'full') === 'full')); ?> />
+                                        <span class="ace-slider"></span>
+                                    </label>
+                                    <span><strong>Enable Full Page Cache</strong></span>
+                                </div>
+                                <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
+                                    <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
+                                    <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
+                                    <span>seconds</span>
+                                </div>
                             </div>
-                            <p class="description">Default cache time-to-live (3600 = 1 hour, 86400 = 1 day)</p>
+
+                            <!-- Object Cache toggle + options -->
+                            <div class="cache-type-group">
+                                <div class="cache-type-toggle">
+                                    <label class="ace-switch" style="margin-right:16px;">
+                                        <input type="checkbox" name="ace_redis_cache_settings[enable_object_cache]" id="enable_object_cache" value="1" <?php checked($settings['enable_object_cache'] ?? (($settings['mode'] ?? 'full') === 'object')); ?> />
+                                        <span class="ace-slider"></span>
+                                    </label>
+                                    <span><strong>Enable Object Cache</strong> <span class="description">(transients, blocks)</span></span>
+                                </div>
+                                <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
+                                    <label for="ttl_object" style="width:140px; display:inline-block;">Object Cache TTL</label>
+                                    <input type="number" name="ace_redis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
+                                    <span>seconds</span>
+                                    <p class="description" style="margin-top:6px;">You can enable one or both cache types. Object cache controls transients and optional block caching.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    
-                    <div class="setting-row" id="block-caching-row" style="<?php echo ($settings['mode'] === 'object') ? '' : 'display: none;'; ?>">
+                    <div class="setting-row" id="transient-cache-row" style="<?php echo (!empty($settings['enable_object_cache']) || ($settings['mode'] ?? '') === 'object') ? '' : 'display: none;'; ?>">
+                        <div class="setting-label">
+                            <label for="enable_transient_cache">Transient Cache <span id="ace-rc-transient-status" style="display:inline-block; margin-left:6px; font-size:11px; padding:2px 6px; border-radius:10px; background:#ddd; color:#333; vertical-align:middle;">&nbsp;</span></label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[enable_transient_cache]" id="enable_transient_cache" value="1" <?php checked(!empty($settings['enable_transient_cache'])); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Persist WordPress transients (including site transients) in Redis. Respects your transient exclusions.<br/>
+                            When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
+                            <div id="ace-rc-transient-tips" class="ace-rc-tips" style="margin-top:8px; font-size:12px; line-height:1.4;">
+                                <!-- Dynamic health tips injected here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row" id="block-caching-row" style="<?php echo (!empty($settings['enable_object_cache']) || ($settings['mode'] ?? '') === 'object') ? '' : 'display: none;'; ?>">
                         <div class="setting-label">
                             <label for="enable_block_caching">Block Caching</label>
                         </div>
@@ -160,18 +209,7 @@ if (!defined('ABSPATH')) exit;
                         </div>
                     </div>
 
-                    <div class="setting-row" id="transient-cache-row" style="<?php echo ($settings['mode'] === 'object') ? '' : 'display: none;'; ?>">
-                        <div class="setting-label">
-                            <label for="enable_transient_cache">Transient Cache (Guests)</label>
-                        </div>
-                        <div class="setting-field">
-                            <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_transient_cache]" id="enable_transient_cache" value="1" <?php checked($settings['enable_transient_cache'] ?? 1); ?> />
-                                <span class="ace-slider"></span>
-                            </label>
-                            <p class="description">Persist WordPress transients in Redis for logged-out visitors. Respects your transient exclusions.</p>
-                        </div>
-                    </div>
+                    
 
                     
                     
@@ -214,6 +252,75 @@ if (!defined('ABSPATH')) exit;
                                 </label>
                             </div>
                             <p class="description">If a method is unavailable in PHP, it will be greyed out.</p>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="enable_browser_cache_headers">Browser Cache Headers</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[enable_browser_cache_headers]" id="enable_browser_cache_headers" value="1" <?php checked($settings['enable_browser_cache_headers'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse.</p>
+                            <div style="margin-top:8px;">
+                                <label for="browser_cache_max_age" style="width:140px; display:inline-block;">Max-Age</label>
+                                <input type="number" name="ace_redis_cache_settings[browser_cache_max_age]" id="browser_cache_max_age" value="<?php echo esc_attr($settings['browser_cache_max_age'] ?? ($settings['ttl_page'] ?? 3600)); ?>" min="60" max="604800" class="small-text" /> seconds
+                            </div>
+                            <label style="margin-top:8px; display:block;">
+                                <input type="checkbox" name="ace_redis_cache_settings[send_cache_meta_headers]" value="1" <?php checked($settings['send_cache_meta_headers'] ?? 0); ?> />
+                                Send diagnostic cache meta headers (X-AceRedisCache-*)
+                            </label>
+                            <p class="description">Includes age, expires, compression, dynamic stats to aid debugging. Disable in production for minimal overhead.</p>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="enable_static_asset_cache">Static Asset Cache</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Set long-lived Cache-Control headers (public, immutable) for static files (images, CSS, JS, fonts) and pair with minification for optimal Lighthouse scores.</p>
+                            <div style="margin-top:8px;">
+                                <label for="static_asset_cache_ttl" style="width:140px; display:inline-block;">Static TTL</label>
+                                <input type="number" name="ace_redis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
+                                <p class="description" style="margin-top:4px;">Recommended: 7 days (604800) – 1 year (31536000). Values outside 1d–1y are clamped.</p>
+                            </div>
+                            <?php if (empty($settings['enable_minification'])): ?>
+                                <p class="description" style="margin-top:8px; color:#d63638;">Tip: Enable Minification above for smaller CSS/JS when using long-lived asset caching.</p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="enable_dynamic_microcache">Dynamic Microcache</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[enable_dynamic_microcache]" id="enable_dynamic_microcache" value="1" <?php checked($settings['enable_dynamic_microcache'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic.</p>
+                            <div style="margin-top:8px;">
+                                <label for="dynamic_microcache_ttl" style="width:140px; display:inline-block;">Microcache TTL</label>
+                                <input type="number" name="ace_redis_cache_settings[dynamic_microcache_ttl]" id="dynamic_microcache_ttl" value="<?php echo esc_attr($settings['dynamic_microcache_ttl'] ?? 10); ?>" min="1" max="60" class="small-text" /> seconds
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="enable_opcache_helpers">OPcache Helpers</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[enable_opcache_helpers]" id="enable_opcache_helpers" value="1" <?php checked($settings['enable_opcache_helpers'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Expose buttons to reset and (lightly) prime PHP OPcache for hot files after deploy/settings changes.</p>
                         </div>
                     </div>
                 </div>
@@ -274,6 +381,15 @@ if (!defined('ABSPATH')) exit;
                                 Exclude specific Gutenberg blocks from block-level caching.<br>
                                 Example: <code>core/html</code>, <code>custom/dynamic-*</code>
                             </p>
+                            <label style="margin-top:8px; display:block;">
+                                <input type="checkbox" name="ace_redis_cache_settings[exclude_basic_blocks]" value="1" <?php checked($settings['exclude_basic_blocks'] ?? 0); ?> />
+                                Exclude common basic blocks (paragraph, heading, list, image, gallery)
+                            </label>
+                            <label style="margin-top:8px; display:block;">
+                                <input type="checkbox" name="ace_redis_cache_settings[dynamic_excluded_blocks]" value="1" <?php checked($settings['dynamic_excluded_blocks'] ?? 0); ?> />
+                                Treat excluded blocks as dynamic (remove them from page cache and re-render each request)
+                            </label>
+                            <p class="description">When enabled, every block pattern listed above (and the basic set if selected) is stripped out of the cached HTML and rendered fresh at runtime while the rest of the page remains fully cached.</p>
                         </div>
                     </div>
                 </div>
@@ -295,8 +411,8 @@ if (!defined('ABSPATH')) exit;
                 <h3>Connection Test</h3>
                 <div class="connection-test-panel">
                     <div class="test-buttons">
-                        <button type="button" id="ace-redis-cache-test-btn" class="button button-primary">Test Connection</button>
-                        <button type="button" id="ace-redis-cache-test-write-btn" class="button button-secondary">Test Write/Read</button>
+                        <button type="button" id="ace-redis-cache-test-btn" class="button button-primary" <?php echo empty($settings['enabled']) ? 'disabled' : ''; ?>>Test Connection</button>
+                        <button type="button" id="ace-redis-cache-test-write-btn" class="button button-secondary" <?php echo empty($settings['enabled']) ? 'disabled' : ''; ?>>Test Write/Read</button>
                     </div>
                     <div class="test-results">
                         <p><strong>Status:</strong> <span id="ace-redis-cache-connection" class="status-unknown">Unknown</span></p>
@@ -311,6 +427,10 @@ if (!defined('ABSPATH')) exit;
                 <h3>System Diagnostics</h3>
                 <div class="diagnostics-panel">
                     <button type="button" id="ace-redis-cache-diagnostics-btn" class="button button-primary">Run Diagnostics</button>
+                    <span id="opcache-helper-buttons" style="margin-left:12px; <?php echo empty($settings['enable_opcache_helpers']) ? 'display:none;' : ''; ?>">
+                        <button type="button" id="ace-redis-opcache-reset" class="button">OPcache Reset</button>
+                        <button type="button" id="ace-redis-opcache-prime" class="button">OPcache Prime</button>
+                    </span>
                     <div id="diagnostics-results" class="diagnostics-output">
                         <p>Click "Run Diagnostics" to generate a comprehensive system report.</p>
                     </div>
@@ -338,30 +458,35 @@ if (!defined('ABSPATH')) exit;
                         <div class="metric-value">--</div>
                         <div class="metric-description">Number of keys stored in Redis</div>
                     </div>
-                    <div class="metric-card">
+                    <div class="metric-card" data-metric="memory_usage">
                         <h4>Memory Usage</h4>
                         <div class="metric-value">--</div>
-                        <div class="metric-description">Redis memory consumption</div>
+                        <div class="metric-description">Redis memory consumption <span class="metric-note" style="display:none;"></span></div>
                     </div>
-                    <div class="metric-card">
-                        <h4>Plugin Memory</h4>
-                        <div class="metric-value">--</div>
-                        <div class="metric-description">Memory used by this plugin's keys</div>
+                    <div class="metric-card" data-metric="plugin_memory">
+                            <h4>Plugin Memory 
+                                <span title="Updated on manual refresh; cached ~2 min for performance" class="dashicons dashicons-info-outline"></span>
+                                <button type="button" class="button button-small fetch-plugin-memory" aria-label="Fetch plugin memory" title="Fetch plugin memory">Fetch</button>
+                                <span class="spinner is-active plugin-memory-spinner" style="float:none; visibility:hidden; margin-left:6px;"></span>
+                            </h4>
+                            <div class="metric-value" data-field="plugin_memory_total">--</div>
+                            <div class="metric-breakdown small text-muted"></div>
+                            <div class="metric-note text-muted small"></div>
                     </div>
                     <div class="metric-card">
                         <h4>Response Time</h4>
                         <div class="metric-value">--</div>
                         <div class="metric-description">Redis query response time</div>
                     </div>
-                    <div class="metric-card">
+                    <div class="metric-card" data-metric="uptime">
                         <h4>Uptime</h4>
                         <div class="metric-value">--</div>
-                        <div class="metric-description">Redis server uptime</div>
+                        <div class="metric-description">Redis server uptime <span class="metric-note" style="display:none;"></span></div>
                     </div>
-                    <div class="metric-card">
+                    <div class="metric-card" data-metric="connected_clients">
                         <h4>Connected Clients</h4>
                         <div class="metric-value">--</div>
-                        <div class="metric-description">Active connections to Redis</div>
+                        <div class="metric-description">Active connections to Redis <span class="metric-note" style="display:none;"></span></div>
                     </div>
                     <div class="metric-card">
                         <h4>Operations/sec</h4>
@@ -369,11 +494,69 @@ if (!defined('ABSPATH')) exit;
                         <div class="metric-description">Redis operations per second</div>
                     </div>
                 </div>
-                <div class="metrics-last-updated">Last updated: Never</div>
+                <div class="metrics-last-updated">Last updated: Never <span id="metrics-scope-label" style="color:#666; font-size:12px;">(light)</span></div>
             </div>
+
+
+
                 
                 <?php wp_nonce_field('ace_redis_admin_nonce', 'ace_redis_nonce'); ?>
             </form>
         </div> <!-- .ace-redis-content -->
     </div> <!-- .ace-redis-container -->
 </div>
+
+<script>
+// Fallback initializer: if main admin JS failed to bind tabs or cache actions.
+(function(){
+    if (window.AceRedisCacheAdminFallbackApplied) return; // avoid duplicate
+    window.AceRedisCacheAdminFallbackApplied = true;
+    var tabs = document.querySelectorAll('.ace-redis-sidebar .nav-tab');
+    if (!tabs.length) return;
+    // Detect if primary handler attached by checking for a data-flag on first click
+    var first = tabs[0];
+    var anyActive = document.querySelector('.tab-content.active');
+    // If no active class present, activate first
+    if (!anyActive) {
+        var firstHref = first.getAttribute('href');
+        if (firstHref) {
+            var tc = document.querySelector(firstHref);
+            if (tc) { tc.classList.add('active'); }
+            first.classList.add('nav-tab-active');
+        }
+    }
+    tabs.forEach(function(a){
+        a.addEventListener('click', function(e){
+            // If jQuery handler already prevented default, ignore fallback
+            if (e.defaultPrevented) return;
+            e.preventDefault();
+            var target = a.getAttribute('href');
+            if (!target || target.charAt(0) !== '#') return;
+            document.querySelectorAll('.nav-tab').forEach(function(t){ t.classList.remove('nav-tab-active'); });
+            a.classList.add('nav-tab-active');
+            document.querySelectorAll('.tab-content').forEach(function(div){ div.classList.remove('active'); });
+            var panel = document.querySelector(target);
+            if (panel) panel.classList.add('active');
+            if (history && history.replaceState) { history.replaceState(null, '', target); }
+        });
+    });
+
+    // Clear cache fallback
+    var flushBtn = document.getElementById('ace-redis-cache-flush-btn');
+    if (flushBtn && typeof jQuery === 'undefined') {
+        flushBtn.addEventListener('click', function(){
+            if (!window.fetch) { alert('Fetch API not available'); return; }
+            var restBase = (window.ace_redis_admin && ace_redis_admin.rest_url) ? ace_redis_admin.rest_url : (window.location.origin + '/wp-json/');
+            var url = restBase.replace(/\/$/, '') + '/ace-redis-cache/v1/flush-cache';
+            fetch(url, { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-WP-Nonce': (window.ace_redis_admin? ace_redis_admin.rest_nonce : '')}, body:'nonce='+(window.ace_redis_admin? encodeURIComponent(ace_redis_admin.nonce):'') })
+                .then(r=>r.json()).then(function(json){
+                    if (json && json.success) {
+                        flushBtn.disabled = false;
+                        flushBtn.blur();
+                        alert('Cache cleared');
+                    } else { alert('Failed to clear cache'); }
+                }).catch(function(){ alert('Error clearing cache'); });
+        });
+    }
+})();
+</script>

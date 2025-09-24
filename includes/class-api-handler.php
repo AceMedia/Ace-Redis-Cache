@@ -194,22 +194,21 @@ class API_Handler {
             $admin_interface = new Admin_Interface($this->cache_manager);
             $sanitized_settings = $admin_interface->sanitize_settings($settings);
             
-            // Save settings
+            $old = get_option('ace_redis_cache_settings', []);
             $result = update_option('ace_redis_cache_settings', $sanitized_settings);
-            
-            if ($result) {
-                return new \WP_REST_Response([
-                    'success' => true,
-                    'message' => 'Settings saved successfully.',
-                    'data' => $sanitized_settings
-                ], 200);
-            } else {
-                return new \WP_REST_Response([
-                    'success' => false,
-                    'message' => 'Failed to save settings. No changes detected or database error.',
-                    'error' => 'SAVE_FAILED'
-                ], 400);
-            }
+            $final = get_option('ace_redis_cache_settings', []);
+            $changed = $old != $final;
+            $msg = $changed ? 'Settings saved.' : 'No changes to save (or unchanged after write).';
+            $response_data = [
+                'message' => $msg,
+                'settings_changed' => $changed,
+                'settings' => $sanitized_settings,
+                'update_result' => $result,
+            ];
+            return new \WP_REST_Response([
+                'success' => true,
+                'data' => $response_data,
+            ], 200);
             
         } catch (\Exception $e) {
             return new \WP_REST_Response([

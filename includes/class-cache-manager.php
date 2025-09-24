@@ -47,7 +47,8 @@ class CacheManager {
         
         // Include transients only if this feature is enabled
         if (!empty($this->settings['enable_transient_cache'])) {
-            $prefixes['transients'] = 'transient:';
+            // Group both single-site and network site transients under one label
+            $prefixes['transients'] = ['transient:', 'site_transient:'];
         }
         
         /**
@@ -244,8 +245,17 @@ class CacheManager {
             $counts = [];
             $total_keys = 0;
             foreach ($prefixes as $label => $prefix) {
-                $keys = $this->scan_keys($prefix . '*');
-                $counts[$label] = is_array($keys) ? count($keys) : 0;
+                $countForLabel = 0;
+                if (is_array($prefix)) {
+                    foreach ($prefix as $pfx) {
+                        $keys = $this->scan_keys($pfx . '*');
+                        $countForLabel += is_array($keys) ? count($keys) : 0;
+                    }
+                } else {
+                    $keys = $this->scan_keys($prefix . '*');
+                    $countForLabel += is_array($keys) ? count($keys) : 0;
+                }
+                $counts[$label] = $countForLabel;
                 $total_keys += $counts[$label];
             }
             
@@ -282,7 +292,14 @@ class CacheManager {
         // Collect all plugin-managed keys across prefixes
         $all_keys = [];
         foreach ($this->get_reporting_prefixes() as $prefix) {
-            $all_keys = array_merge($all_keys, $this->scan_keys($prefix . '*'));
+            // Prefix can be a string or an array (e.g. transients)
+            if (is_array($prefix)) {
+                foreach ($prefix as $pfx) {
+                    $all_keys = array_merge($all_keys, $this->scan_keys($pfx . '*'));
+                }
+            } else {
+                $all_keys = array_merge($all_keys, $this->scan_keys($prefix . '*'));
+            }
         }
 
         $all_keys = array_unique($all_keys);
@@ -336,9 +353,11 @@ class CacheManager {
         $diagnostics['wordpress_version'] = get_bloginfo('version');
         $diagnostics['redis_extension'] = extension_loaded('redis') ? 'Available' : 'Not available';
         
-        // Plugin settings
-        $diagnostics['cache_mode'] = $this->settings['mode'];
-        $diagnostics['cache_ttl'] = $this->settings['ttl'];
+    // Plugin settings
+    $diagnostics['page_cache_enabled'] = !empty($this->settings['enable_page_cache']);
+    $diagnostics['object_cache_enabled'] = !empty($this->settings['enable_object_cache']);
+    $diagnostics['ttl_page'] = (int)($this->settings['ttl_page'] ?? ($this->settings['ttl'] ?? 3600));
+    $diagnostics['ttl_object'] = (int)($this->settings['ttl_object'] ?? ($this->settings['ttl'] ?? 3600));
         $diagnostics['block_caching'] = !empty($this->settings['enable_block_caching']) ? 'Enabled' : 'Disabled';
         $diagnostics['minification'] = !empty($this->settings['enable_minification']) ? 'Enabled' : 'Disabled';
         
@@ -382,7 +401,7 @@ class CacheManager {
         ];
         // Only consider transients if this feature is enabled in settings
         if (!empty($this->settings['enable_transient_cache'])) {
-            $prefixes['transients'] = 'transient:';
+            $prefixes['transients'] = ['transient:', 'site_transient:'];
         }
 
         $result = [
@@ -391,12 +410,21 @@ class CacheManager {
             'blocks_bytes' => 0,
             'transients_bytes' => 0,
             'total_bytes' => 0,
+            'estimated' => false,
         ];
 
         $this->redis_connection->retry_operation(function($redis) use ($prefixes, &$result) {
             foreach ($prefixes as $key => $prefix) {
                 $sum = 0;
-                $keys = $this->scan_keys($prefix . '*');
+                $keys = [];
+                if (is_array($prefix)) {
+                    foreach ($prefix as $pfx) {
+                        $keys = array_merge($keys, $this->scan_keys($pfx . '*'));
+                    }
+                    $keys = array_unique($keys);
+                } else {
+                    $keys = $this->scan_keys($prefix . '*');
+                }
                 if (!empty($keys)) {
                     foreach ($keys as $k) {
                         try {
@@ -407,6 +435,22 @@ class CacheManager {
                             }
                         } catch (\Exception $e) {
                             // Ignore per-key errors and continue
+                        }
+                    }
+                    // Fallback: If provider restricts MEMORY USAGE, estimate with STRLEN on string values
+                    if ($sum === 0) {
+                        foreach ($keys as $k) {
+                            try {
+                                $len = $redis->strlen($k);
+                                if (is_int($len)) {
+                                    $sum += $len;
+                                }
+                            } catch (\Exception $e) {
+                                // Ignore and continue
+                            }
+                        }
+                        if ($sum > 0) {
+                            $result['estimated'] = true;
                         }
                     }
                 }
@@ -438,7 +482,14 @@ class CacheManager {
             return false;
         }
         
-        $ttl = $ttl ?: $this->settings['ttl'];
+        // Default to object TTL when not explicitly provided
+        if ($ttl === null) {
+            if (isset($this->settings['ttl_object'])) {
+                $ttl = (int) $this->settings['ttl_object'];
+            } else {
+                $ttl = (int) ($this->settings['ttl'] ?? 3600);
+            }
+        }
         
         return $this->redis_connection->retry_operation(function($redis) use ($key, $value, $ttl) {
             // For non-string values, serialize before compression decision
@@ -508,6 +559,19 @@ class CacheManager {
      */
     public function get_redis_connection() {
         return $this->redis_connection;
+    }
+
+    /**
+     * Get the raw Redis client instance (Predis or PhpRedis) or null.
+     * Convenience for low-level operations like targeted deletes.
+     */
+    public function get_raw_client() {
+        try {
+            if (method_exists($this->redis_connection, 'get_connection')) {
+                return $this->redis_connection->get_connection();
+            }
+        } catch (\Throwable $t) {}
+        return null;
     }
     
     /**
@@ -611,7 +675,7 @@ class CacheManager {
      * @param string $key Cache key
      * @return string|null Cached content or null if not found
      */
-    public function get_with_minification($key) {
+    public function get_with_minification($key, $serve_compressed = true) {
         $redis = $this->redis_connection->get_connection();
         if (!$redis) {
             return null;
@@ -626,7 +690,8 @@ class CacheManager {
             $content = $redis->get($minified_key);
             
             if ($content !== false) {
-                return $this->maybe_decompress($content, true);
+                // Force plain HTML when caller wants to manipulate (e.g. dynamic placeholders)
+                return $this->maybe_decompress($content, $serve_compressed);
             }
         }
         
@@ -634,12 +699,12 @@ class CacheManager {
         $original_key = $this->cache_prefix . $key;
         $content = $redis->get($original_key);
         if ($content !== false) {
-            return $this->maybe_decompress($content, true);
+            return $this->maybe_decompress($content, $serve_compressed);
         }
         // Back-compat: try legacy unprefixed key
         $legacy = $redis->get($key);
         if ($legacy !== false) {
-            return $this->maybe_decompress($legacy, true);
+            return $this->maybe_decompress($legacy, $serve_compressed);
         }
         return null;
     }
@@ -650,7 +715,11 @@ class CacheManager {
      * @return int Expiry time in seconds
      */
     private function get_cache_expiry() {
-        return $this->settings['ttl'] ?? 3600; // Default 1 hour
+        // Prefer specific page TTL when available, fallback to legacy ttl
+        if (isset($this->settings['ttl_page'])) {
+            return (int) $this->settings['ttl_page'];
+        }
+        return (int) ($this->settings['ttl'] ?? 3600);
     }
 
     /**

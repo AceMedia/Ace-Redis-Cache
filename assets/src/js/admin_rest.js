@@ -27,6 +27,9 @@
             this.initPerformanceMetrics();
             this.initAjaxForm();
             this.initFormValidation();
+            this.initOpcacheButtons();
+            this.initHealthTips();
+            this.initDynamicAdvancedToggles();
         }
 
         // Initialize tab navigation
@@ -103,26 +106,42 @@
             });
         }
 
-        // Initialize cache mode handling
+        // Initialize cache mode handling (dual toggles)
         initCacheMode() {
             const toggleBlockCachingOption = () => {
-                const cacheMode = $('#cache-mode-select').val();
+                const enabled = $('#enable_object_cache').is(':checked');
                 const $blockCachingRow = $('#block-caching-row');
                 const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
+                $blockCachingRow.toggle(!!enabled);
+                if (!enabled) { $blockCachingCheckbox.prop('checked', false); }
+            };
 
-                if (cacheMode === 'object') {
-                    $blockCachingRow.show();
-                } else {
-                    $blockCachingRow.hide();
-                    $blockCachingCheckbox.prop('checked', false);
+            const toggleTTLVisibility = () => {
+                const pageOn = $('#enable_page_cache').is(':checked');
+                const objOn = $('#enable_object_cache').is(':checked');
+                const $ttlPageWrap = $('#ttl_page').closest('.cache-type-options');
+                const $ttlObjWrap = $('#ttl_object').closest('.cache-type-options');
+                // Hide/show the entire option row portion so label + input disappear
+                if ($ttlPageWrap.length) {
+                    $ttlPageWrap.toggle(!!pageOn);
+                }
+                if ($ttlObjWrap.length) {
+                    $ttlObjWrap.toggle(!!objOn);
                 }
             };
 
             // Initialize on page load
             toggleBlockCachingOption();
+            toggleTTLVisibility();
 
-            // Handle cache mode changes
-            $('#cache-mode-select').on('change', toggleBlockCachingOption);
+            // Handle toggle changes
+            $('#enable_object_cache').on('change', function(){
+                toggleBlockCachingOption();
+                toggleTTLVisibility();
+            });
+            $('#enable_page_cache').on('change', function(){
+                toggleTTLVisibility();
+            });
         }
 
         // Initialize connection testing
@@ -292,7 +311,6 @@
             if (!confirm('Clear all block cache? This will remove cached Gutenberg blocks.')) {
                 return;
             }
-
             const $btn = $('#ace-redis-cache-flush-blocks-btn');
             const originalText = $btn.text();
 
@@ -325,12 +343,132 @@
                     $btn.text(originalText).prop('disabled', false);
                 });
         }
+        initHealthTips() {
+            setTimeout(() => this.refreshHealthTips(), 400);
+            $('#enable_transient_cache').on('change', () => {
+                setTimeout(() => this.refreshHealthTips(), 300);
+            });
+        }
 
+        refreshHealthTips() {
+            const $target = $('#ace-rc-transient-tips');
+            if (!$target.length) return;
+            $target.text('Loading cache health...');
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/health',
+                type: 'GET',
+                beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+            }).done((resp) => {
+                if (!resp || !resp.success) { $target.html('<span style="color:#cc0000;">Unable to load health data.</span>'); return; }
+                const d = resp.data;
+                const parts = [];
+                parts.push('<strong>Cache Health:</strong> ' + (d.using_dropin ? 'Drop-in ' + (d.dropin_connected ? '<span style="color:green;">connected</span>' : '<span style="color:#cc0000;">not connected</span>') : '<span style="color:#cc0000;">drop-in missing</span>'));
+                if (d.via) { parts.push('via ' + this.escapeHtml(d.via)); }
+                if (d.bypass) { parts.push('<span style="color:#cc0000;">bypass active</span>'); }
+                parts.push('autoload ~ ' + this.humanBytes(d.autoload_size));
+                if (d.slow_ops) { parts.push(d.slow_ops + ' slow ops'); }
+                if (d.error) { parts.push('error: <code>'+ this.escapeHtml(d.error) +'</code>'); }
+                let tipsHtml = '';
+                if (Array.isArray(d.tips) && d.tips.length) {
+                    tipsHtml = '<ul style="margin:6px 0 0 16px; list-style:disc;">' + d.tips.map(t => '<li>'+this.escapeHtml(t)+'</li>').join('') + '</ul>';
+                }
+                $target.html(parts.join(' | ') + tipsHtml);
+            }).fail(()=>{
+                $target.html('<span style="color:#cc0000;">Health request failed.</span>');
+            });
+        }
+
+        humanBytes(bytes) {
+            if (!bytes || bytes < 1024) return (bytes||0) + 'B';
+            const units=['KB','MB','GB','TB'];
+            let i=-1; let val=bytes;
+            do { val/=1024; i++; } while(val>=1024 && i<units.length-1);
+            return val.toFixed(val>=10?0:1) + units[i];
+        }
         // Initialize diagnostics
         initDiagnostics() {
             $('#ace-redis-cache-diagnostics-btn').on('click', (e) => {
                 e.preventDefault();
                 this.runDiagnostics();
+            });
+        }
+
+        initOpcacheButtons() {
+            const self = this;
+            $('#ace-redis-opcache-reset').on('click', function(e){
+                e.preventDefault();
+                self.callOpcacheEndpoint('opcache-reset', this);
+            });
+            $('#ace-redis-opcache-prime').on('click', function(e){
+                e.preventDefault();
+                self.callOpcacheEndpoint('opcache-prime', this);
+            });
+            // Fetch status if buttons visible
+            if ($('#opcache-helper-buttons').is(':visible')) {
+                this.fetchOpcacheStatus();
+            }
+        }
+
+        callOpcacheEndpoint(endpoint, btn) {
+            const $btn = $(btn);
+            const original = $btn.text();
+            $btn.prop('disabled', true).text('Working...');
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/' + endpoint,
+                method: 'POST',
+                beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); },
+                data: { nonce: ace_redis_admin.nonce }
+            }).done(resp => {
+                const base = resp.message || 'Completed';
+                if (resp.success) {
+                    let extra = '';
+                    if (resp.files && resp.files.length) {
+                        extra = '\nFiles: ' + resp.files.join(', ');
+                    }
+                    self.showNotification('✅ ' + base + extra, 'success');
+                    self.fetchOpcacheStatus();
+                } else {
+                    self.showNotification('❌ ' + base, 'error');
+                }
+            }).fail(() => alert('❌ Request failed'))
+            .always(() => { $btn.prop('disabled', false).text(original); });
+        }
+
+        initDynamicAdvancedToggles() {
+            // Show/hide OPcache buttons depending on toggle
+            $('#enable_opcache_helpers').on('change', function(){
+                const on = $(this).is(':checked');
+                $('#opcache-helper-buttons').toggle(on);
+                if (on) { setTimeout(() => { $('.opcache-status-inline').remove(); }); }
+            });
+            // Initial state update for buttons visibility handled by PHP inline style, also fetch status when enabled
+            if ($('#enable_opcache_helpers').is(':checked')) {
+                this.fetchOpcacheStatus();
+            }
+        }
+
+        fetchOpcacheStatus() {
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/opcache-status',
+                method: 'GET',
+                beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+            }).done(resp => {
+                if (resp && resp.success && resp.data) {
+                    const d = resp.data;
+                    let text = 'OPcache: ' + (d.enabled ? 'Enabled' : 'Disabled');
+                    if (d.cached_scripts !== null) {
+                        text += ` | Scripts: ${d.cached_scripts}`;
+                    }
+                    if (d.hit_rate !== null) {
+                        text += ` | HitRate: ${parseFloat(d.hit_rate).toFixed(1)}%`;
+                    }
+                    let $inline = $('.opcache-status-inline');
+                    if (!$inline.length) {
+                        $inline = $('<span class="opcache-status-inline" style="margin-left:8px; font-size:11px; opacity:0.8;"></span>');
+                        $('#opcache-helper-buttons').append($inline);
+                    }
+                    $inline.text(text);
+                }
             });
         }
 
@@ -383,7 +521,7 @@
             // Real-time validation
             $('#redis_host').on('blur', this.validateHost);
             $('#redis_port').on('blur', this.validatePort);
-            $('#cache_ttl').on('blur', this.validateTTL);
+            $('#ttl_page, #ttl_object').on('blur', this.validateTTL);
         }
 
         // Validate form inputs
@@ -406,9 +544,14 @@
             }
 
             // Validate TTL
-            const ttl = parseInt($('#cache_ttl').val());
-            if (!ttl || ttl < 60) {
-                errors.push('Cache TTL must be at least 60 seconds');
+            const ttlPage = parseInt($('#ttl_page').val());
+            const ttlObj = parseInt($('#ttl_object').val());
+            if (!ttlPage || ttlPage < 60) {
+                errors.push('Page Cache TTL must be at least 60 seconds');
+                isValid = false;
+            }
+            if (!ttlObj || ttlObj < 60) {
+                errors.push('Object Cache TTL must be at least 60 seconds');
                 isValid = false;
             }
 

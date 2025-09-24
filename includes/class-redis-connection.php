@@ -107,6 +107,14 @@ class RedisConnection {
                     $this->record_redis_issue();
                     return null;
                 }
+
+                // Tag this connection for easier attribution in CLIENT LIST
+                try {
+                    // phpredis supports CLIENT SETNAME via client('SETNAME', ...)
+                    $this->redis->client('SETNAME', 'ace-redis-cache');
+                } catch (\Exception $e) {
+                    // Non-fatal if not supported
+                }
                 
             } catch (\Exception $e) {
                 $this->record_redis_issue();
@@ -437,9 +445,61 @@ class RedisConnection {
             }
             
             $info = $redis->info();
-            $memory_info = isset($info['used_memory_human']) ? $info['used_memory_human'] : 'N/A';
-            $memory_bytes = isset($info['used_memory']) ? (int)$info['used_memory'] : 0;
-            $memory_kb = round($memory_bytes / 1024, 2);
+            // Try to fetch sectioned info explicitly (some providers restrict default info)
+            try { $info_memory = $redis->info('memory'); } catch (\Exception $e) { $info_memory = null; }
+            try { $info_clients = $redis->info('clients'); } catch (\Exception $e) { $info_clients = null; }
+            try { $info_server = $redis->info('server'); } catch (\Exception $e) { $info_server = null; }
+            // Normalize lookups across variants
+            $memory_section = $info_memory ?: ($info['Memory'] ?? $info['memory'] ?? null);
+            $clients_section = $info_clients ?: ($info['Clients'] ?? $info['clients'] ?? null);
+            $server_section = $info_server ?: ($info['Server'] ?? $info['server'] ?? null);
+
+            $memory_info = $memory_section['used_memory_human'] ?? ($info['used_memory_human'] ?? 'N/A');
+            $memory_bytes = isset($memory_section['used_memory']) ? (int)$memory_section['used_memory'] : ((int)($info['used_memory'] ?? 0));
+            // Fallbacks if used_memory is missing or zero
+            if ($memory_bytes === 0) {
+                if (isset($memory_section['used_memory_rss'])) {
+                    $memory_bytes = (int) $memory_section['used_memory_rss'];
+                } elseif (isset($info['used_memory_rss'])) {
+                    $memory_bytes = (int) $info['used_memory_rss'];
+                } elseif (isset($memory_section['used_memory_dataset'])) {
+                    $memory_bytes = (int) $memory_section['used_memory_dataset'];
+                } elseif (isset($info['used_memory_dataset'])) {
+                    $memory_bytes = (int) $info['used_memory_dataset'];
+                } else {
+                    // As a last resort, try MEMORY STATS for total.allocated
+                    try {
+                        $memstats = $redis->rawCommand('MEMORY', 'STATS');
+                        if (is_array($memstats)) {
+                            // Convert alternating key/value list into assoc if needed
+                            $assoc = [];
+                            $is_kv_list = true;
+                            $count = count($memstats);
+                            for ($i = 0; $i < $count - 1; $i += 2) {
+                                if (!is_string($memstats[$i])) { $is_kv_list = false; break; }
+                                $assoc[$memstats[$i]] = $memstats[$i+1];
+                            }
+                            if ($is_kv_list) {
+                                if (isset($assoc['total.allocated'])) {
+                                    $memory_bytes = (int) $assoc['total.allocated'];
+                                } elseif (isset($assoc['total_allocated'])) { // alternate naming
+                                    $memory_bytes = (int) $assoc['total_allocated'];
+                                }
+                            } else {
+                                // Already associative
+                                if (isset($memstats['total.allocated'])) {
+                                    $memory_bytes = (int) $memstats['total.allocated'];
+                                } elseif (isset($memstats['total_allocated'])) {
+                                    $memory_bytes = (int) $memstats['total_allocated'];
+                                }
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        // Silently ignore if not permitted
+                    }
+                }
+            }
+            $memory_kb = $memory_bytes > 0 ? round($memory_bytes / 1024, 2) : 0;
             
             // Get database size (number of keys)
             $db_size = 0;
@@ -456,13 +516,19 @@ class RedisConnection {
             return [
                 'connected' => true,
                 'status' => 'Connected successfully',
-                'version' => isset($info['redis_version']) ? $info['redis_version'] : 'Unknown',
+                'version' => $server_section['redis_version'] ?? ($info['redis_version'] ?? 'Unknown'),
                 'memory_usage' => $memory_info,
                 'memory_usage_bytes' => $memory_bytes,
                 'size' => $db_size, // Number of keys (for JS)
                 'size_kb' => $memory_kb, // Memory in KB (for JS)
-                'connected_clients' => isset($info['connected_clients']) ? $info['connected_clients'] : 'N/A',
-                'uptime' => isset($info['uptime_in_seconds']) ? $info['uptime_in_seconds'] : 'N/A',
+                'connected_clients' => (isset($clients_section['connected_clients']) ? $clients_section['connected_clients'] : (isset($info['connected_clients']) ? $info['connected_clients'] : (function() use ($redis) {
+                    // Fallback: try CLIENT LIST and count lines
+                    try { $list = $redis->rawCommand('CLIENT', 'LIST'); return is_string($list) ? max(0, substr_count(trim($list), "\n") + (trim($list) !== '' ? 1 : 0)) : 'N/A'; } catch (\Exception $e) { return 'N/A'; }
+                })())),
+                'uptime' => $server_section['uptime_in_seconds'] ?? ($info['uptime_in_seconds'] ?? (function() use ($redis) {
+                    // Fallback: try INFO server directly
+                    try { $srv = $redis->info('server'); return $srv['uptime_in_seconds'] ?? 'N/A'; } catch (\Exception $e) { return 'N/A'; }
+                })()),
                 'server_type' => $server_suggestions['type'],
                 'suggestions' => $server_suggestions['suggestions']
             ];

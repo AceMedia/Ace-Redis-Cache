@@ -21,12 +21,18 @@ import SaveBar from './components/SaveBar.js';
     class AceRedisCacheAdmin {
         constructor() {
             this.originalFormData = null;
+            // State for Plugin Memory auto-fetch toggle and fetch in-flight guard
+            this.pluginMemoryAuto = false;
+            this.pluginMemoryFetching = false;
+            // Timestamp when transient cache was (re)enabled to allow warm-up grace
+            this.transientEnableTs = null;
             this.init();
         }
 
         init() {
             this.initTabs();
             this.initToggleSwitch();
+            this.initEnableCacheUi();
             this.initCacheMode();
             this.initConnectionTest();
             this.initCacheManagement();
@@ -36,6 +42,31 @@ import SaveBar from './components/SaveBar.js';
             this.initFormValidation();
             this.initChangeTracking();
             this.initSaveBar(); // Initialize the SaveBar component
+            this.initCompressionToggle();
+            this.initOpcacheHelpers();
+            this.initManagedPlugins();
+            this.initTransientHealth();
+            this.initHealthActions();
+        }
+
+        // Toggle UI based on Enable Cache switch
+        initEnableCacheUi() {
+            const update = () => {
+                const enabled = $('#enable_cache').is(':checked');
+                // Show/hide cache action buttons panel
+                const $actions = $('.cache-actions-panel .cache-action-buttons');
+                if ($actions.length) {
+                    $actions.toggle(!!enabled);
+                }
+                // Disable/enable diagnostics test buttons
+                $('#ace-redis-cache-test-btn').prop('disabled', !enabled);
+                $('#ace-redis-cache-test-write-btn').prop('disabled', !enabled);
+            };
+
+            // Initial state on load
+            update();
+            // React to changes
+            $(document).on('change', '#enable_cache', update);
         }
 
         // Initialize SaveBar component
@@ -43,7 +74,8 @@ import SaveBar from './components/SaveBar.js';
             // Wait for SaveBar component to be available
             if (typeof window.AceRedisCacheSaveBar !== 'undefined') {
                 // Read any prior preference to seed the component correctly
-                let initialAuto = true;
+                // Default: auto-save OFF unless user explicitly enabled before
+                let initialAuto = false;
                 if (typeof ace_redis_admin !== 'undefined' && ace_redis_admin.user_auto_save !== null) {
                     initialAuto = !!ace_redis_admin.user_auto_save;
                 } else {
@@ -94,6 +126,8 @@ import SaveBar from './components/SaveBar.js';
             return new Promise((resolve) => {
                 const $form = $('#ace-redis-settings-form');
                 const formData = this.getFormDataObject();
+                // Inject managed plugins payload
+                formData.__managed_plugins = this.collectManagedPlugins();
 
                 $.ajax({
                     url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
@@ -109,6 +143,13 @@ import SaveBar from './components/SaveBar.js';
                         if (response.success) {
                             // Update the original form data for change tracking
                             this.captureOriginalFormData();
+                            // Refresh transient cache health after save
+                            if ($('#enable_transient_cache').is(':checked')) {
+                                this.transientEnableTs = Date.now();
+                            } else {
+                                this.transientEnableTs = null;
+                            }
+                            setTimeout(() => this.refreshTransientHealth && this.refreshTransientHealth(), 300);
                             resolve(true);
                         } else {
                             resolve(false);
@@ -119,6 +160,128 @@ import SaveBar from './components/SaveBar.js';
                     }
                 });
             });
+        }
+
+        // Collect managed plugin selections into compact object
+        collectManagedPlugins() {
+            const selections = {};
+            $('.ace-mp-enable').each(function(){
+                if ($(this).is(':checked')) {
+                    selections[$(this).data('plugin-file')] = { enabled_on_init: 1 };
+                }
+            });
+            return selections;
+        }
+
+        initManagedPlugins() {
+            // Nothing heavy needed; saving handled in performSaveSettings
+        }
+
+        // --- Transient Cache Health ---
+        initTransientHealth() {
+            const $toggle = $('#enable_transient_cache');
+            if (!$toggle.length) return;
+            // Initial fetch only (no toggle-triggered re-ping per request)
+            setTimeout(() => this.refreshTransientHealth(), 500);
+            // Keep a reference for polling interval
+            this.transientInitPoll = null;
+        }
+
+        refreshTransientHealth() {
+            const $badge = $('#ace-rc-transient-status');
+            const $tips = $('#ace-rc-transient-tips');
+            if (!$badge.length) return;
+            const enabled = $('#enable_transient_cache').is(':checked');
+            if (!enabled) {
+                this.setTransientStatus('Off','pending');
+                if ($tips.length) { $tips.html('<em>Transient cache disabled.</em>').data('populated', true); }
+                if (this.transientInitPoll) { clearInterval(this.transientInitPoll); this.transientInitPoll = null; }
+                return; // Skip network call when disabled
+            }
+            $badge.text('checking').css({background:'#ddd', color:'#333'});
+            if ($tips.length && !$tips.data('populated')) { $tips.html('Loading cache health…'); }
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/health',
+                type: 'GET',
+                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce)
+            }).done((resp) => {
+                if (!resp || !resp.success || !resp.data) {
+                    this.setTransientStatus('error', 'error');
+                    if ($tips.length) { $tips.html('<span style="color:#c00;">Unable to load cache health.</span>'); }
+                    return;
+                }
+                const d = resp.data;
+                let state = 'ok'; let label = 'OK';
+                if (!d.using_dropin) { state='warn'; label='Missing'; }
+                else if (!d.dropin_connected) { state='error'; label='Down'; }
+                else if (d.bypass) { state='warn'; label='Bypassed'; }
+                // Grace period: if recently enabled and not yet fully connected treat as initializing
+                const now = Date.now();
+                if (this.transientEnableTs && (now - this.transientEnableTs) < 15000) {
+                    if (state !== 'ok') { state = 'init'; label = 'Init'; }
+                }
+                this.setTransientStatus(label, state);
+                // Manage polling: if in init start interval, else clear
+                if (label === 'Init') {
+                    if (!this.transientInitPoll) {
+                        this.transientInitPoll = setInterval(() => {
+                            // Only poll if still enabled and badge shows Init
+                            if (!$('#enable_transient_cache').is(':checked')) { clearInterval(this.transientInitPoll); this.transientInitPoll = null; return; }
+                            const currentLabel = $('#ace-rc-transient-status').text();
+                            if (currentLabel !== 'Init') { clearInterval(this.transientInitPoll); this.transientInitPoll = null; return; }
+                            this.refreshTransientHealth();
+                        }, 10000); // 10s polling while initializing
+                    }
+                } else if (this.transientInitPoll) {
+                    clearInterval(this.transientInitPoll); this.transientInitPoll = null;
+                }
+                if ($tips.length) {
+                    const parts = [];
+                    parts.push('<strong>Drop-in:</strong> ' + (d.using_dropin ? (d.dropin_connected ? '<span style="color:green;">connected</span>' : '<span style="color:#c00;">not connected</span>') : '<span style="color:#c00;">missing</span>'));
+                    if (d.bypass) parts.push('<span style="color:#c00;">bypass active</span>');
+                    parts.push('Autoload ' + this.humanApproxBytes(d.autoload_size));
+                    if (d.slow_ops) parts.push(d.slow_ops + ' slow ops');
+                    if (d.error) parts.push('Error: <code>' + this.escapeHtml(d.error) + '</code>');
+                    let html = parts.join(' | ');
+                    if (Array.isArray(d.tips) && d.tips.length) {
+                        html += '<ul style="margin:6px 0 0 18px; list-style:disc;">' + d.tips.map(t => '<li>' + this.escapeHtml(t) + '</li>').join('') + '</ul>';
+                    }
+                    if (state === 'init') {
+                        html = '<strong>Initializing:</strong> Deploying drop-in / establishing Redis connection. This can take a few seconds on first enable.<br>' + html;
+                    }
+                    $tips.html(html).data('populated', true);
+                }
+            }).fail(() => {
+                this.setTransientStatus('error', 'error');
+                if ($tips.length) { $tips.html('<span style="color:#c00;">Health request failed.</span>'); }
+            });
+        }
+
+        setTransientStatus(text, state) {
+            const $badge = $('#ace-rc-transient-status'); if (!$badge.length) return;
+            const colors = { ok:{bg:'#46b450',fg:'#fff'}, warn:{bg:'#dba617',fg:'#1d2327'}, error:{bg:'#d63638',fg:'#fff'}, pending:{bg:'#888',fg:'#fff'}, init:{bg:'#2271b1',fg:'#fff'} };
+            const c = colors[state] || colors.pending;
+            $badge.text(text).css({background:c.bg, color:c.fg});
+        }
+
+        humanApproxBytes(bytes){ if(!bytes) return '0B'; const u=['B','KB','MB','GB','TB']; let i=0,v=bytes; while(v>=1024 && i<u.length-1){v/=1024;i++;} return (v>=10?Math.round(v):v.toFixed(1))+u[i]; }
+
+        initHealthActions() {
+            const $reset = $('#ace-rc-reset-slow-ops');
+            if ($reset.length) {
+                $reset.on('click', () => {
+                    // Simple REST shim via existing settings endpoint: send flag to reset
+                    $.ajax({
+                        url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
+                        type: 'POST',
+                        beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce),
+                        data: { reset_slow_ops: 1, nonce: ace_redis_admin.nonce },
+                        success: () => {
+                            $('#ace-rc-slow-ops-val').text('0');
+                        }
+                    });
+                });
+            }
         }
 
         // Initialize tab navigation
@@ -159,10 +322,10 @@ import SaveBar from './components/SaveBar.js';
             setTimeout(() => {
                 $(target).addClass('active');
                 
-                // Load metrics when diagnostics tab is opened
+                // Load lightweight metrics when diagnostics tab is opened
                 if (target === '#diagnostics') {
                     setTimeout(() => {
-                        $('#refresh-metrics-btn').click();
+                        this.loadPerformanceMetrics({ scope: 'basic' });
                     }, 100);
                     // Resume timer countdown if auto-refresh is enabled
                     this.resumeAutoRefreshTimer();
@@ -207,30 +370,132 @@ import SaveBar from './components/SaveBar.js';
             });
         }
 
-        // Initialize cache mode handling
+        // Initialize cache controls (dual toggles)
         initCacheMode() {
-            const toggleBlockCachingOption = () => {
-                const cacheMode = $('#cache-mode-select').val();
+            const toggleObjectRelatedOptions = () => {
+                const enabled = $('#enable_object_cache').is(':checked');
                 const $blockCachingRow = $('#block-caching-row');
-                const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
                 const $transientRow = $('#transient-cache-row');
-                const $transientCheckbox = $('input[name="ace_redis_cache_settings[enable_transient_cache]"]');
-
-                const show = cacheMode === 'object';
-                $blockCachingRow.toggle(show);
-                $transientRow.toggle(show);
-                // no query cache row
-                if (!show) {
-                    $blockCachingCheckbox.prop('checked', false);
-                    $transientCheckbox.prop('checked', false);
-                }
+                $blockCachingRow.toggle(!!enabled);
+                $transientRow.toggle(!!enabled);
             };
 
-            // Initialize on page load
-            toggleBlockCachingOption();
+            const toggleTTLVisibility = () => {
+                const pageOn = $('#enable_page_cache').is(':checked');
+                const objOn = $('#enable_object_cache').is(':checked');
+                const $ttlPageWrap = $('#ttl_page').closest('.cache-type-options');
+                const $ttlObjWrap = $('#ttl_object').closest('.cache-type-options');
+                if ($ttlPageWrap.length) { $ttlPageWrap.toggle(!!pageOn); }
+                if ($ttlObjWrap.length) { $ttlObjWrap.toggle(!!objOn); }
+            };
 
-            // Handle cache mode changes
-            $('#cache-mode-select').on('change', toggleBlockCachingOption);
+            // Initialize
+            toggleObjectRelatedOptions();
+            toggleTTLVisibility();
+
+            $('#enable_object_cache').on('change', function(){
+                toggleObjectRelatedOptions();
+                toggleTTLVisibility();
+            });
+            $('#enable_page_cache').on('change', function(){
+                toggleTTLVisibility();
+            });
+        }
+
+        // Hide/show compression sub-options when compression is disabled/enabled
+        initCompressionToggle() {
+            const updateCompressionUI = () => {
+                const enabled = $('#enable_compression').is(':checked');
+                const $field = $('#enable_compression').closest('.setting-field');
+                if ($field.length) {
+                    // Show/hide available methods
+                    $field.find('.compression-methods').toggle(!!enabled);
+                    // Show/hide the description immediately following the methods block
+                    $field.find('.compression-methods').next('p.description').toggle(!!enabled);
+                }
+            };
+            // Initial state
+            updateCompressionUI();
+            // React to changes
+            $(document).on('change', '#enable_compression', updateCompressionUI);
+        }
+
+        // OPcache helper buttons (reset / prime + status)
+        initOpcacheHelpers() {
+            if (!$('#enable_opcache_helpers').length) return; // feature not present
+            const $wrapper = $('#opcache-helper-buttons');
+            const $checkbox = $('#enable_opcache_helpers');
+            const updateVisibility = () => {
+                const on = $checkbox.is(':checked');
+                $wrapper.toggle(on);
+                if (on) {
+                    this.fetchOpcacheStatus();
+                }
+            };
+            $checkbox.on('change', updateVisibility);
+            updateVisibility();
+
+            $('#ace-redis-opcache-reset').on('click', (e) => {
+                e.preventDefault();
+                this.callOpcacheEndpoint('opcache-reset', e.currentTarget);
+            });
+            $('#ace-redis-opcache-prime').on('click', (e) => {
+                e.preventDefault();
+                this.callOpcacheEndpoint('opcache-prime', e.currentTarget);
+            });
+        }
+
+        callOpcacheEndpoint(endpoint, btn) {
+            const $btn = $(btn);
+            const original = $btn.text();
+            $btn.prop('disabled', true).text('Working...');
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/' + endpoint,
+                method: 'POST',
+                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce),
+                data: { nonce: ace_redis_admin.nonce }
+            }).done((resp) => {
+                if (resp && resp.success) {
+                    let message = '✅ ' + (resp.message || 'Success');
+                    if (resp.files && resp.files.length) {
+                        message += '\nFiles: ' + resp.files.join(', ');
+                    }
+                    alert(message);
+                    this.fetchOpcacheStatus();
+                } else {
+                    alert('❌ ' + (resp && resp.message ? resp.message : 'Failed'));
+                }
+            }).fail(() => {
+                alert('❌ Request failed');
+            }).always(() => {
+                $btn.prop('disabled', false).text(original);
+            });
+        }
+
+        fetchOpcacheStatus() {
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/opcache-status',
+                method: 'GET',
+                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce)
+            }).done((resp) => {
+                if (resp && resp.success && resp.data) {
+                    const d = resp.data;
+                    let text = 'OPcache: ' + (d.enabled ? 'Enabled' : 'Disabled');
+                    if (d.cached_scripts !== null) {
+                        text += ' | Scripts: ' + d.cached_scripts;
+                    }
+                    if (d.hit_rate !== null) {
+                        const hr = parseFloat(d.hit_rate);
+                        if (!isNaN(hr)) text += ' | HitRate: ' + hr.toFixed(1) + '%';
+                    }
+                    let $inline = $('.opcache-status-inline');
+                    if (!$inline.length) {
+                        $inline = $('<span class="opcache-status-inline" style="margin-left:8px; font-size:11px; opacity:0.8;"></span>');
+                        $('#opcache-helper-buttons').append($inline);
+                    }
+                    $inline.text(text);
+                }
+            });
         }
 
         // Initialize connection testing
@@ -473,7 +738,7 @@ import SaveBar from './components/SaveBar.js';
             // Real-time validation
             $('#redis_host').on('blur', this.validateHost);
             $('#redis_port').on('blur', this.validatePort);
-            $('#cache_ttl').on('blur', this.validateTTL);
+            $('#ttl_page, #ttl_object').on('blur', this.validateTTL);
         }
 
         // Validate form inputs
@@ -496,9 +761,14 @@ import SaveBar from './components/SaveBar.js';
             }
 
             // Validate TTL
-            const ttl = parseInt($('#cache_ttl').val());
-            if (!ttl || ttl < 60) {
-                errors.push('Cache TTL must be at least 60 seconds');
+            const ttlPage = parseInt($('#ttl_page').val());
+            const ttlObj = parseInt($('#ttl_object').val());
+            if (!ttlPage || ttlPage < 60) {
+                errors.push('Page Cache TTL must be at least 60 seconds');
+                isValid = false;
+            }
+            if (!ttlObj || ttlObj < 60) {
+                errors.push('Object Cache TTL must be at least 60 seconds');
                 isValid = false;
             }
 
@@ -539,7 +809,6 @@ import SaveBar from './components/SaveBar.js';
         validateTTL() {
             const $field = $(this);
             const value = parseInt($field.val());
-
             if (!value || value < 60) {
                 $field.addClass('error');
                 return false;
@@ -780,25 +1049,41 @@ import SaveBar from './components/SaveBar.js';
 
         // Initialize performance metrics
         initPerformanceMetrics() {
-            // Load metrics immediately if diagnostics tab is active
+            // Load lightweight metrics immediately if diagnostics tab is active
             if ($('#diagnostics').hasClass('active')) {
                 setTimeout(() => {
-                    $('#refresh-metrics-btn').click();
+                    this.loadPerformanceMetrics({ scope: 'basic' });
                 }, 100);
             }
             
             // Initialize auto-refresh functionality
             this.initAutoRefresh();
             
-            // Manual refresh button
+            // Manual refresh button (light metrics only)
             $('#refresh-metrics-btn').on('click', () => {
-                this.loadPerformanceMetrics();
+                this.loadPerformanceMetrics({ scope: 'basic' });
                 // Visual feedback for manual refresh
                 const $btn = $('#refresh-metrics-btn');
                 $btn.prop('disabled', true).html('⏳');
                 setTimeout(() => {
                     $btn.prop('disabled', false).html('🔄');
                 }, 1000);
+            });
+
+            // Make Plugin Memory button a toggle for auto-fetch
+            $('#performance-metrics').on('click', '.fetch-plugin-memory', (e) => {
+                e.preventDefault();
+                // If cache disabled, ignore (annotateCacheDisabled handles disabling UI)
+                const isDisabled = $(e.currentTarget).is(':disabled');
+                if (isDisabled) return;
+
+                this.pluginMemoryAuto = !this.pluginMemoryAuto;
+                this.updatePluginMemoryToggleUI();
+
+                // On enable, immediately compute once
+                if (this.pluginMemoryAuto) {
+                    this.fetchPluginMemory(true);
+                }
             });
         }
         
@@ -840,7 +1125,8 @@ import SaveBar from './components/SaveBar.js';
                     this.autoRefreshInterval = setInterval(() => {
                         // Only refresh if diagnostics tab is active
                         if ($('#diagnostics').hasClass('active')) {
-                            $('#refresh-metrics-btn').click();
+                            // Use lightweight metrics for auto-refresh
+                            this.loadPerformanceMetrics({ scope: 'basic' });
                             this.remainingSeconds = seconds; // Reset countdown
                         }
                     }, seconds * 1000);
@@ -879,29 +1165,43 @@ import SaveBar from './components/SaveBar.js';
         }
 
         // Load performance metrics via REST API
-        loadPerformanceMetrics() {
+        loadPerformanceMetrics(options = {}) {
             // Safety check - only load if diagnostics tab is active
             if (!$('#diagnostics').hasClass('active')) {
                 return;
             }
-            
+            const scope = options.scope || 'basic';
             $.ajax({
                 url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/metrics',
                 type: 'GET',
                 beforeSend: function(xhr) {
                     xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
                 },
+                data: { scope },
                 success: (response) => {
                     // Double-check we're still on the diagnostics tab when response comes back
                     if (!$('#diagnostics').hasClass('active')) {
                         return;
                     }
                     
-                    if (response.success && response.data) {
-                        this.updateMetricsDisplay(response.data);
+                    if (response && response.data) {
+                        const data = response.data;
+                        this.updateMetricsDisplay(data, scope);
+                        // If cache is disabled, annotate notes and disable per-card fetch
+                        if (data.cache_enabled === false || response.message === 'Cache is disabled') {
+                            this.annotateCacheDisabled();
+                        } else {
+                            // If auto mode is on, also fetch plugin memory without wiping existing values
+                            if (this.pluginMemoryAuto) {
+                                this.fetchPluginMemory(false);
+                            }
+                        }
                     } else if (response.data) {
                         // Even on error, use the fallback data provided
-                        this.updateMetricsDisplay(response.data);
+                        this.updateMetricsDisplay(response.data, scope);
+                        if (this.pluginMemoryAuto) {
+                            this.fetchPluginMemory(false);
+                        }
                     }
                 },
                 error: () => {
@@ -914,24 +1214,33 @@ import SaveBar from './components/SaveBar.js';
                         uptime: '--',
                         connected_clients: '--',
                         ops_per_sec: '--'
-                    });
+                    }, scope);
+                    if (this.pluginMemoryAuto) {
+                        this.fetchPluginMemory(false);
+                    }
                 }
             });
         }
 
-        // Update metrics display
-        updateMetricsDisplay(metrics) {
+    // Update metrics display
+        updateMetricsDisplay(metrics, scope = 'basic') {
             // Add debug logging for keyspace stats
             console.log('Debug keyspace stats:', {
                 hits: metrics.debug_keyspace_hits,
                 misses: metrics.debug_keyspace_misses,
                 hit_rate: metrics.cache_hit_rate
             });
+            // Show scope label (light/basic vs full)
+            const $scopeLabel = $('#metrics-scope-label');
+            if ($scopeLabel.length) {
+                $scopeLabel.text(`(${scope === 'full' ? 'full' : 'light'})`);
+            }
             
             $('#performance-metrics .metric-card').each(function() {
                 const $card = $(this);
                 const $value = $card.find('.metric-value');
                 const title = $card.find('h4').text();
+                const metricKey = $card.data('metric');
                 let newValue = '--';
                 
                 switch (title) {
@@ -945,16 +1254,23 @@ import SaveBar from './components/SaveBar.js';
                         newValue = metrics.memory_usage || '--';
                         break;
                     case 'Plugin Memory':
-                        newValue = metrics.plugin_memory_total || '--';
-                        // Also update description with breakdown if available
-                        const $desc = $card.find('.metric-description');
-                        const parts = [];
-                        if (metrics.plugin_memory_page) parts.push(`Page ${metrics.plugin_memory_page}`);
-                        if (metrics.plugin_memory_minified) parts.push(`Minified ${metrics.plugin_memory_minified}`);
-                        if (metrics.plugin_memory_blocks) parts.push(`Blocks ${metrics.plugin_memory_blocks}`);
-                        if (metrics.plugin_memory_transients) parts.push(`Transients ${metrics.plugin_memory_transients}`);
-                        if (parts.length) {
-                            $desc.text(parts.join(' | '));
+                        // Do not overwrite existing value if the payload doesn't include plugin memory data
+                        if (typeof metrics.plugin_memory_total !== 'undefined' && metrics.plugin_memory_total !== null && metrics.plugin_memory_total !== '') {
+                            newValue = metrics.plugin_memory_total;
+                        } else {
+                            newValue = $value.text() || '--';
+                        }
+                        // Also update breakdown if available, without overwriting the base description
+                        const $breakdown = $card.find('.metric-breakdown');
+                        if (typeof metrics.plugin_memory_total !== 'undefined') {
+                            const parts = [];
+                            if (metrics.plugin_memory_page) parts.push(`Page ${metrics.plugin_memory_page}`);
+                            if (metrics.plugin_memory_minified) parts.push(`Minified ${metrics.plugin_memory_minified}`);
+                            if (metrics.plugin_memory_blocks) parts.push(`Blocks ${metrics.plugin_memory_blocks}`);
+                            if (metrics.plugin_memory_transients) parts.push(`Transients ${metrics.plugin_memory_transients}`);
+                            if ($breakdown.length) {
+                                $breakdown.text(parts.length ? ` | ${parts.join(' | ')}` : '');
+                            }
                         }
                         break;
                     case 'Response Time':
@@ -968,7 +1284,7 @@ import SaveBar from './components/SaveBar.js';
                         break;
                     case 'Operations/sec':
                     case 'Ops/sec':
-                        newValue = metrics.ops_per_sec || '--';
+                        newValue = (metrics.ops_per_sec === 0) ? '0' : (metrics.ops_per_sec != null ? metrics.ops_per_sec : '--');
                         break;
                     case 'Connection Time':
                         newValue = metrics.connection_time || '--';
@@ -984,11 +1300,129 @@ import SaveBar from './components/SaveBar.js';
                 } else {
                     $value.text(newValue);
                 }
+
+                // Annotate missing values with reasons where possible
+                const $note = $card.find('.metric-note');
+                if ($note.length) {
+                    if (newValue === '--') {
+                        let reason = '';
+                        // Always light mode now
+                            reason = 'light mode';
+                        // Special instruction for plugin memory card
+                        if (metricKey === 'plugin_memory') {
+                            // If auto mode is enabled, annotate accordingly; otherwise prompt for fetch
+                            if (this.pluginMemoryAuto) {
+                                $note.text('auto mode (updated periodically)').show();
+                            } else {
+                                $note.text('Click Fetch to compute plugin memory').show();
+                            }
+                            return; // Skip generic reason
+                        }
+                        // For known restricted providers, indicate a possible restriction
+                        // We can heuristically show this if memory/uptime/clients are missing
+                        if (metricKey === 'memory_usage' || metricKey === 'uptime' || metricKey === 'connected_clients') {
+                            reason = reason ? `${reason}; provider restrictions` : 'provider restrictions';
+                        }
+                        $note.text(reason).show();
+                    } else {
+                        $note.text('').hide();
+                    }
+                }
             });
             
             // Update last updated timestamp
             const now = new Date().toLocaleTimeString();
             $('.metrics-last-updated').text(`Last updated: ${now}`);
+        }
+
+        // When cache is disabled, reflect that in the UI and prevent heavy fetch actions
+        annotateCacheDisabled() {
+            // Note on all metric cards
+            $('#performance-metrics .metric-card').each(function() {
+                const $card = $(this);
+                const $note = $card.find('.metric-note');
+                if ($note.length) {
+                    $note.text('cache disabled').show();
+                }
+            });
+            // Disable per-card plugin memory fetch
+            const $fetchBtn = $('#performance-metrics .fetch-plugin-memory');
+            if ($fetchBtn.length) {
+                $fetchBtn.prop('disabled', true).attr('title', 'Enable cache to compute plugin memory');
+            }
+            // Turn off auto mode since cache is off
+            this.pluginMemoryAuto = false;
+            this.updatePluginMemoryToggleUI();
+        }
+
+        // Update the Plugin Memory toggle button UI to reflect auto mode
+        updatePluginMemoryToggleUI() {
+            const $btn = $('#performance-metrics .fetch-plugin-memory');
+            if (!$btn.length) return;
+            if ($btn.is(':disabled')) return;
+            if (this.pluginMemoryAuto) {
+                $btn.text('Auto: On').addClass('is-on').attr('title', 'Disable auto plugin memory refresh');
+            } else {
+                $btn.text('Fetch').removeClass('is-on').attr('title', 'Fetch plugin memory and enable auto refresh');
+            }
+        }
+
+        // Fetch plugin memory metrics (manual or auto), without wiping existing values
+        fetchPluginMemory(showSpinner = true) {
+            if (this.pluginMemoryFetching) return;
+            const $card = $('#performance-metrics .metric-card[data-metric="plugin_memory"]');
+            if (!$card.length) return;
+            const $spinner = $card.find('.plugin-memory-spinner');
+            const $value = $card.find('[data-field="plugin_memory_total"]');
+            const $breakdown = $card.find('.metric-breakdown');
+            const $note = $card.find('.metric-note');
+
+            if (showSpinner) {
+                $spinner.css('visibility', 'visible');
+                $note.text(this.pluginMemoryAuto ? 'Auto computing…' : 'Computing…').show();
+            }
+            // Do not clear existing value/breakdown; we will update in place
+
+            this.pluginMemoryFetching = true;
+            $.ajax({
+                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/plugin-memory',
+                type: 'GET',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                }
+            })
+            .done((resp) => {
+                if (resp && resp.success) {
+                    const d = resp.data || {};
+                    if (d.plugin_memory_total) {
+                        $value.text(d.plugin_memory_total);
+                    }
+                    const keyParts = [];
+                    if (d.plugin_page_keys != null) keyParts.push(`pages: ${d.plugin_page_keys}`);
+                    if (d.plugin_block_keys != null) keyParts.push(`blocks: ${d.plugin_block_keys}`);
+                    if (d.plugin_total_keys != null) keyParts.push(`total keys: ${d.plugin_total_keys}`);
+
+                    const memParts = [];
+                    if (d.plugin_memory_page) memParts.push(`pages ${d.plugin_memory_page}`);
+                    if (d.plugin_memory_minified) memParts.push(`minified ${d.plugin_memory_minified}`);
+                    if (d.plugin_memory_blocks) memParts.push(`blocks ${d.plugin_memory_blocks}`);
+                    if (d.plugin_memory_transients) memParts.push(`transients ${d.plugin_memory_transients}`);
+
+                    const text = [keyParts.join(', '), memParts.join(', ')].filter(Boolean).join(' | ');
+                    if (text) $breakdown.text(text);
+                    const now = new Date().toLocaleTimeString();
+                    $note.text(this.pluginMemoryAuto ? `auto updated ${now}` : 'Computed just now').show();
+                } else {
+                    $note.text((resp && resp.message) ? resp.message : 'Failed to fetch').show();
+                }
+            })
+            .fail(() => {
+                $note.text('Failed to fetch').show();
+            })
+            .always(() => {
+                this.pluginMemoryFetching = false;
+                if (showSpinner) $spinner.css('visibility', 'hidden');
+            });
         }
 
         // Escape HTML for safe display

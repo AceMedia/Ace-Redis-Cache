@@ -34,6 +34,24 @@ if (!class_exists('WP_Object_Cache')) {
             if ((defined('ACE_OC_BYPASS') && ACE_OC_BYPASS) || (isset($_GET['ace_oc_bypass']) && $_GET['ace_oc_bypass'] == '1')) {
                 $this->bypass = true;
             }
+            // Auto-bypass for logged-in / admin / REST (editor) interactions to avoid interfering with authoring.
+            // We cannot always rely on pluggable functions this early, so fall back to cookie heuristic.
+            $logged_in_cookie = defined('LOGGED_IN_COOKIE') ? (LOGGED_IN_COOKIE) : 'wordpress_logged_in_';
+            $is_logged_in_cookie = false;
+            foreach ($_COOKIE as $ck => $val) { if (strpos($ck, $logged_in_cookie) === 0) { $is_logged_in_cookie = true; break; } }
+            $is_admin_req = (function_exists('is_admin') && is_admin());
+            $is_logged_in_fn = (function_exists('is_user_logged_in') && is_user_logged_in());
+            $is_rest = (defined('REST_REQUEST') && REST_REQUEST);
+            $editor_bypass = ($is_admin_req || $is_logged_in_fn || $is_logged_in_cookie || $is_rest);
+            // Allow site owners to override decision.
+            $editor_bypass = apply_filters('ace_rc_object_cache_bypass', $editor_bypass, [
+                'is_admin' => $is_admin_req,
+                'is_logged_in' => $is_logged_in_fn || $is_logged_in_cookie,
+                'is_rest' => $is_rest,
+            ]);
+            if ($editor_bypass) {
+                $this->bypass = true; // runtime-only, keeps frontend guest performance.
+            }
             $blog_id = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
             if (!$this->bypass && extension_loaded('redis')) {

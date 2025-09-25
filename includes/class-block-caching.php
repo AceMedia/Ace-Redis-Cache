@@ -39,11 +39,13 @@ class BlockCaching {
         
         // Only attach render-time caching hooks for guest frontend requests
         if (!\is_admin() && !\is_user_logged_in() && !\wp_doing_ajax() && !(defined('REST_REQUEST') && REST_REQUEST)) {
-            // Hook into block rendering
-            add_filter('pre_render_block', [$this, 'control_block_caching'], 10, 2);
+            $transient_on = !empty($this->settings['enable_transient_cache']);
+            // If transient/object caching layer is OFF we avoid pre_render short-circuiting because it can
+            // suppress style/layout side effects. We still capture final rendered output.
+            if ($transient_on) {
+                add_filter('pre_render_block', [$this, 'control_block_caching'], 10, 2);
+            }
             add_filter('render_block', [$this, 'cache_block_output'], 10, 2);
-
-            // Modify block cache support
             add_filter('block_type_supports', [$this, 'modify_block_cache_support'], 10, 3);
         }
 
@@ -66,15 +68,40 @@ class BlockCaching {
      * @return string|null Pre-rendered content or null to continue rendering
      */
     public function control_block_caching($pre_render, $parsed_block) {
+        // Safety: if transient cache disabled mid-request, never short-circuit; render fully so style engine runs.
+        if (empty($this->settings['enable_transient_cache'])) {
+            return null;
+        }
         if ($pre_render !== null) {
             return $pre_render;
         }
         
         $block_name = $parsed_block['blockName'] ?? '';
+        // Two-phase warm gate (mirrors page cache) – when transient/object cache layer is off we avoid
+        // storing ANY blocks on the very first anonymous request for a path, to let late global styles /
+        // block support attribute injections settle. This prevents caching half-styled structural wrappers.
+        $warm_gate_enabled = apply_filters('ace_rc_enable_first_pass_skip', empty($this->settings['enable_transient_cache']), 'block', $this->settings);
+        $is_first_pass = false;
+        if ($warm_gate_enabled) {
+            $path = $_SERVER['REQUEST_URI'] ?? '/';
+            $path_id = md5(parse_url($path, PHP_URL_PATH) ?: '/');
+            $warmed = get_option('ace_rc_warmed_pages', []);
+            if (is_array($warmed) && empty($warmed[$path_id])) {
+                // Mark but do not store; page logic will set this on first pass, but if page cache disabled we still gate.
+                $is_first_pass = true;
+            }
+        }
         
-        // Skip if block should be excluded
+        // Style-safe mode: when transient/object caching is off we must avoid short-circuiting blocks whose
+        // rendering triggers style engine side-effects (layout, spacing, color, typography). If we cached them
+        // and skipped actual rendering, later requests would miss inline styles / classes assembled during
+        // render, breaking layout. We err on safety: only cache blocks with no style-support attributes.
+        // Skip if block excluded
         if ($this->should_exclude_block($block_name)) {
             return null;
+        }
+        if ($is_first_pass) {
+            return null; // render fresh, skip lookup/store this pass
         }
         
         // Generate cache key for this specific block instance
@@ -103,6 +130,19 @@ class BlockCaching {
         if (empty($block_content) || $this->should_exclude_block($block_name)) {
             return $block_content;
         }
+        if (empty($this->settings['enable_transient_cache']) && $this->is_style_sensitive_block($block_name, $block)) {
+            return $block_content; // render normally but do not store when transients off
+        }
+        // Respect first-pass warm gate (same condition as pre_render) to avoid storing prematurely
+        $warm_gate_enabled = apply_filters('ace_rc_enable_first_pass_skip', empty($this->settings['enable_transient_cache']), 'block_store', $this->settings);
+        if ($warm_gate_enabled) {
+            $path = $_SERVER['REQUEST_URI'] ?? '/';
+            $path_id = md5(parse_url($path, PHP_URL_PATH) ?: '/');
+            $warmed = get_option('ace_rc_warmed_pages', []);
+            if (is_array($warmed) && empty($warmed[$path_id])) {
+                return $block_content; // first pass, don't store
+            }
+        }
         
         // Skip dynamic blocks that shouldn't be cached
         if ($this->is_dynamic_block($block_name)) {
@@ -116,6 +156,39 @@ class BlockCaching {
         $this->cache_manager->set($cache_key, $block_content, $this->get_block_cache_ttl($block_name));
         
         return $block_content;
+    }
+
+    /**
+     * Determine if a block has style / layout attributes whose rendering produces side effects
+     * (inline styles, support classes, aggregated style engine output). Caching such blocks and
+     * short-circuiting their render on later requests can strip required styles when no persistent
+     * object/transient cache is present. We conservatively treat blocks with common style-related
+     * attributes or known structural types as style sensitive.
+     *
+     * @param string $block_name
+     * @param array $parsed_block
+     * @return bool
+     */
+    private function is_style_sensitive_block($block_name, $parsed_block) {
+        // Structural core blocks frequently coordinate layout CSS.
+        $structural = [
+            'core/group','core/columns','core/column','core/cover','core/media-text','core/buttons','core/button',
+        ];
+        if (in_array($block_name, $structural, true)) return true;
+        $attrs = $parsed_block['attrs'] ?? [];
+        if (empty($attrs) || !is_array($attrs)) return false;
+        $style_keys = ['style','backgroundColor','textColor','gradient','fontSize','layout','align','width','height','spacing','typography'];
+        foreach ($style_keys as $k) {
+            if (array_key_exists($k, $attrs)) return true;
+        }
+        // Nested style in attrs['style'] array
+        if (!empty($attrs['style']) && is_array($attrs['style'])) {
+            return true;
+        }
+        /**
+         * Filter to customize style-sensitive detection.
+         */
+        return apply_filters('ace_rc_block_cache_style_sensitive', false, $block_name, $parsed_block, $this->settings);
     }
     
     /**

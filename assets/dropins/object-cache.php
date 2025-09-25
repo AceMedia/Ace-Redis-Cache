@@ -23,7 +23,15 @@ if (!class_exists('WP_Object_Cache')) {
         protected $runtime = [];       // in-process fallback store [group][key] => value
         protected $bypass = false;     // request-scoped fail-open flag
         protected $slow_threshold_ms = 100; // profiling threshold
-        protected $write_through_groups = ['posts','post_meta','terms','term_relationships','term_taxonomy','comments','comment_meta'];
+    // Groups that will still be written to Redis even if the cache is in bypass mode
+    // (admin / logged-in / REST) so guests do not see stale data.
+    // NOTE: We intentionally DO NOT blanket write-through the entire 'options' group because
+    // early persistence of partially-initialised options (theme mods / global styles) was
+    // causing missing inline styling. Instead we maintain an allow-list of critical option
+    // keys (e.g. rewrite rules) that MUST persist immediately to prevent permalink regressions.
+    protected $write_through_groups = ['posts','post_meta','terms','term_relationships','term_taxonomy','comments','comment_meta','version'];
+    // Remove previously critical option keys to avoid racey partial persistence; we'll prime explicitly after saves.
+    protected $critical_option_keys = []; // filterable – kept empty; post-save prime handles coherence
     protected $igbinary = false;
     protected $serializer_active = false; // phpredis serializer engaged
     protected $connected = false;
@@ -166,16 +174,18 @@ if (!class_exists('WP_Object_Cache')) {
             $this->runtime[$group][$key] = $val;
         }
 
-        protected function should_write_through($group) {
+        protected function should_write_through($group, $key = null) {
             if (!$this->redis || !$this->connected) return false;
             $g = $group ?: 'default';
             $list = apply_filters('ace_rc_object_cache_write_through_groups', $this->write_through_groups);
-            return in_array($g, (array)$list, true);
+            if (in_array($g, (array)$list, true)) return true;
+            // No option-level write-through now; critical keys removed to prevent premature partial state capture.
+            return false;
         }
 
         public function add($key, $data, $group = 'default', $expire = 0) {
             $group = $group ?: 'default';
-            if (($this->bypass && !$this->should_write_through($group)) || $this->redis === null) {
+            if (($this->bypass && !$this->should_write_through($group, $key)) || $this->redis === null) {
                 if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
                 return false;
             }
@@ -199,7 +209,7 @@ if (!class_exists('WP_Object_Cache')) {
         public function set($key, $data, $group = 'default', $expire = 0) {
             $group = $group ?: 'default';
             $this->runtime_set($group, $key, $data); // always update runtime
-            if (($this->bypass && !$this->should_write_through($group)) || $this->redis === null) { return true; }
+            if (($this->bypass && !$this->should_write_through($group, $key)) || $this->redis === null) { return true; }
             $k = $this->k($key, $group);
             if ($this->serializer_active) {
                 $payload = $data;
@@ -214,6 +224,36 @@ if (!class_exists('WP_Object_Cache')) {
                 return $ok;
             } catch (\Throwable $e) {
                 $this->bypass = true; return true; }
+        }
+
+        /**
+         * Forced prime setter used post-save to push coherent option state (rewrite rules, permalink structure, alloptions)
+         * even when the request is in bypass mode and option write-through is disabled.
+         */
+        public function prime_set($key, $data, $group = 'options', $expire = 0) {
+            if (!$this->redis || !$this->connected) {
+                // Still update runtime so subsequent calls in this request see coherent state
+                $this->runtime_set($group ?: 'default', $key, $data);
+                return true;
+            }
+            $group = $group ?: 'default';
+            $k = $this->k($key, $group);
+            $this->runtime_set($group, $key, $data);
+            if ($this->serializer_active) {
+                $payload = $data;
+            } else {
+                $payload = is_scalar($data) ? $data : serialize($data);
+            }
+            try {
+                if ($expire > 0) { $this->redis->setex($k, (int)$expire, $payload); }
+                else { $this->redis->set($k, $payload); }
+                if (defined('ACE_OC_DEBUG') && ACE_OC_DEBUG) {
+                    error_log('[ace-object-cache] prime_set key=' . $group . ':' . $key . ' bytes=' . strlen($payload));
+                }
+            } catch (\Throwable $e) {
+                // Fail open: leave runtime populated
+            }
+            return true;
         }
 
         public function get($key, $group = 'default', $force = false, &$found = null) {

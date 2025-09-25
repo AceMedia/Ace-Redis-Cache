@@ -383,7 +383,14 @@ class AceRedisCache {
      */
     private function setup_full_page_cache() {
         if ($this->should_cache_request()) {
-            add_action('template_redirect', [$this, 'start_full_page_cache'], 1);
+            // Start page cache later (template_include) to ensure all enqueue and style aggregation has occurred.
+            add_filter('template_include', function($template){
+                $this->start_full_page_cache();
+                return $template;
+            }, 99);
+            
+            // Post-save hooks for priming coherent option state & setting no-cache warm window.
+            add_action('save_post', [$this, 'post_save_prime_schedule'], 10, 3);
         }
     }
     
@@ -404,6 +411,17 @@ class AceRedisCache {
         // Transient exclusion logic is handled inside the filter callbacks via
         // CacheManager::should_exclude_transient(). Ensure filters are registered.
         $this->register_transient_filters();
+
+        // Optional canonical redirect debug – only active when WP_DEBUG true and filter returns true.
+        if (defined('WP_DEBUG') && WP_DEBUG && apply_filters('ace_rc_enable_canonical_debug', false)) {
+            add_filter('redirect_canonical', function($redirect_url, $requested_url){
+                // Log only when redirecting to a bare ?p= form (numeric) to catch stale permalink situations.
+                if ($redirect_url && preg_match('#[?&]p=\d+#', $redirect_url) && strpos($requested_url, '?p=') === false) {
+                    error_log('AceRedisCache CanonicalDebug: requested=' . $requested_url . ' redirect=' . $redirect_url);
+                }
+                return $redirect_url;
+            }, 999, 2);
+        }
     }
 
     /**
@@ -489,6 +507,13 @@ class AceRedisCache {
      * Start full page cache output buffering
      */
     public function start_full_page_cache() {
+        // Respect no-cache warm window transient
+        if (get_transient('ace_rc_no_cache_window')) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('AceRedisCache: skip start_full_page_cache due to no_cache_window');
+            }
+            return;
+        }
         // Allow explicit bypass for benchmarking: ?ace_nocache=1
         if (isset($_GET['ace_nocache']) && $_GET['ace_nocache'] == '1') {
             if (!headers_sent()) { header('X-AceRedisCache: BYPASS param'); }
@@ -499,6 +524,16 @@ class AceRedisCache {
         // Try to get cached version (with minification handling)
         // Fetch raw (decompressed) so we can safely perform placeholder expansion when needed
         $cached_content = $this->cache_manager->get_with_minification($cache_key, false);
+        if ($cached_content !== null) {
+            // Prevent serving cached page for now non-published singular content
+            if (is_singular()) {
+                $post_obj = get_post();
+                if ($post_obj && $post_obj->post_status !== 'publish') {
+                    if (defined('WP_DEBUG') && WP_DEBUG) { $cached_content .= "\n<!-- AceRedisCache: discard HIT non-publish status={$post_obj->post_status} id={$post_obj->ID} -->"; }
+                    $cached_content = null; // force MISS path
+                }
+            }
+        }
         if ($cached_content !== null) {
             if ($this->enable_dynamic_block_placeholders) {
                 $cached_content = $this->expand_dynamic_block_placeholders($cached_content);
@@ -519,7 +554,8 @@ class AceRedisCache {
             // Re-apply compression for delivery if enabled and client accepts it
             $cached_content = $this->maybe_recompress_for_output($cached_content);
             echo $cached_content;
-            exit;
+            if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
+            return;
         }
         
         // Cache miss: optionally enable dynamic placeholder capture
@@ -547,6 +583,48 @@ class AceRedisCache {
                 'is_ip' => $is_ip,
                 'host_mismatch' => $host_mismatch,
             ]);
+            // Two-phase warm up: when transient/object cache layer is disabled, avoid storing the very first
+            // render for a given path so late-emitted styles / block support attributes are stabilized by the
+            // second view. This prevents capturing an incompletely styled DOM (observed when transient caching off).
+            $warm_gate_enabled = apply_filters('ace_rc_enable_first_pass_skip', empty($this->settings['enable_transient_cache']), $cache_key, $this->settings);
+            $path = $_SERVER['REQUEST_URI'] ?? '/';
+            $path_id = md5(parse_url($path, PHP_URL_PATH) ?: '/');
+            $warmed_option_key = 'ace_rc_warmed_pages';
+            $warmed = ($warm_gate_enabled) ? get_option($warmed_option_key, []) : [];
+            $is_first_pass = false;
+            if ($warm_gate_enabled && is_array($warmed)) {
+                if (empty($warmed[$path_id])) {
+                    // Mark warmed (so subsequent request can store) but skip storing this pass.
+                    $is_first_pass = true;
+                    $warmed[$path_id] = time();
+                    // Prune to last 300 entries to avoid unbounded growth
+                    if (count($warmed) > 300) {
+                        asort($warmed); // oldest first
+                        $warmed = array_slice($warmed, -300, null, true);
+                    }
+                    update_option($warmed_option_key, $warmed, false);
+                }
+            }
+            // If this request is for a single post that has a pending first-pass marker (post just updated), treat like first pass.
+            if (!$is_first_pass && is_singular() && ($post_obj = get_post()) && $this->has_post_first_pass_flag($post_obj->ID)) {
+                if ($this->consume_post_first_pass_flag($post_obj->ID)) {
+                    $is_first_pass = true;
+                    if (defined('WP_DEBUG') && WP_DEBUG) { $content .= "\n<!-- AceRedisCache: post_first_pass_skip id={$post_obj->ID} -->"; }
+                }
+            }
+            // Global warm window skip: during short window after any post update avoid storing if style assets incomplete.
+            if (!$is_first_pass) {
+                $global_until = (int) get_option('ace_rc_global_asset_warm_until', 0);
+                if ($global_until && time() < $global_until) {
+                    if (!$this->is_style_asset_complete($content)) {
+                        $is_first_pass = true;
+                        if (defined('WP_DEBUG') && WP_DEBUG) { $content .= "\n<!-- AceRedisCache: global_asset_warm_skip until={$global_until} -->"; }
+                    } else {
+                        // Assets look complete; end warm window early
+                        delete_option('ace_rc_global_asset_warm_until');
+                    }
+                }
+            }
             if ($host_mismatch && !$is_ip) {
                 // If mismatch but not IP, we can attempt canonical rewrite before caching
                 // Replace absolute URLs using the request host with the home host
@@ -573,7 +651,7 @@ class AceRedisCache {
                 }
             }
             // Cache the content with intelligent minification handling
-            if (!$skip_cache && !empty($content)) {
+            if (!$skip_cache && !$is_first_pass && !empty($content)) {
                 $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification);
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
@@ -584,6 +662,8 @@ class AceRedisCache {
                 } catch (\Throwable $t) {}
             } elseif ($skip_cache && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP host={$req_host} reason=" . ($skip_cache_reason ?: 'mismatch') . " -->";
+            } elseif ($is_first_pass && defined('WP_DEBUG') && WP_DEBUG) {
+                $content .= "\n<!-- AceRedisCache: first_pass_skip path_id={$path_id} -->";
             }
             // For the live response, strip only the wrapper markers (leave real dynamic content rendered)
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -984,13 +1064,9 @@ class AceRedisCache {
      * @return string Cache key
      */
     private function generate_page_cache_key() {
-        $key_parts = [
-            'page_cache',
-            $_SERVER['REQUEST_URI'] ?? '/',
-            \is_ssl() ? 'https' : 'http',
-            \wp_is_mobile() ? 'mobile' : 'desktop'
-        ];
-        
+        $version = 0;
+        try { $version = (int) wp_cache_get('site_version', 'version'); } catch (\Throwable $t) { $version = 0; }
+        $key_parts = [ 'page_cache', $_SERVER['REQUEST_URI'] ?? '/', \is_ssl() ? 'https' : 'http', \wp_is_mobile() ? 'mobile' : 'desktop', 'v' . $version ];
         return implode(':', $key_parts);
     }
 
@@ -1002,8 +1078,9 @@ class AceRedisCache {
      * @param string $device 'desktop'|'mobile'
      * @return string
      */
-    private function build_page_cache_core_key($path, $scheme, $device) {
-        return implode(':', ['page_cache', $path ?: '/', $scheme, $device]);
+    private function build_page_cache_core_key($path, $scheme, $device, $version = null) {
+        if ($version === null) { try { $version = (int) wp_cache_get('site_version', 'version'); } catch (\Throwable $t) { $version = 0; } }
+        return implode(':', ['page_cache', $path ?: '/', $scheme, $device, 'v' . (int)$version]);
     }
 
     /**
@@ -1035,8 +1112,11 @@ class AceRedisCache {
         }
         // Allow 3rd parties to add related URIs (archives, feeds, etc.)
         $paths = apply_filters('ace_rc_post_invalidation_paths', array_unique($paths), $post_id, $permalink, $this->settings);
-        $schemes = ['http','https'];
-        $devices = ['desktop','mobile'];
+    $schemes = ['http','https'];
+    $devices = ['desktop','mobile'];
+    // Collect current & previous version numbers (previous = version-1) to aggressively purge both
+    $versions = [];
+    try { $cv = (int) wp_cache_get('site_version', 'version'); if ($cv >= 0) { $versions[] = $cv; if ($cv > 0) { $versions[] = $cv-1; } } } catch (\Throwable $t) { $versions[] = 0; }
         $redis = null;
         if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
             $redis = $this->cache_manager->get_raw_client();
@@ -1045,28 +1125,36 @@ class AceRedisCache {
         foreach ($paths as $p) {
             foreach ($schemes as $scheme) {
                 foreach ($devices as $device) {
-                    $core = $this->build_page_cache_core_key($p, $scheme, $device);
-                    // Redis stored keys: page_cache:<core> and page_cache_min:<core>
-                    $raw_key = 'page_cache:' . $core;
-                    $min_key = 'page_cache_min:' . $core;
-                    // Legacy (unprefixed) key variant
-                    $legacy_key = $core; // e.g. page_cache:/slug:https:desktop
-                    try {
-                        if ($redis) {
-                            // Support both PhpRedis/Predis del(), fallback to unlink()
-                            if (method_exists($redis, 'del')) {
-                                $deleted += (int)$redis->del($raw_key);
-                                $deleted += (int)$redis->del($min_key);
-                                $deleted += (int)$redis->del($legacy_key);
-                            } elseif (method_exists($redis, 'unlink')) {
-                                $deleted += (int)$redis->unlink($raw_key);
-                                $deleted += (int)$redis->unlink($min_key);
-                                $deleted += (int)$redis->unlink($legacy_key);
+                    foreach ($versions as $ver) {
+                        $core = $this->build_page_cache_core_key($p, $scheme, $device, $ver);
+                        // Stored keys: page_cache:<core> and page_cache_min:<core>
+                        $raw_key = 'page_cache:' . $core;
+                        $min_key = 'page_cache_min:' . $core;
+                        // Legacy (unversioned) variants (fallback purge)
+                        $legacy_core = str_replace(':v' . $ver, '', $core);
+                        $legacy_key = $legacy_core;
+                        $legacy_raw = 'page_cache:' . $legacy_core;
+                        $legacy_min = 'page_cache_min:' . $legacy_core;
+                        try {
+                            if ($redis) {
+                                if (method_exists($redis, 'del')) {
+                                    $deleted += (int)$redis->del($raw_key);
+                                    $deleted += (int)$redis->del($min_key);
+                                    $deleted += (int)$redis->del($legacy_key);
+                                    $deleted += (int)$redis->del($legacy_raw);
+                                    $deleted += (int)$redis->del($legacy_min);
+                                } elseif (method_exists($redis, 'unlink')) {
+                                    $deleted += (int)$redis->unlink($raw_key);
+                                    $deleted += (int)$redis->unlink($min_key);
+                                    $deleted += (int)$redis->unlink($legacy_key);
+                                    $deleted += (int)$redis->unlink($legacy_raw);
+                                    $deleted += (int)$redis->unlink($legacy_min);
+                                }
                             }
-                        }
-                    } catch (\Throwable $t) {
-                        if (defined('WP_DEBUG') && WP_DEBUG) {
-                            error_log('AceRedisCache post cache invalidation error: ' . $t->getMessage());
+                        } catch (\Throwable $t) {
+                            if (defined('WP_DEBUG') && WP_DEBUG) {
+                                error_log('AceRedisCache post cache invalidation error: ' . $t->getMessage());
+                            }
                         }
                     }
                 }
@@ -1145,17 +1233,17 @@ class AceRedisCache {
      * Hook: save_post (and similar) – decide whether to invalidate page cache.
      */
     public function maybe_invalidate_post_page_cache($post_id, $post, $update) {
-        if (wp_is_post_revision($post_id)) return;
-        if (!$post || $post->post_status !== 'publish') return; // only published posts
+        if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
+        if (!$post) return;
         if (!is_post_type_viewable($post->post_type)) return;
+        // Bump site_version for every legitimate save to segregate cached listings immediately
+        try { $cv = wp_cache_get('site_version', 'version'); if ($cv) { wp_cache_incr('site_version', 1, 'version'); } else { wp_cache_set('site_version', 1, 'version'); } } catch (\Throwable $t) {}
         if ($this->should_defer_post_invalidation()) {
             $this->enqueue_deferred_post($post_id, ['page'=>true,'archives'=>true,'transients'=>true,'blocks_full'=>true]);
             return;
         }
         $this->invalidate_post_page_cache($post_id, true);
-        // Also clear related transients if transient caching enabled (best-effort)
         $this->maybe_flush_post_transients($post_id, $post->post_type);
-        // Invalidate archive/home/blog related page cache entries that may list this post
         $this->maybe_invalidate_related_archive_page_cache($post_id, $post);
     }
 
@@ -1185,6 +1273,8 @@ class AceRedisCache {
         if ($new_status === 'publish' || $old_status === 'publish') {
             // Let save_post handle the publish case to avoid double runs.
             if ($new_status !== 'publish') { // leaving publish -> something else
+                // Bump site_version so any cached aggregate/listing pages receive a new key namespace
+                try { $current_v = wp_cache_get('site_version', 'version'); if ($current_v) { wp_cache_incr('site_version', 1, 'version'); } else { wp_cache_set('site_version', 1, 'version'); } } catch (\Throwable $t) {}
                 if ($this->should_defer_post_invalidation()) {
                     $this->enqueue_deferred_post($post->ID, ['page'=>true,'archives'=>true,'transients'=>true,'blocks_full'=>true]);
                     return;
@@ -1291,6 +1381,15 @@ class AceRedisCache {
             }
         }
         $paths = array_unique($norm);
+        // Add feed variants (/feed/) for each base path
+        $feed_paths = [];
+        foreach ($paths as $base) {
+            if ($base === '') continue;
+            $canonical = rtrim($base, '/');
+            if ($canonical === '') { $canonical = '/'; }
+            $feed_paths[] = ($canonical === '/' ? '/feed/' : $canonical . '/feed/');
+        }
+        $paths = array_unique(array_merge($paths, $feed_paths));
         // Allow external filters to adjust
         $paths = apply_filters('ace_rc_post_archive_invalidation_paths', $paths, $post_id, $post, $this->settings);
         if (empty($paths)) return;
@@ -1341,15 +1440,21 @@ class AceRedisCache {
         $is_published  = ($post_after->post_status === 'publish');
         if (!$was_published && !$is_published) return; // neither side published
         if (!is_post_type_viewable($post_after->post_type)) return;
-        if ($this->should_defer_post_invalidation()) {
+        // Critical change detection: a transition into publish OR a slug change while published must invalidate immediately.
+        // Deferring these allows stale transients (old slug / draft permalink) to survive long enough to cause
+        // redirect_canonical() to send guests to a non-public draft URL (404). Force immediate purge to prevent that.
+        $critical_publish_transition = (!$was_published && $is_published);
+        $slug_changed = ($post_before->post_name !== $post_after->post_name);
+        $force_immediate = apply_filters('ace_rc_force_immediate_invalidation_on_critical_change', ($critical_publish_transition || $slug_changed), $post_ID, $post_after, $post_before, $this->settings);
+        if ($this->should_defer_post_invalidation() && !$force_immediate) {
             $this->enqueue_deferred_post($post_ID, ['page'=>true,'archives'=>true,'transients'=>true,'blocks_full'=>true]);
             if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('Ace-Redis-Cache: deferred post update invalidation queued post_id=' . $post_ID);
+                error_log('Ace-Redis-Cache: deferred post update invalidation queued post_id=' . $post_ID . ' was_published=' . ($was_published?'1':'0') . ' is_published=' . ($is_published?'1':'0') . ' slug_changed=' . ($slug_changed?'1':'0'));
             }
             return;
         }
         if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log(sprintf('Ace-Redis-Cache: on_post_updated post_id=%d was_published=%s is_published=%s (aggressive flush mode)', $post_ID, $was_published?'yes':'no', $is_published?'yes':'no'));
+            error_log(sprintf('Ace-Redis-Cache: on_post_updated post_id=%d was_published=%s is_published=%s slug_changed=%s immediate=%s', $post_ID, $was_published?'yes':'no', $is_published?'yes':'no', $slug_changed?'yes':'no', $force_immediate?'yes':'no'));
         }
         $deleted = $this->maybe_flush_post_transients($post_ID, $post_after->post_type);
         if ($deleted === 0 && !empty($this->settings['enable_transient_cache'])) {
@@ -1360,6 +1465,14 @@ class AceRedisCache {
                 }
                 $this->flush_all_transients('fallback_post_update_any_change');
             }
+        }
+        // Mark this post so the next anonymous render skips page & block cache storage (style-safe warm pass)
+        $this->mark_post_requires_first_pass($post_ID);
+        // Set global warm window so other pages also avoid premature capture if shared aggregated styles regenerate.
+        $warm_window = (int) apply_filters('ace_rc_global_asset_warm_window', 20, $post_ID, $post_after, $post_before, $this->settings);
+        if ($warm_window > 0) {
+            update_option('ace_rc_global_asset_warm_until', time() + $warm_window, false);
+            if (defined('WP_DEBUG') && WP_DEBUG) { error_log('Ace-Redis-Cache: global asset warm window +' . $warm_window . 's'); }
         }
     }
 
@@ -1388,15 +1501,39 @@ class AceRedisCache {
         if (!$redis) return 0;
         $conn = $this->cache_manager; // reuse manager scan API
         $to_delete = [];
-        foreach ($patterns as $pat) {
+        $use_object_cache = wp_using_ext_object_cache();
+        $augmented_patterns = [];
+        if ($use_object_cache) {
+            // When an external object cache (our drop-in) is active, WordPress core stores transients
+            // using the object cache groups 'transient' and 'site-transient'. Our targeted patterns
+            // above assume the plugin-managed direct key style (transient:NAME). Here we augment the
+            // pattern list to also cover object cache key forms so we actually match and purge them.
+            // Drop-in key schema: ace:(g:|<blog_id>:)<group>:<key>
+            $blog_id = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
+            $blog_prefix_pattern = (is_multisite() ? $blog_id : '1') . ':'; // we allow wildcard later for safety
+            foreach ($patterns as $p) {
+                if (!is_string($p)) continue;
+                // Base plugin pattern stays as-is
+                $augmented_patterns[] = $p;
+                if (str_starts_with($p, 'transient:')) {
+                    // Replace leading 'transient:' with object cache key prefix. Blog prefix can vary, so allow wildcard on it.
+                    $suffix = substr($p, strlen('transient:'));
+                    $augmented_patterns[] = 'ace:*:transient:' . $suffix; // wildcard blog id (covers 1: and multisite ids)
+                } elseif (str_starts_with($p, 'site_transient:')) {
+                    $suffix = substr($p, strlen('site_transient:'));
+                    $augmented_patterns[] = 'ace:g:site-transient:' . $suffix; // global scope
+                }
+            }
+        } else {
+            $augmented_patterns = $patterns; // no external object cache; plugin-managed format only
+        }
+        foreach ($augmented_patterns as $pat) {
             if (!is_string($pat) || strpos($pat, '%d') === false) continue;
             $redis_pattern = sprintf($pat, $post_id);
-            // Normalize: our stored keys are raw like transient:NAME so wildcards should already align
-            // Replace any accidental double colons
             $redis_pattern = str_replace('::', ':', $redis_pattern);
-            $keys = $this->cache_manager->scan_keys(str_replace('*', '*', $redis_pattern));
+            $keys = $this->cache_manager->scan_keys($redis_pattern);
             if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log(sprintf('Ace-Redis-Cache: scan pattern=%s found=%d', $redis_pattern, is_array($keys)?count($keys):0));
+                error_log(sprintf('Ace-Redis-Cache: transient-scan pattern=%s found=%d (object_cache=%s)', $redis_pattern, is_array($keys)?count($keys):0, $use_object_cache?'yes':'no'));
             }
             if (!empty($keys)) { $to_delete = array_merge($to_delete, $keys); }
         }
@@ -1421,6 +1558,11 @@ class AceRedisCache {
     private function flush_all_transients($reason = 'manual') {
         if (empty($this->settings['enable_transient_cache']) || !$this->cache_manager) return 0;
         $prefix_sets = [ 'transient:', 'site_transient:' ];
+        // When an external object cache is active, include its group-based key namespaces.
+        if (wp_using_ext_object_cache()) {
+            $prefix_sets[] = 'ace:*:transient:';       // blog-scoped transient group (wildcard blog id)
+            $prefix_sets[] = 'ace:g:site-transient:';  // global site transients
+        }
         $all = [];
         foreach ($prefix_sets as $pfx) {
             $keys = $this->cache_manager->scan_keys($pfx . '*');
@@ -1436,6 +1578,101 @@ class AceRedisCache {
             return count($all);
         }
         return 0;
+    }
+
+    /* ============================= Post First-Pass Warm Markers ============================= */
+    private $first_pass_marker_option = 'ace_rc_pending_first_pass_posts';
+
+    private function mark_post_requires_first_pass($post_id) {
+        $post_id = (int)$post_id; if ($post_id <= 0) return;
+        $list = get_option($this->first_pass_marker_option, []);
+        if (!is_array($list)) { $list = []; }
+        $list[$post_id] = time();
+        // prune if grows too large
+        if (count($list) > 200) {
+            asort($list); // oldest first
+            $list = array_slice($list, -150, null, true);
+        }
+        update_option($this->first_pass_marker_option, $list, false);
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Ace-Redis-Cache: mark post first-pass skip id=' . $post_id);
+        }
+    }
+
+    private function consume_post_first_pass_flag($post_id) {
+        $post_id = (int)$post_id; if ($post_id <= 0) return false;
+        $list = get_option($this->first_pass_marker_option, []);
+        if (!is_array($list) || empty($list[$post_id])) return false;
+        unset($list[$post_id]);
+        update_option($this->first_pass_marker_option, $list, false);
+        return true;
+    }
+
+    private function has_post_first_pass_flag($post_id) {
+        $post_id = (int)$post_id; if ($post_id <= 0) return false;
+        $list = get_option($this->first_pass_marker_option, []);
+        return is_array($list) && isset($list[$post_id]);
+    }
+
+    /**
+     * Heuristic: decide whether inline and enqueued style assets look "complete".
+     * We avoid caching during warm window if critical markers absent.
+     * - Look for common inline style blocks (global styles, theme JSON output) and key plugin handles.
+     * - Filter allows site-specific extension.
+     */
+    private function is_style_asset_complete($html) {
+        if (!is_string($html) || $html === '') return false;
+        $markers = [
+            'id="global-styles-inline-css"', // core global styles
+            'wp-block-library-theme-inline-css',
+            'wp-block-library-inline-css',
+            'rel="stylesheet" href', // at least one stylesheet
+        ];
+        $found = 0; $need = 2; // require at least two markers
+        foreach ($markers as $m) { if (strpos($html, $m) !== false) { $found++; if ($found >= $need) break; } }
+        $result = ($found >= $need);
+        return apply_filters('ace_rc_style_asset_complete', $result, $found, $markers, $html);
+    }
+
+    /* ============================= Post-Save Option Priming ============================= */
+    public function post_save_prime_schedule($post_id, $post, $update) {
+        if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
+        if (!is_admin()) return; // only run from admin-originating saves
+        // Set short no-cache window (60s) to avoid storing incomplete styles
+        set_transient('ace_rc_no_cache_window', 1, 60);
+        // Defer priming until shutdown to ensure core finished updating options
+        add_action('shutdown', [$this, 'prime_critical_options_once']);
+    }
+
+    public function prime_critical_options_once() {
+        static $ran = false; if ($ran) return; $ran = true;
+        // Flush page cache broadly only if warm window heuristics not already active
+        if (method_exists($this->cache_manager, 'scan_keys')) {
+            $keys = $this->cache_manager->scan_keys('page_cache:*');
+            if (!empty($keys)) { $this->cache_manager->delete_keys_chunked($keys, 1000); }
+            $min = $this->cache_manager->scan_keys('page_cache_min:*');
+            if (!empty($min)) { $this->cache_manager->delete_keys_chunked($min, 1000); }
+        }
+        // Load fresh coherent values
+        $rewrite_rules = get_option('rewrite_rules');
+        $permalink_structure = get_option('permalink_structure');
+        $alloptions = function_exists('wp_load_alloptions') ? wp_load_alloptions() : [];
+        // Push into object cache forcibly (prime_set is custom method on our drop-in)
+        if (function_exists('wp_cache_set')) {
+            global $wp_object_cache;
+            if ($wp_object_cache && method_exists($wp_object_cache, 'prime_set')) {
+                $wp_object_cache->prime_set('rewrite_rules', $rewrite_rules, 'options');
+                $wp_object_cache->prime_set('permalink_structure', $permalink_structure, 'options');
+                $wp_object_cache->prime_set('alloptions', $alloptions, 'options');
+            } else {
+                wp_cache_set('rewrite_rules', $rewrite_rules, 'options');
+                wp_cache_set('permalink_structure', $permalink_structure, 'options');
+                wp_cache_set('alloptions', $alloptions, 'options');
+            }
+        }
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('AceRedisCache: primed critical options (rewrite_rules len=' . (is_string($rewrite_rules)? strlen($rewrite_rules):0) . ')');
+        }
     }
 
     /* ============================= Deferred Invalidation ============================= */

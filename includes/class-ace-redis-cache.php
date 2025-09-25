@@ -1146,6 +1146,8 @@ class AceRedisCache {
         if (!$post || $post->post_status !== 'publish') return; // only published posts
         if (!is_post_type_viewable($post->post_type)) return;
         $this->invalidate_post_page_cache($post_id, true);
+        // Also clear related transients if transient caching enabled
+        $this->maybe_flush_post_transients($post_id, $post->post_type);
     }
 
     /**
@@ -1156,6 +1158,7 @@ class AceRedisCache {
         $post = get_post($post_id);
         if ($post && is_post_type_viewable($post->post_type)) {
             $this->invalidate_post_page_cache($post_id, false); // no priming for deleted
+            $this->maybe_flush_post_transients($post_id, $post->post_type);
         }
     }
 
@@ -1169,7 +1172,49 @@ class AceRedisCache {
             // Let save_post handle the publish case to avoid double runs.
             if ($new_status !== 'publish') { // leaving publish -> something else
                 $this->invalidate_post_page_cache($post->ID, true);
+                $this->maybe_flush_post_transients($post->ID, $post->post_type);
             }
+        }
+    }
+
+    /**
+     * Flush transients that plausibly cache data for a specific post (title, permalink, meta) to prevent stale draft URLs / titles.
+     * Strategy: pattern match common transient naming schemes and custom plugin prefixes, plus allow filters for site-specific patterns.
+     * Uses SCAN for safety. Only runs if transient caching feature is on.
+     */
+    private function maybe_flush_post_transients($post_id, $post_type) {
+        if (empty($this->settings['enable_transient_cache']) || !$this->cache_manager) return;
+        $post_id = (int)$post_id; if ($post_id <= 0) return;
+        // Allow developers to short-circuit or supply additional patterns
+        $patterns = apply_filters('ace_rc_post_transient_patterns', [
+            'transient:_transient_timeout_%d_*', // safety (WordPress internal timeouts) though we will convert to raw key forms
+            'transient:%d:*',                    // generic id prefix
+            'transient:post_%d_*',
+            'transient:post-%d-*',
+            'transient:wp_rest_cache_*_%d*',     // typical REST cache patterns
+            'transient:acf_field_group_location_*_%d*',
+            'transient:related_posts_%d*',
+            'transient:seo_meta_%d*',
+            'transient:query_%d_*',
+            'transient:loop_%d_*',
+        ], $post_id, $post_type, $this->settings);
+        $redis = $this->cache_manager ? $this->cache_manager : null;
+        if (!$redis) return;
+        $conn = $this->cache_manager; // reuse manager scan API
+        $to_delete = [];
+        foreach ($patterns as $pat) {
+            if (!is_string($pat) || strpos($pat, '%d') === false) continue;
+            $redis_pattern = sprintf($pat, $post_id);
+            // Normalize: our stored keys are raw like transient:NAME so wildcards should already align
+            // Replace any accidental double colons
+            $redis_pattern = str_replace('::', ':', $redis_pattern);
+            $keys = $this->cache_manager->scan_keys(str_replace('*', '*', $redis_pattern));
+            if (!empty($keys)) { $to_delete = array_merge($to_delete, $keys); }
+        }
+        $to_delete = array_unique($to_delete);
+        if (!empty($to_delete)) {
+            $this->cache_manager->delete_keys_chunked($to_delete, 500);
+            do_action('ace_rc_post_transients_flushed', $post_id, $post_type, count($to_delete), $to_delete);
         }
     }
     

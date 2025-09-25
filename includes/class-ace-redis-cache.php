@@ -124,6 +124,7 @@ class AceRedisCache {
             'custom_content_exclusions' => '',
             'excluded_blocks' => '',
             'exclude_basic_blocks' => 0,
+            'include_rendered_block_hash' => 0,
             // New dual-cache settings
             'enable_page_cache' => 1,
             'enable_object_cache' => 0,
@@ -176,6 +177,7 @@ class AceRedisCache {
             'custom_content_exclusions' => '',
             'excluded_blocks' => '',
             'exclude_basic_blocks' => 0,
+            'include_rendered_block_hash' => 0,
             // New dual-cache settings
             'enable_page_cache' => 1,
             'enable_object_cache' => 0,

@@ -288,6 +288,14 @@ class AdminInterface {
                                 Enable WordPress Block API caching
                             </label>
                             <p class="description">Cache individual Gutenberg blocks for improved performance (Object Cache mode only)</p>
+                            <fieldset style="margin-top:8px;padding:8px 10px;border:1px solid #ccd0d4;background:#f9f9f9;max-width:640px;">
+                                <legend style="padding:0 6px;font-weight:600;">Advanced</legend>
+                                <label style="display:block;margin-bottom:4px;">
+                                    <input type="checkbox" name="ace_redis_cache_settings[include_rendered_block_hash]" value="1" <?php checked($this->settings['include_rendered_block_hash'] ?? 0); ?> />
+                                    Include rendered content hash in block cache key
+                                </label>
+                                <p class="description" style="margin:4px 0 0;">Off (recommended) reduces duplicate keys. Turn on only if filters/theme logic produce different final HTML for identical blocks and you observe collisions.</p>
+                            </fieldset>
                         </td>
                     </tr>
                     
@@ -469,6 +477,8 @@ class AdminInterface {
     $sanitized['exclude_basic_blocks'] = !empty($input['exclude_basic_blocks']) ? 1 : 0;
     // Unified dynamic runtime mode: treat excluded blocks as dynamic
     $sanitized['dynamic_excluded_blocks'] = !empty($input['dynamic_excluded_blocks']) ? 1 : 0;
+    // Advanced: optionally include rendered block content hash (disabled by default)
+    $sanitized['include_rendered_block_hash'] = !empty($input['include_rendered_block_hash']) ? 1 : 0;
         
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log('Ace-Redis-Cache: admin sanitize outgoing enable_transient_cache=' . ($sanitized['enable_transient_cache'] ?? 'NA') . ' dropin=' . ($sanitized['enable_object_cache_dropin'] ?? 'NA'));

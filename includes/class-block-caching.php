@@ -164,13 +164,28 @@ class BlockCaching {
 
         // Optional: exclude a set of basic static blocks globally
         if (!empty($this->settings['exclude_basic_blocks'])) {
+            // Expanded "basic" list now also includes common structural/layout blocks which are cheap to render
+            // and tend to explode key cardinality. This reduces block_cache:* key count significantly.
             $basic = [
+                // Text / simple content
                 'core/paragraph',
                 'core/heading',
                 'core/list',
                 'core/image',
                 'core/gallery',
+                // Structural/layout wrappers (new additions)
+                'core/group',
+                'core/columns',
+                'core/column',
+                'core/separator',
+                'core/spacer',
+                'core/cover',
+                'core/buttons',
+                'core/button',
+                'core/media-text',
             ];
+            // Allow external customization of the basic exclusion set
+            $basic = apply_filters('ace_rc_basic_block_exclusions', $basic, $this->settings);
             $exclusions = array_merge($exclusions, $basic);
         }
         
@@ -226,10 +241,13 @@ class BlockCaching {
             md5(serialize($block['attrs'] ?? [])),
             md5($block['innerHTML'] ?? ''),
         ];
-        
-        // Add content hash for extra uniqueness
-        if (!empty($block_content)) {
-            $key_components[] = md5(substr($block_content, 0, 1000)); // First 1KB for performance
+        // Previously we added a rendered content hash (first 1KB) which produced many near-duplicate keys
+        // when content only changed minutely or when filters injected markup. To reduce cardinality we
+        // disable this by default; a filter can re-enable if required for edge cases.
+    $default_include = !empty($this->settings['include_rendered_block_hash']);
+    $include_render_hash = apply_filters('ace_rc_block_cache_include_rendered_hash', $default_include, $block_name, $block, $block_content, $this->settings);
+        if ($include_render_hash && !empty($block_content)) {
+            $key_components[] = md5(substr($block_content, 0, 1000));
         }
         
         // Add context-specific data
@@ -243,7 +261,8 @@ class BlockCaching {
         ];
         
         $key_components[] = md5(serialize($context_data));
-        
+        // Final opportunity to adjust components (e.g. remove context hash or attrs) for advanced tuning
+        $key_components = apply_filters('ace_rc_block_cache_key_components', $key_components, $block_name, $block, $block_content, $this->settings);
         return implode(':', $key_components);
     }
 

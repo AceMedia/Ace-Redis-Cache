@@ -31,9 +31,8 @@ if (!class_exists('WP_Object_Cache')) {
 
         public function __construct() {
             // Emergency bypass constant or query param
-            if ((defined('ACE_OC_BYPASS') && ACE_OC_BYPASS) || (isset($_GET['ace_oc_bypass']) && $_GET['ace_oc_bypass'] == '1')) {
-                $this->bypass = true;
-            }
+            $emergency_bypass = (defined('ACE_OC_BYPASS') && ACE_OC_BYPASS) || (isset($_GET['ace_oc_bypass']) && $_GET['ace_oc_bypass'] == '1');
+            if ($emergency_bypass) { $this->bypass = true; }
             // Auto-bypass for logged-in / admin / REST (editor) interactions to avoid interfering with authoring.
             // We cannot always rely on pluggable functions this early, so fall back to cookie heuristic.
             $logged_in_cookie = defined('LOGGED_IN_COOKIE') ? (LOGGED_IN_COOKIE) : 'wordpress_logged_in_';
@@ -49,16 +48,10 @@ if (!class_exists('WP_Object_Cache')) {
                 'is_logged_in' => $is_logged_in_fn || $is_logged_in_cookie,
                 'is_rest' => $is_rest,
             ]);
-            if ($editor_bypass) {
-                $this->bypass = true; // runtime-only, keeps frontend guest performance.
-            }
+            if ($editor_bypass) { $this->bypass = true; }
             $blog_id = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
-            if (!$this->bypass && extension_loaded('redis')) {
-                $this->init_redis();
-            } else {
-                $this->bypass = true;
-            }
+            if (extension_loaded('redis')) { $this->init_redis(); }
         }
 
         protected function init_redis() {
@@ -68,6 +61,10 @@ if (!class_exists('WP_Object_Cache')) {
             $pass = defined('ACE_REDIS_PASSWORD') ? ACE_REDIS_PASSWORD : (defined('WP_REDIS_PASSWORD') ? WP_REDIS_PASSWORD : '');
             $timeout = 1.0; // tight connect timeout
             $attempted_socket = false;
+            $use_tls_config = false;
+            if (defined('ACE_REDIS_USE_TLS') && ACE_REDIS_USE_TLS) { $use_tls_config = true; }
+            if (defined('WP_REDIS_SCHEME') && WP_REDIS_SCHEME === 'tls') { $use_tls_config = true; }
+            if (defined('WP_REDIS_USE_TLS') && WP_REDIS_USE_TLS) { $use_tls_config = true; }
             try {
                 $this->redis = new Redis();
                 if (is_readable($socket)) {
@@ -77,10 +74,42 @@ if (!class_exists('WP_Object_Cache')) {
                         $this->redis->close();
                     } else { $this->connect_via = 'socket'; }
                 }
+                // Primary TCP/TLS connect strategy
                 if ($this->connect_via === null) {
-                    // Use minimal signature to maintain compatibility with installed phpredis version
-                    @$this->redis->connect($host, $port, $timeout);
-                    if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp'; }
+                    $attempt_tls_first = $use_tls_config || (strpos($host, '.cache.amazonaws.com') !== false) || (strpos($host, '.cache.amazonaws.com') !== false) || (strpos($host, '.cache.amazonaws.com') !== false);
+                    $plain_host = $host;
+                    $tls_host = (str_starts_with($host, 'tls://')) ? $host : ('tls://' . $host);
+                    $connected = false;
+                    if ($attempt_tls_first) {
+                        // TLS attempt
+                        try {
+                            $ctx = [];
+                            if (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS) {
+                                $ctx = ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]];
+                            } else {
+                                $ctx = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+                            }
+                            @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; $connected = true; }
+                        } catch (\Throwable $t) {}
+                    }
+                    if (!$connected) {
+                        // Plain TCP fallback
+                        try {
+                            @$this->redis->connect($plain_host, $port, $timeout);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp'; $connected = true; }
+                        } catch (\Throwable $t) {}
+                    }
+                    // Final attempt: if plain failed but TLS config requested and not yet tried
+                    if (!$connected && !$attempt_tls_first && $use_tls_config) {
+                        try {
+                            $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
+                                ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
+                                : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+                            @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; $connected = true; }
+                        } catch (\Throwable $t) {}
+                    }
                 }
                 if ($this->connect_via === null) {
                     throw new \RuntimeException('Redis connection failed via ' . ($attempted_socket ? 'socket+tcp' : 'tcp'));
@@ -295,15 +324,19 @@ if (!class_exists('WP_Object_Cache')) {
         public function close() { if ($this->redis) { try { $this->redis->close(); } catch (\Throwable $t) {} } }
         
         // Public status helpers for admin UI / health checks
+        // Physical connectivity regardless of request-scope bypass.
         public function is_connected() {
-            return (bool)$this->connected && !$this->bypass && ($this->redis instanceof \Redis);
+            return (bool)$this->connected && ($this->redis instanceof \Redis);
         }
+        // Active means both connected and not bypassed (guest usage perspective)
+        public function is_active() { return $this->is_connected() && !$this->bypass; }
         public function is_bypassed() {
             return (bool)$this->bypass;
         }
         public function connection_details() {
             return [
-                'connected' => $this->is_connected(),
+                'connected' => $this->is_connected(), // physical connectivity
+                'active' => $this->is_active(),       // effective (not bypassed)
                 'via' => $this->connect_via,
                 'bypassed' => $this->is_bypassed(),
                 'error' => $this->connect_error,

@@ -313,22 +313,37 @@ class API_Handler {
     public function health_route($request) {
         global $wp_object_cache, $wpdb;
         $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
-        $dropin_connected = false; $conn_details = null; $via = null; $error = null; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
+    $dropin_connected = false; // physical connection
+    $dropin_active = false;    // effective (not bypassed) guest perspective
+    $conn_details = null; $via = null; $error = null; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
         if ($using_dropin && isset($wp_object_cache) && is_object($wp_object_cache)) {
             if (method_exists($wp_object_cache,'is_connected')) { $dropin_connected = (bool)$wp_object_cache->is_connected(); }
-            if (method_exists($wp_object_cache,'connection_details')) { $conn_details = $wp_object_cache->connection_details(); $via = $conn_details['via'] ?? null; $error = $conn_details['error'] ?? null; }
+            if (method_exists($wp_object_cache,'connection_details')) { $conn_details = $wp_object_cache->connection_details(); $via = $conn_details['via'] ?? null; $error = $conn_details['error'] ?? null; $dropin_active = isset($conn_details['active']) ? (bool)$conn_details['active'] : false; }
             if (method_exists($wp_object_cache,'is_bypassed')) { $runtime_bypass = $wp_object_cache->is_bypassed(); }
         }
         $const_bypass = defined('ACE_OC_BYPASS') && ACE_OC_BYPASS; $bypass = $const_bypass || $runtime_bypass;
+        // Determine bypass reason (admin/editor vs fail-open)
+        $bypass_reason = null;
+        if ($bypass) {
+            if ($const_bypass) { $bypass_reason = 'constant'; }
+            elseif ($runtime_bypass && !$dropin_connected) { $bypass_reason = 'fail_open'; }
+            else { $bypass_reason = 'editor_admin'; }
+        }
         $slow_ops = get_transient('ace_rc_slow_op_count'); $slow_ops = $slow_ops!==false ? (int)$slow_ops : 0;
         $autoload_size = 0; if (isset($wpdb)) { $row = $wpdb->get_row("SELECT SUM(LENGTH(option_value)) AS sz FROM {$wpdb->options} WHERE autoload='yes'"); if ($row && isset($row->sz)) { $autoload_size = (int)$row->sz; } }
         $tips = [];
         if (!$using_dropin) {
             $tips[] = 'Object cache drop-in missing. Enable Transient Cache to deploy or manually copy assets/plugins/Ace-Redis-Cache/assets/dropins/object-cache.php to wp-content/object-cache.php';
         } elseif (!$dropin_connected) {
-            $tips[] = 'Drop-in present but not connected. Check Redis host/port and credentials.';
+            $tips[] = 'Drop-in present but not physically connected. Check Redis host/port/TLS and credentials.';
+        } elseif ($bypass && $bypass_reason === 'fail_open') {
+            $tips[] = 'Runtime fail-open bypass: a Redis operation failed and caching is suspended this request.';
+        } elseif ($bypass && $bypass_reason === 'constant') {
+            $tips[] = 'ACE_OC_BYPASS constant forces bypass.';
         }
-        if ($bypass) { $tips[] = 'Cache currently bypassed (fail-open). Investigate connection issues or ACE_OC_BYPASS constant.'; }
+        if ($bypass && $bypass_reason === 'editor_admin') {
+            $tips[] = 'Bypassed for admin/editor/REST safety (guest requests still cached).';
+        }
         if ($profiling && $slow_ops>0) { $tips[] = 'Detected ' . $slow_ops . ' slow ops (>=100ms). Consider inspecting heavy queries or raising threshold.'; }
         if ($autoload_size > 50*1024*1024) { $tips[] = 'Autoloaded options exceed 50MB (' . size_format($autoload_size) . '). This can hurt performance.'; }
         // Provide WP_CACHE guidance
@@ -341,7 +356,9 @@ class API_Handler {
                 'using_dropin' => $using_dropin,
                 'dropin_connected' => $dropin_connected,
                 'bypass' => $bypass,
+                'bypass_reason' => $bypass_reason,
                 'runtime_bypass' => $runtime_bypass,
+                'active' => $dropin_active,
                 'via' => $via,
                 'error' => $error,
                 'slow_ops' => $slow_ops,

@@ -530,6 +530,27 @@ class AceRedisCache {
         
         // Start output buffering
         ob_start(function($content) use ($cache_key) {
+            // Canonical host enforcement & poison prevention
+            $home_host = parse_url(home_url(), PHP_URL_HOST);
+            $req_host = $_SERVER['HTTP_HOST'] ?? $home_host;
+            $is_ip = preg_match('/^\d+\.\d+\.\d+\.\d+$/', $req_host);
+            $host_mismatch = ($home_host && strcasecmp($home_host, $req_host) !== 0);
+            $skip_cache_reason = null;
+            if ($is_ip) { $skip_cache_reason = 'ip_host'; }
+            // Optional: allow override via filter
+            $skip_cache = apply_filters('ace_rc_skip_page_cache_store', ($is_ip || $host_mismatch), [
+                'home_host' => $home_host,
+                'request_host' => $req_host,
+                'is_ip' => $is_ip,
+                'host_mismatch' => $host_mismatch,
+            ]);
+            if ($host_mismatch && !$is_ip) {
+                // If mismatch but not IP, we can attempt canonical rewrite before caching
+                // Replace absolute URLs using the request host with the home host
+                if ($home_host && $req_host) {
+                    $content = str_replace('//' . $req_host . '/', '//' . $home_host . '/', $content);
+                }
+            }
             // Build cache version separate from user output if we have placeholders
             $cache_version = $content;
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -549,7 +570,7 @@ class AceRedisCache {
                 }
             }
             // Cache the content with intelligent minification handling
-            if (!empty($content)) {
+            if (!$skip_cache && !empty($content)) {
                 $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification);
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
@@ -558,6 +579,8 @@ class AceRedisCache {
                         $this->cache_manager->set($meta_key, [ 'stored_at' => time() ], $this->settings['ttl_page'] ?? 3600);
                     }
                 } catch (\Throwable $t) {}
+            } elseif ($skip_cache && defined('WP_DEBUG') && WP_DEBUG) {
+                $content .= "\n<!-- AceRedisCache: page_cache=SKIP host={$req_host} reason=" . ($skip_cache_reason ?: 'mismatch') . " -->";
             }
             // For the live response, strip only the wrapper markers (leave real dynamic content rendered)
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {

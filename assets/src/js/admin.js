@@ -237,8 +237,20 @@ import SaveBar from './components/SaveBar.js';
                 }
                 if ($tips.length) {
                     const parts = [];
-                    parts.push('<strong>Drop-in:</strong> ' + (d.using_dropin ? (d.dropin_connected ? '<span style="color:green;">connected</span>' : '<span style="color:#c00;">not connected</span>') : '<span style="color:#c00;">missing</span>'));
-                    if (d.bypass) parts.push('<span style="color:#c00;">bypass active</span>');
+                    let dropinText;
+                    if (!d.using_dropin) dropinText = '<span style="color:#c00;">missing</span>';
+                    else if (!d.dropin_connected) dropinText = '<span style="color:#c00;">not connected</span>';
+                    else if (d.active) dropinText = '<span style="color:green;">connected</span>';
+                    else dropinText = '<span style="color:#dba617;">connected (bypassed)</span>';
+                    parts.push('<strong>Drop-in:</strong> ' + dropinText);
+                    if (d.bypass) {
+                        let br = d.bypass_reason || 'unknown';
+                        let label = 'bypass';
+                        if (br === 'editor_admin') label = 'bypass (admin/editor)';
+                        else if (br === 'fail_open') label = 'bypass (fail-open)';
+                        else if (br === 'constant') label = 'bypass (constant)';
+                        parts.push('<span style="color:#c00;">'+label+'</span>');
+                    }
                     parts.push('Autoload ' + this.humanApproxBytes(d.autoload_size));
                     if (d.slow_ops) parts.push(d.slow_ops + ' slow ops');
                     if (d.error) parts.push('Error: <code>' + this.escapeHtml(d.error) + '</code>');

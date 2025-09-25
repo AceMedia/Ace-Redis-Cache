@@ -50,6 +50,12 @@ class BlockCaching {
         // Per-post invalidation: clear cached blocks when a post is saved/deleted (always active)
         add_action('save_post', [$this, 'invalidate_post_blocks'], 20, 1);
         add_action('deleted_post', [$this, 'invalidate_post_blocks'], 20, 1);
+        // Additionally, when any published post updates, query loop blocks on other pages may reference it.
+        // We can't map inner posts to container block cache keys (they key off the page's post id), so we aggressively
+        // purge cached query-type blocks to avoid stale titles/permalinks. Filter allows refinement.
+        add_action('post_updated', [$this, 'maybe_invalidate_query_blocks_on_post_update'], 20, 3);
+        // Fallback: optionally purge all block cache after a post update (prevents partial layout mismatches)
+        add_action('post_updated', [$this, 'maybe_purge_all_blocks_after_post_update'], 30, 3);
     }
     
     /**
@@ -280,6 +286,62 @@ class BlockCaching {
         $keys = $this->cache_manager->scan_keys($pattern);
         if (!empty($keys)) {
             $this->cache_manager->delete_keys_chunked($keys);
+        }
+    }
+
+    /**
+     * Invalidate cached query loop style blocks (query, latest posts, post template) when a published post changes.
+     * These block cache keys are keyed by the containing page/post id, not inner loop post ids, so the direct
+     * post-specific invalidation above won't touch them. This broad purge can be narrowed via filter.
+     */
+    public function maybe_invalidate_query_blocks_on_post_update($post_ID, $post_after, $post_before) {
+        if (wp_is_post_revision($post_ID)) return;
+        if (!$post_after || !$post_before) return;
+        // Only act if the post was or is published (affects public listings)
+        if ($post_before->post_status !== 'publish' && $post_after->post_status !== 'publish') return;
+        // Skip if block caching disabled mid-request
+        if (!($this->settings['enable_block_caching'] ?? false)) return;
+        $blocks_to_purge = apply_filters('ace_rc_query_block_invalidation_block_types', [
+            'core/query',
+            'core/query-loop',
+            'core/latest-posts',
+            'core/post-template',
+        ], $post_ID, $post_after, $post_before, $this->settings);
+        if (empty($blocks_to_purge)) return;
+        $deleted_total = 0;
+        foreach ($blocks_to_purge as $bname) {
+            $pattern = 'block_cache:' . $bname . ':post-*';
+            $keys = $this->cache_manager->scan_keys($pattern . ':*');
+            if (!empty($keys)) {
+                $this->cache_manager->delete_keys_chunked($keys, 500);
+                $deleted_total += count($keys);
+            }
+        }
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log(sprintf('Ace-Redis-Cache: query block purge after post update id=%d deleted=%d', $post_ID, $deleted_total));
+        }
+    }
+
+    /**
+     * Optional aggressive fallback: purge the entire block cache after any published post update.
+     * Prevents broken layout when partial block invalidation leaves stale structural fragments.
+     * Controlled by filter 'ace_rc_purge_all_block_cache_on_post_update' (default true until granular dependency graph exists).
+     */
+    public function maybe_purge_all_blocks_after_post_update($post_ID, $post_after, $post_before) {
+        if (wp_is_post_revision($post_ID)) return;
+        if (!$post_after || !$post_before) return;
+        if ($post_before->post_status !== 'publish' && $post_after->post_status !== 'publish') return;
+        if (!($this->settings['enable_block_caching'] ?? false)) return;
+        $enable = apply_filters('ace_rc_purge_all_block_cache_on_post_update', true, $post_ID, $post_after, $post_before, $this->settings);
+        if (!$enable) return;
+        $all_keys = $this->cache_manager->scan_keys('block_cache:*');
+        if (!empty($all_keys)) {
+            $this->cache_manager->delete_keys_chunked($all_keys, 1000);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf('Ace-Redis-Cache: FULL block cache purge after post update id=%d deleted=%d', $post_ID, count($all_keys)));
+            }
+        } else if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log(sprintf('Ace-Redis-Cache: FULL block cache purge after post update id=%d no_keys_found', $post_ID));
         }
     }
     

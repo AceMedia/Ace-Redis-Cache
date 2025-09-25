@@ -23,6 +23,7 @@ if (!class_exists('WP_Object_Cache')) {
         protected $runtime = [];       // in-process fallback store [group][key] => value
         protected $bypass = false;     // request-scoped fail-open flag
         protected $slow_threshold_ms = 100; // profiling threshold
+        protected $write_through_groups = ['posts','post_meta','terms','term_relationships','term_taxonomy','comments','comment_meta'];
     protected $igbinary = false;
     protected $serializer_active = false; // phpredis serializer engaged
     protected $connected = false;
@@ -165,9 +166,16 @@ if (!class_exists('WP_Object_Cache')) {
             $this->runtime[$group][$key] = $val;
         }
 
+        protected function should_write_through($group) {
+            if (!$this->redis || !$this->connected) return false;
+            $g = $group ?: 'default';
+            $list = apply_filters('ace_rc_object_cache_write_through_groups', $this->write_through_groups);
+            return in_array($g, (array)$list, true);
+        }
+
         public function add($key, $data, $group = 'default', $expire = 0) {
             $group = $group ?: 'default';
-            if ($this->bypass || $this->redis === null) {
+            if (($this->bypass && !$this->should_write_through($group)) || $this->redis === null) {
                 if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
                 return false;
             }
@@ -191,7 +199,7 @@ if (!class_exists('WP_Object_Cache')) {
         public function set($key, $data, $group = 'default', $expire = 0) {
             $group = $group ?: 'default';
             $this->runtime_set($group, $key, $data); // always update runtime
-            if ($this->bypass || $this->redis === null) { return true; }
+            if (($this->bypass && !$this->should_write_through($group)) || $this->redis === null) { return true; }
             $k = $this->k($key, $group);
             if ($this->serializer_active) {
                 $payload = $data;
@@ -260,7 +268,7 @@ if (!class_exists('WP_Object_Cache')) {
         public function delete($key, $group = 'default', $time = 0) {
             $group = $group ?: 'default';
             unset($this->runtime[$group][$key]);
-            if ($this->bypass || $this->redis === null) return true;
+            if (($this->bypass && !$this->should_write_through($group)) || $this->redis === null) return true;
             $k = $this->k($key, $group);
             $start = microtime(true);
             try { $res = (bool)$this->redis->del($k); $this->prof_log('OCDEL', $k, (microtime(true)-$start)*1000); return $res; } catch (\Throwable $e) { $this->bypass = true; return true; }

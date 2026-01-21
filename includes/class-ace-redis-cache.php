@@ -18,7 +18,6 @@ class AceRedisCache {
     private $settings;
     private $redis_connection;
     private $cache_manager;
-    private $block_caching;
     private $minification;
     private $admin_interface;
     private $admin_ajax;
@@ -106,8 +105,9 @@ class AceRedisCache {
             'mode' => 'full',
             'enabled' => 1,
             'enable_tls' => 0, // Changed default to 0 (disabled)
-            'enable_block_caching' => 0,
             'enable_transient_cache' => 0,
+            'enable_admin_optimization' => 1,  // Skip expensive operations in admin
+            'enable_lightweight_cleanup' => 1, // Use lightweight cleanup in admin contexts
             'enable_minification' => 0,
             'enable_compression' => 0,
             'compression_method' => 'brotli', // brotli | gzip
@@ -122,16 +122,11 @@ class AceRedisCache {
             'custom_cache_exclusions' => '',
             'custom_transient_exclusions' => '',
             'custom_content_exclusions' => '',
-            'excluded_blocks' => '',
-            'exclude_basic_blocks' => 0,
-            'include_rendered_block_hash' => 0,
             // New dual-cache settings
             'enable_page_cache' => 1,
             'enable_object_cache' => 0,
             'ttl_page' => 3600,
             'ttl_object' => 3600,
-            // Unified dynamic runtime option (applies to excluded blocks)
-            'dynamic_excluded_blocks' => 0,
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
             'send_cache_meta_headers' => 0,
@@ -162,8 +157,9 @@ class AceRedisCache {
             'mode' => 'full',
             'enabled' => 1,
             'enable_tls' => 0,
-            'enable_block_caching' => 0,
             'enable_transient_cache' => 0,
+            'enable_admin_optimization' => 1,  // Skip expensive operations in admin
+            'enable_lightweight_cleanup' => 1, // Use lightweight cleanup in admin contexts
             'enable_minification' => 0,
             'enable_compression' => 0,
             'compression_method' => 'brotli',
@@ -253,9 +249,6 @@ class AceRedisCache {
             // Cache management
             $this->cache_manager = new CacheManager($this->redis_connection, $this->settings);
             
-            // Block caching (only if enabled)
-            $this->block_caching = new BlockCaching($this->cache_manager, $this->settings);
-            
             // Minification
             $this->minification = new Minification($this->settings);
             
@@ -318,6 +311,13 @@ class AceRedisCache {
         add_filter('option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
             add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
         
+        // Prime critical options after permalink or rewrite changes
+        add_action('update_option_permalink_structure', [$this, 'prime_critical_options_after_permalink_change']);
+        add_action('flush_rewrite_rules', [$this, 'prime_critical_options_after_rewrite_flush']);
+        
+        // Guard against canonical redirects to draft URLs
+        add_filter('redirect_canonical', [$this, 'guard_canonical_redirect'], 10, 2);
+        
         // Setup component hooks (only if components are initialized)
         if (is_admin()) {
             if ($this->admin_interface) {
@@ -349,13 +349,9 @@ class AceRedisCache {
             $this->setup_full_page_cache();
         }
 
-        // Object-level caching (transients + blocks) if enabled
+        // Object-level caching (transients) if enabled
         if (!empty($this->settings['enable_object_cache'])) {
             $this->setup_object_cache();
-            // Setup block caching only when explicitly enabled
-            if (!empty($this->settings['enable_block_caching']) && $this->block_caching) {
-                $this->block_caching->setup_hooks();
-            }
         }
 
         // Setup minification if enabled (the Minification class will avoid double-processing when page cache is active)
@@ -373,6 +369,11 @@ class AceRedisCache {
             add_action('save_post', [$this, 'maybe_invalidate_post_page_cache'], 50, 3);
             add_action('deleted_post', [$this, 'maybe_invalidate_post_page_cache_deleted'], 50, 1);
             add_action('transition_post_status', [$this, 'maybe_invalidate_post_page_cache_status'], 50, 3);
+            
+            // Force complete Redis flush for post updates to ensure block caching compatibility
+            // This ensures all caches (page, block, object) are cleared when posts change
+            add_filter('ace_rc_broad_page_cache_purge_on_post_update', '__return_true');
+            
             // Priming cron handler
             add_action('ace_rc_prime_post_cache', [$this, 'prime_post_cache'], 10, 1);
         }
@@ -441,8 +442,13 @@ class AceRedisCache {
         }
 
         // If a persistent object cache drop-in is present, WP core will handle
-        // transients through wp_cache_* for all users. Avoid double-intercepting.
-        if (wp_using_ext_object_cache()) {
+        // transients through wp_cache_* for all users. We still register filters
+        // to enable transient invalidation tracking when posts are updated.
+        $external_object_cache = wp_using_ext_object_cache();
+        if ($external_object_cache) {
+            // For external object cache, we only hook into wp_cache_set/delete for tracking
+            add_action('wp_cache_set', [$this, 'track_transient_set_for_invalidation'], 10, 5);
+            add_action('wp_cache_delete', [$this, 'track_transient_delete_for_invalidation'], 10, 2);
             return;
         }
 
@@ -1297,14 +1303,34 @@ class AceRedisCache {
         // Allow broad purge override
         $broad = apply_filters('ace_rc_broad_page_cache_purge_on_post_update', false, $post_id, $post, $this->settings);
         if ($broad) {
-            $keys = $this->cache_manager->scan_keys('page_cache:*');
-            $min_keys = $this->cache_manager->scan_keys('page_cache_min:*');
-            $all = array_merge($keys ?: [], $min_keys ?: []);
-            if (!empty($all)) {
-                $this->cache_manager->delete_keys_chunked($all, 1000);
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('AceRedisCache broad page cache purge after post update id=' . $post_id . ' deleted=' . count($all));
+            // Complete Redis flush for maximum compatibility with block caching
+            if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
+                try {
+                    $redis = $this->cache_manager->get_raw_client();
+                    if ($redis && method_exists($redis, 'flushDB')) {
+                        $redis->flushDB();
+                        if (defined('WP_DEBUG') && WP_DEBUG) {
+                            error_log('AceRedisCache: Complete Redis flush after post update ID=' . $post_id);
+                        }
+                        return;
+                    }
+                } catch (\Throwable $e) {
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        error_log('AceRedisCache: Redis flush failed: ' . $e->getMessage());
+                    }
                 }
+            }
+            
+            // Fallback to clearing all cache namespaces if flushDB not available
+            $prefixes = ['page_cache:', 'page_cache_min:', 'page_cache_meta:', 'block_cache:', 'ace:'];
+            foreach ($prefixes as $prefix) {
+                $keys = $this->cache_manager->scan_keys($prefix . '*');
+                if (!empty($keys)) {
+                    $this->cache_manager->delete_keys_chunked($keys, 1000);
+                }
+            }
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('AceRedisCache: Complete cache purge after post update ID=' . $post_id);
             }
             return;
         }
@@ -1469,7 +1495,7 @@ class AceRedisCache {
         // Mark this post so the next anonymous render skips page & block cache storage (style-safe warm pass)
         $this->mark_post_requires_first_pass($post_ID);
         // Set global warm window so other pages also avoid premature capture if shared aggregated styles regenerate.
-        $warm_window = (int) apply_filters('ace_rc_global_asset_warm_window', 20, $post_ID, $post_after, $post_before, $this->settings);
+        $warm_window = (int) apply_filters('ace_rc_global_asset_warm_window', 30, $post_ID, $post_after, $post_before, $this->settings);
         if ($warm_window > 0) {
             update_option('ace_rc_global_asset_warm_until', time() + $warm_window, false);
             if (defined('WP_DEBUG') && WP_DEBUG) { error_log('Ace-Redis-Cache: global asset warm window +' . $warm_window . 's'); }
@@ -1483,9 +1509,24 @@ class AceRedisCache {
      */
     private function maybe_flush_post_transients($post_id, $post_type) {
         if (empty($this->settings['enable_transient_cache']) || !$this->cache_manager) return 0;
+        
+        // Performance optimization: Skip expensive SCAN operations in admin contexts
+        // This prevents admin slowdown when transient cache is enabled
+        if (!empty($this->settings['enable_admin_optimization']) && $this->is_admin_context() && !$this->should_force_transient_flush()) {
+            // Optionally run lightweight cleanup instead of full scan
+            if (!empty($this->settings['enable_lightweight_cleanup'])) {
+                return $this->lightweight_transient_cleanup($post_id, $post_type);
+            }
+            
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf('Ace-Redis-Cache: skipped transient scan for post_id=%d (admin optimization)', $post_id));
+            }
+            return 0;
+        }
+        
         $post_id = (int)$post_id; if ($post_id <= 0) return;
         // Allow developers to short-circuit or supply additional patterns
-        $patterns = apply_filters('ace_rc_post_transient_patterns', [
+        $default_patterns = [
             'transient:_transient_timeout_%d_*', // safety (WordPress internal timeouts) though we will convert to raw key forms
             'transient:%d:*',                    // generic id prefix
             'transient:post_%d_*',
@@ -1496,7 +1537,24 @@ class AceRedisCache {
             'transient:seo_meta_%d*',
             'transient:query_%d_*',
             'transient:loop_%d_*',
-        ], $post_id, $post_type, $this->settings);
+            // Third-party plugin patterns
+            'transient:wpseo_permalink_slug_%d',      // Yoast SEO permalink cache
+            'transient:wpseo_sitemap_*_%d*',          // Yoast SEO sitemap cache
+            'transient:wpseo_meta_%d*',               // Yoast SEO meta cache
+            'transient:rank_math_permalink_%d',       // RankMath permalink cache
+            'transient:rank_math_seo_%d*',           // RankMath SEO cache
+            'transient:jetpack_related_posts_%d*',   // Jetpack related posts
+            'transient:jetpack_stats_%d*',           // Jetpack stats
+            'transient:jetpack_sharing_%d*',         // Jetpack sharing
+            'transient:post_link_%d*',               // Generic post link cache
+            'transient:get_permalink_%d*',           // Permalink cache
+            'transient:acf_post_%d*',                // ACF post cache
+            'transient:acf_fields_%d*',              // ACF fields cache
+            'transient:elementor_post_%d*',          // Elementor post cache
+            'transient:wp_rocket_post_%d*',          // WP Rocket post cache
+            'transient:litespeed_post_%d*',          // LiteSpeed post cache
+        ];
+        $patterns = apply_filters('ace_rc_post_transient_patterns', $default_patterns, $post_id, $post_type, $this->settings);
         $redis = $this->cache_manager ? $this->cache_manager : null;
         if (!$redis) return 0;
         $conn = $this->cache_manager; // reuse manager scan API
@@ -1557,6 +1615,15 @@ class AceRedisCache {
      */
     private function flush_all_transients($reason = 'manual') {
         if (empty($this->settings['enable_transient_cache']) || !$this->cache_manager) return 0;
+        
+        // Performance check: avoid expensive operations in admin contexts unless forced
+        if (!empty($this->settings['enable_admin_optimization']) && $this->is_admin_context() && !$this->should_force_transient_flush() && $reason !== 'manual') {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache: skipped full transient flush (admin optimization, reason=' . $reason . ')');
+            }
+            return 0;
+        }
+        
         $prefix_sets = [ 'transient:', 'site_transient:' ];
         // When an external object cache is active, include its group-based key namespaces.
         if (wp_using_ext_object_cache()) {
@@ -1916,7 +1983,6 @@ class AceRedisCache {
                 'mode' => 'full',
                 'enabled' => 1,
                 'enable_tls' => 0,
-                'enable_block_caching' => 0,
                 'enable_transient_cache' => 0,
                 'enable_minification' => 0,
                 'enable_compression' => 0,
@@ -1929,13 +1995,10 @@ class AceRedisCache {
                 'custom_cache_exclusions' => '',
                 'custom_transient_exclusions' => '',
                 'custom_content_exclusions' => '',
-                'excluded_blocks' => '',
-                'exclude_basic_blocks' => 0,
                 'enable_page_cache' => 1,
                 'enable_object_cache' => 0,
                 'ttl_page' => 3600,
                 'ttl_object' => 3600,
-                'dynamic_excluded_blocks' => 0,
                 'enable_browser_cache_headers' => 0,
                 'browser_cache_max_age' => 3600,
                 'send_cache_meta_headers' => 0,
@@ -2277,5 +2340,237 @@ class AceRedisCache {
         $headers['Cache-Control'] = 'public, max-age=' . $ttl . ', immutable';
         $headers['Expires'] = gmdate('D, d M Y H:i:s', time() + $ttl) . ' GMT';
         return $headers;
+    }
+
+    /**
+     * Prime critical options immediately after permalink structure changes
+     */
+    public function prime_critical_options_after_permalink_change() {
+        $this->prime_critical_options_now();
+    }
+
+    /**
+     * Prime critical options immediately after rewrite rules are flushed
+     */
+    public function prime_critical_options_after_rewrite_flush() {
+        $this->prime_critical_options_now();
+    }
+
+    /**
+     * Prime critical options immediately to Redis cache
+     */
+    private function prime_critical_options_now() {
+        global $wp_object_cache;
+        if ($wp_object_cache && method_exists($wp_object_cache, 'prime_set')) {
+            $wp_object_cache->prime_set('rewrite_rules', get_option('rewrite_rules'), 'options');
+            $wp_object_cache->prime_set('permalink_structure', get_option('permalink_structure'), 'options');
+            $wp_object_cache->prime_set('alloptions', wp_load_alloptions(), 'options');
+            
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache: Primed critical options after permalink/rewrite change');
+            }
+        }
+    }
+
+    /**
+     * Guard canonical redirects to prevent users being sent to draft URLs
+     * 
+     * @param string $redirect_url The redirect URL
+     * @param string $requested_url The requested URL 
+     * @return string|false Modified redirect URL or false to prevent redirect
+     */
+    public function guard_canonical_redirect($redirect_url, $requested_url) {
+        // If no redirect is happening, do nothing
+        if (!$redirect_url || $redirect_url === $requested_url) {
+            return $redirect_url;
+        }
+
+        // Check if redirect destination is a numeric ?p=ID URL (could be draft)
+        $parsed_redirect = parse_url($redirect_url);
+        if (isset($parsed_redirect['query'])) {
+            parse_str($parsed_redirect['query'], $query_params);
+            if (isset($query_params['p']) && is_numeric($query_params['p'])) {
+                $post_id = intval($query_params['p']);
+                $post = get_post($post_id);
+                
+                // If post exists but is not published, prevent redirect
+                if ($post && $post->post_status !== 'publish') {
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        error_log("Ace-Redis-Cache: Blocked canonical redirect to draft/private post ID {$post_id}");
+                    }
+                    return false;
+                }
+            }
+        }
+
+        // Check if redirect is from an old slug to current slug
+        // If the requested URL contains a different slug than current, it might be outdated
+        $current_url_parts = parse_url($requested_url);
+        $redirect_url_parts = parse_url($redirect_url);
+        
+        if (isset($current_url_parts['path']) && isset($redirect_url_parts['path'])) {
+            $current_path = trim($current_url_parts['path'], '/');
+            $redirect_path = trim($redirect_url_parts['path'], '/');
+            
+            // If paths are different, this might be an old slug redirect
+            if ($current_path !== $redirect_path) {
+                // Try to find post by the requested path to check its status
+                $post_id = url_to_postid($requested_url);
+                if ($post_id > 0) {
+                    $post = get_post($post_id);
+                    if ($post && $post->post_status !== 'publish') {
+                        if (defined('WP_DEBUG') && WP_DEBUG) {
+                            error_log("Ace-Redis-Cache: Blocked canonical redirect from old slug to non-published post ID {$post_id}");
+                        }
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return $redirect_url;
+    }
+
+    /**
+     * Track transient set operations when external object cache is active
+     * This helps maintain invalidation tracking even when we're not intercepting transients directly
+     * 
+     * @param mixed $data The cached data
+     * @param string $key Cache key
+     * @param string $group Cache group
+     * @param int $expire Expiration time
+     * @param object $cache The cache object
+     */
+    public function track_transient_set_for_invalidation($data, $key, $group, $expire, $cache) {
+        // Only track transient groups
+        if (!in_array($group, ['transient', 'site-transient'])) {
+            return;
+        }
+
+        // Store reference for potential future invalidation
+        // This could be used to maintain a mapping of transients for targeted deletion
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Ace-Redis-Cache: Tracked transient set - key: {$key}, group: {$group}");
+        }
+        
+        // Potential enhancement: maintain a registry of active transients
+        // $registry = get_option('ace_redis_cache_transient_registry', []);
+        // $registry["{$group}:{$key}"] = time();
+        // update_option('ace_redis_cache_transient_registry', $registry, false);
+    }
+
+    /**
+     * Track transient delete operations when external object cache is active
+     * 
+     * @param string $key Cache key
+     * @param string $group Cache group
+     */
+    public function track_transient_delete_for_invalidation($key, $group) {
+        // Only track transient groups
+        if (!in_array($group, ['transient', 'site-transient'])) {
+            return;
+        }
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Ace-Redis-Cache: Tracked transient delete - key: {$key}, group: {$group}");
+        }
+        
+        // Potential enhancement: remove from registry
+        // $registry = get_option('ace_redis_cache_transient_registry', []);
+        // unset($registry["{$group}:{$key}"]);
+        // update_option('ace_redis_cache_transient_registry', $registry, false);
+    }
+
+    /**
+     * Check if current request is in an admin context that should skip expensive operations
+     * 
+     * @return bool True if in admin context that should skip expensive operations
+     */
+    private function is_admin_context() {
+        // Always skip for admin pages, AJAX requests, REST API, and CLI
+        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST) || (defined('WP_CLI') && WP_CLI)) {
+            return true;
+        }
+        
+        // Skip for logged-in users performing admin-like actions
+        if (is_user_logged_in()) {
+            // Skip for users with edit capabilities during content operations
+            if (current_user_can('edit_posts') || current_user_can('edit_pages')) {
+                return true;
+            }
+        }
+        
+        // Skip for specific admin-related query variables
+        if (isset($_REQUEST['action']) || isset($_REQUEST['preview']) || isset($_REQUEST['customize_changeset_uuid'])) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Check if transient flush should be forced even in admin contexts
+     * 
+     * @return bool True if flush should be forced
+     */
+    private function should_force_transient_flush() {
+        // Force flush when explicitly requested
+        if (defined('ACE_FORCE_TRANSIENT_FLUSH') && ACE_FORCE_TRANSIENT_FLUSH) {
+            return true;
+        }
+        
+        // Force flush for specific high-impact scenarios
+        $force_scenarios = [
+            'publish',    // Publishing posts
+            'future',     // Scheduling posts
+            'trash',      // Trashing posts
+            'delete'      // Deleting posts
+        ];
+        
+        $current_action = $_REQUEST['action'] ?? '';
+        if (in_array($current_action, $force_scenarios)) {
+            return true;
+        }
+        
+        // Allow filtering for custom scenarios
+        return apply_filters('ace_rc_force_transient_flush', false, $_REQUEST);
+    }
+
+    /**
+     * Lightweight alternative for transient cleanup in admin contexts
+     * Targets only the most critical transient patterns without expensive SCAN operations
+     * 
+     * @param int $post_id Post ID
+     * @param string $post_type Post type
+     * @return int Number of keys deleted
+     */
+    private function lightweight_transient_cleanup($post_id, $post_type) {
+        if (empty($this->settings['enable_transient_cache']) || !$this->cache_manager) return 0;
+        
+        $post_id = (int)$post_id;
+        if ($post_id <= 0) return 0;
+        
+        // Only target the most critical, high-impact transient keys
+        $critical_patterns = [
+            'transient:post_link_' . $post_id,
+            'transient:get_permalink_' . $post_id,
+            'transient:wpseo_permalink_slug_' . $post_id,
+            'transient:rank_math_permalink_' . $post_id,
+        ];
+        
+        $critical_patterns = apply_filters('ace_rc_critical_transient_patterns', $critical_patterns, $post_id, $post_type);
+        
+        $deleted = 0;
+        foreach ($critical_patterns as $key) {
+            if ($this->cache_manager->delete_key($key)) {
+                $deleted++;
+            }
+        }
+        
+        if ($deleted > 0 && defined('WP_DEBUG') && WP_DEBUG) {
+            error_log(sprintf('Ace-Redis-Cache: lightweight cleanup deleted %d critical transients for post_id=%d', $deleted, $post_id));
+        }
+        
+        return $deleted;
     }
 }

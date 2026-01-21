@@ -108,14 +108,6 @@
 
         // Initialize cache mode handling (dual toggles)
         initCacheMode() {
-            const toggleBlockCachingOption = () => {
-                const enabled = $('#enable_object_cache').is(':checked');
-                const $blockCachingRow = $('#block-caching-row');
-                const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
-                $blockCachingRow.toggle(!!enabled);
-                if (!enabled) { $blockCachingCheckbox.prop('checked', false); }
-            };
-
             const toggleTTLVisibility = () => {
                 const pageOn = $('#enable_page_cache').is(':checked');
                 const objOn = $('#enable_object_cache').is(':checked');
@@ -131,12 +123,10 @@
             };
 
             // Initialize on page load
-            toggleBlockCachingOption();
             toggleTTLVisibility();
 
             // Handle toggle changes
             $('#enable_object_cache').on('change', function(){
-                toggleBlockCachingOption();
                 toggleTTLVisibility();
             });
             $('#enable_page_cache').on('change', function(){

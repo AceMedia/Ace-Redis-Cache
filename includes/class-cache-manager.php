@@ -177,6 +177,28 @@ class CacheManager {
     }
     
     /**
+     * Delete a single cache key
+     *
+     * @param string $key Cache key to delete
+     * @return bool True if key was deleted, false otherwise
+     */
+    public function delete_key($key) {
+        $redis = $this->redis_connection->get_connection();
+        if (!$redis) {
+            return false;
+        }
+        
+        try {
+            return (bool) $redis->del($key);
+        } catch (\Throwable $e) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace Redis Cache: Failed to delete key ' . $key . ': ' . $e->getMessage());
+            }
+            return false;
+        }
+    }
+
+    /**
      * Scan for cache keys matching a pattern
      *
      * @param string $pattern Redis key pattern

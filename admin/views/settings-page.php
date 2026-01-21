@@ -196,18 +196,6 @@ if (!defined('ABSPATH')) exit;
                             </div>
                         </div>
                     </div>
-                    <div class="setting-row" id="block-caching-row" style="<?php echo (!empty($settings['enable_object_cache']) || ($settings['mode'] ?? '') === 'object') ? '' : 'display: none;'; ?>">
-                        <div class="setting-label">
-                            <label for="enable_block_caching">Block Caching</label>
-                        </div>
-                        <div class="setting-field">
-                            <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_block_caching]" id="enable_block_caching" value="1" <?php checked($settings['enable_block_caching'] ?? 0); ?> />
-                                <span class="ace-slider"></span>
-                            </label>
-                            <p class="description">Cache individual Gutenberg blocks for improved performance (Object Cache mode only)</p>
-                        </div>
-                    </div>
 
                     
 

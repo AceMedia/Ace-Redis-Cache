@@ -44,6 +44,7 @@ class AceRedisCache {
     // Dynamic runtime blocks derived from excluded blocks (if enabled)
     private $dynamic_placeholders_enabled = false; // evaluated per request
     private $dynamic_placeholder_patterns = []; // patterns from excluded_blocks
+    private $dynamic_placeholder_regexes = []; // precompiled regexes for fast block-name matching
     private $dynamic_placeholder_hashes = [];
     private $dynamic_placeholder_limit = 50; // allow more since patterns may match multiple block types
     private $dynamic_placeholder_stats = [ 'count' => 0, 'skipped_over_limit' => false, 'render_miss' => 0 ];
@@ -58,6 +59,8 @@ class AceRedisCache {
 
     // OPcache optimization toggle
     private $opcache_runtime_enabled = false;
+    // Request-local memoized site version for cache key generation.
+    private $site_cache_version = null;
     
     /**
      * Constructor
@@ -122,6 +125,7 @@ class AceRedisCache {
             'custom_cache_exclusions' => '',
             'custom_transient_exclusions' => '',
             'custom_content_exclusions' => '',
+            'exclude_sitemaps' => 0,
             // New dual-cache settings
             'enable_page_cache' => 1,
             'enable_object_cache' => 0,
@@ -135,6 +139,10 @@ class AceRedisCache {
             'enable_opcache_helpers' => 0,
             'enable_static_asset_cache' => 0,
             'static_asset_cache_ttl' => 604800,
+            'enable_asset_proxy_cache' => 0,
+            'asset_proxy_cache_ttl' => 604800,
+            'manage_static_cache_via_htaccess' => 0,
+            'prefer_existing_static_cache_headers' => 1,
         ]);
         // If settings were stored as a JSON string (e.g., via wp-cli), decode safely
         if (is_string($loaded)) {
@@ -171,6 +179,7 @@ class AceRedisCache {
             'custom_cache_exclusions' => '',
             'custom_transient_exclusions' => '',
             'custom_content_exclusions' => '',
+            'exclude_sitemaps' => 0,
             'excluded_blocks' => '',
             'exclude_basic_blocks' => 0,
             'include_rendered_block_hash' => 0,
@@ -179,20 +188,26 @@ class AceRedisCache {
             'enable_object_cache' => 0,
             'ttl_page' => 3600,
             'ttl_object' => 3600,
-            'dynamic_excluded_blocks' => 0,
+            'dynamic_excluded_blocks' => 1,
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
             'send_cache_meta_headers' => 0,
             'enable_dynamic_microcache' => 0,
             'dynamic_microcache_ttl' => 10,
             'enable_opcache_helpers' => 0,
+            'enable_static_asset_cache' => 0,
+            'static_asset_cache_ttl' => 604800,
+            'enable_asset_proxy_cache' => 0,
+            'asset_proxy_cache_ttl' => 604800,
+            'manage_static_cache_via_htaccess' => 0,
+            'prefer_existing_static_cache_headers' => 1,
         ];
         $this->settings = array_merge($defaults, $loaded);
 
         // Normalize microcache settings
         $this->dynamic_microcache_enabled = !empty($this->settings['enable_dynamic_microcache']);
         $ttl = (int)($this->settings['dynamic_microcache_ttl'] ?? 10);
-        $this->dynamic_microcache_ttl = max(1, min(60, $ttl));
+        $this->dynamic_microcache_ttl = max(1, min(3600, $ttl));
         $this->opcache_runtime_enabled = !empty($this->settings['enable_opcache_helpers']);
 
         // Back-compat migration: map old 'mode' and 'ttl' to new toggles/ttls if not set explicitly
@@ -329,9 +344,18 @@ class AceRedisCache {
         }
         // Deferred invalidation runner
         add_action('ace_rc_run_deferred_invalidation', [$this, 'run_deferred_invalidation']);
+        add_action('init', [$this, 'maybe_serve_asset_proxy_request'], 0);
         // Static asset headers (apply for all requests including admin media loads)
         if (!empty($this->settings['enable_static_asset_cache'])) {
             add_filter('wp_headers', [$this, 'set_static_cache_headers']);
+            add_filter('wp_get_attachment_url', [$this, 'version_attachment_url'], 20, 2);
+            add_filter('wp_get_attachment_image_src', [$this, 'version_attachment_image_src'], 20, 4);
+            add_filter('wp_get_attachment_image_attributes', [$this, 'version_attachment_image_attributes'], 20, 3);
+            add_filter('post_thumbnail_url', [$this, 'version_post_thumbnail_url'], 20, 3);
+            add_filter('wp_calculate_image_srcset', [$this, 'version_image_srcset_sources'], 20, 5);
+            add_filter('get_avatar_url', [$this, 'version_avatar_url'], 20, 3);
+            add_filter('style_loader_src', [$this, 'version_enqueued_asset_url'], 20, 2);
+            add_filter('script_loader_src', [$this, 'version_enqueued_asset_url'], 20, 2);
         }
         
         // Frontend caching hooks (only if enabled, not admin, and cache manager exists)
@@ -505,10 +529,125 @@ class AceRedisCache {
         if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
             return false;
         }
+
+        if (!empty($this->settings['exclude_sitemaps']) && $this->is_sitemap_request()) {
+            return false;
+        }
         
         return true;
     }
+
+    private function is_sitemap_request() {
+        if (isset($_GET['sitemap']) || isset($_GET['sitemap-stylesheet'])) {
+            return true;
+        }
+
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        if ($request_uri === '') {
+            return false;
+        }
+
+        if (strpos($request_uri, 'wp-sitemap') !== false || strpos($request_uri, 'sitemap') !== false) {
+            return true;
+        }
+
+        if (function_exists('ace_sitemap_powertools_custom_routes')) {
+            $path = wp_parse_url($request_uri, PHP_URL_PATH);
+            $path = trim((string) $path, '/');
+            if ($path === 'sitemap.xml' || $path === 'sitemap.xsl' || $path === 'sitemap-index.xsl') {
+                return true;
+            }
+            if ($path !== '') {
+                $routes = ace_sitemap_powertools_custom_routes();
+                foreach (array_keys($routes) as $slug) {
+                    $slug = trim((string) $slug, '/');
+                    if ($slug === '') {
+                        continue;
+                    }
+                    if ($path === $slug . '.xml') {
+                        return true;
+                    }
+                    if (preg_match('~^' . preg_quote($slug, '~') . '-\\d+\\.xml$~i', $path)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
     
+    /**
+     * Attempt to serve compressed cache directly without decompression if no dynamic placeholders exist.
+     *
+     * @param string $cache_key Cache key
+     * @return string|null Compressed bytes ready for output, or null to use the standard path
+     */
+    private function try_serve_compressed_directly($cache_key) {
+        if (empty($this->settings['enable_compression'])) return null;
+        if (!$this->dynamic_placeholders_enabled && !$this->enable_dynamic_block_placeholders) {
+            $redis = null;
+            if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
+                $redis = $this->cache_manager->get_raw_client();
+            }
+            if (!$redis) return null;
+
+            if (!empty($this->settings['enable_minification'])) {
+                $minified_key = 'page_cache_min:' . $cache_key;
+                $compressed = $redis->get($minified_key);
+                if ($compressed !== false && is_string($compressed) && preg_match('/^(br\\d{0,2}|gz\\d{0,2}|br|gz):/', $compressed, $m) === 1) {
+                    $prefix_len = strlen($m[0]);
+                    $compressed_bytes = substr($compressed, $prefix_len);
+                    if (preg_match('/^br/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
+                        if (!headers_sent()) {
+                            header('Content-Encoding: br');
+                            header('Vary: Accept-Encoding');
+                            if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                            header('Content-Length: ' . strlen($compressed_bytes));
+                        }
+                        return $compressed_bytes;
+                    }
+                    if (preg_match('/^gz/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false) {
+                        if (!headers_sent()) {
+                            header('Content-Encoding: gzip');
+                            header('Vary: Accept-Encoding');
+                            if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                            header('Content-Length: ' . strlen($compressed_bytes));
+                        }
+                        return $compressed_bytes;
+                    }
+                }
+            }
+
+            $regular_key = 'page_cache:' . $cache_key;
+            $compressed = $redis->get($regular_key);
+            if ($compressed !== false && is_string($compressed) && preg_match('/^(br\\d{0,2}|gz\\d{0,2}|br|gz):/', $compressed, $m) === 1) {
+                $prefix_len = strlen($m[0]);
+                $compressed_bytes = substr($compressed, $prefix_len);
+                if (preg_match('/^br/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
+                    if (!headers_sent()) {
+                        header('Content-Encoding: br');
+                        header('Vary: Accept-Encoding');
+                        if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                        header('Content-Length: ' . strlen($compressed_bytes));
+                    }
+                    return $compressed_bytes;
+                }
+                if (preg_match('/^gz/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false) {
+                    if (!headers_sent()) {
+                        header('Content-Encoding: gzip');
+                        header('Vary: Accept-Encoding');
+                        if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                        header('Content-Length: ' . strlen($compressed_bytes));
+                    }
+                    return $compressed_bytes;
+                }
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Start full page cache output buffering
      */
@@ -526,9 +665,22 @@ class AceRedisCache {
             return; // don't start buffering or touch cache
         }
         $cache_key = $this->generate_page_cache_key();
+
+        $direct_compressed = null;
+        if (empty($this->settings['enable_static_asset_cache'])) {
+            $direct_compressed = $this->try_serve_compressed_directly($cache_key);
+        }
+        if ($direct_compressed !== null) {
+            if (!headers_sent()) {
+                header('X-AceRedisCache: HIT-COMPRESSED');
+                $this->emit_browser_cache_headers('hit', $cache_key);
+            }
+            echo $direct_compressed;
+            if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
+            return;
+        }
         
-        // Try to get cached version (with minification handling)
-        // Fetch raw (decompressed) so we can safely perform placeholder expansion when needed
+        // Standard path: fetch raw (decompressed) so we can safely perform placeholder expansion when needed
         $cached_content = $this->cache_manager->get_with_minification($cache_key, false);
         if ($cached_content !== null) {
             // Prevent serving cached page for now non-published singular content
@@ -550,6 +702,7 @@ class AceRedisCache {
                     $cached_content .= "\n<!-- AceRedisCache: page_cache=HIT dynamic=on -->";
                 }
             }
+            $cached_content = $this->rewrite_image_urls_for_cache_busting($cached_content);
             if (!headers_sent()) {
                 header('X-AceRedisCache: HIT');
                 $this->emit_browser_cache_headers('hit', $cache_key);
@@ -638,6 +791,7 @@ class AceRedisCache {
                     $content = str_replace('//' . $req_host . '/', '//' . $home_host . '/', $content);
                 }
             }
+            $content = $this->rewrite_image_urls_for_cache_busting($content);
             // Build cache version separate from user output if we have placeholders
             $cache_version = $content;
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -840,8 +994,36 @@ class AceRedisCache {
         if (empty($patterns)) return;
         $patterns = apply_filters('ace_rc_dynamic_block_patterns', array_unique($patterns), $this->settings);
         $this->dynamic_placeholder_patterns = $patterns;
+        $this->dynamic_placeholder_regexes = $this->compile_dynamic_placeholder_regexes($patterns);
         $this->dynamic_placeholder_limit = (int) apply_filters('ace_rc_dynamic_placeholder_limit', $this->dynamic_placeholder_limit, $this->settings);
         $this->dynamic_placeholders_enabled = true; // always render mode
+    }
+
+    private function compile_dynamic_placeholder_regexes($patterns) {
+        $regexes = [];
+        foreach ((array) $patterns as $pattern) {
+            $pattern = trim((string) $pattern);
+            if ($pattern === '') {
+                continue;
+            }
+            $quoted = preg_quote($pattern, '/');
+            $quoted = str_replace('\\*', '.*', $quoted);
+            $quoted = str_replace('\\?', '.', $quoted);
+            $regexes[] = '/^' . $quoted . '$/';
+        }
+        return $regexes;
+    }
+
+    private function is_dynamic_placeholder_block_name($name) {
+        if ($name === '' || empty($this->dynamic_placeholder_regexes)) {
+            return false;
+        }
+        foreach ($this->dynamic_placeholder_regexes as $regex) {
+            if (preg_match($regex, $name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -852,11 +1034,7 @@ class AceRedisCache {
         if ($this->dynamic_placeholder_stats['skipped_over_limit']) { return $block_content; }
         $name = $block['blockName'] ?? '';
         if (!$name) { return $block_content; }
-        $matched = false;
-        foreach ($this->dynamic_placeholder_patterns as $pat) {
-            if (fnmatch($pat, $name)) { $matched = true; break; }
-        }
-        if (!$matched) { return $block_content; }
+        if (!$this->is_dynamic_placeholder_block_name($name)) { return $block_content; }
         if (empty($block_content)) { return $block_content; }
         $post_id = (int) (get_the_ID() ?: 0);
         // Include a light fingerprint of innerBlocks (names only) so structural changes bust hash
@@ -1006,7 +1184,8 @@ class AceRedisCache {
             'core/query','core/post-template','core/query-loop','core/post-content','core/post-excerpt','core/post-date',
             'core/post-title','core/post-author','core/post-featured-image','core/comments','core/comment-template',
             'core/latest-posts','core/latest-comments','core/calendar','core/archives','core/categories','core/tag-cloud',
-            'core/search','core/loginout'
+            'core/search','core/loginout',
+            'ace-popular-posts/popular-posts'
         ];
         if (in_array($block_name, $dynamic_blocks, true)) {
             return true;
@@ -1070,10 +1249,19 @@ class AceRedisCache {
      * @return string Cache key
      */
     private function generate_page_cache_key() {
-        $version = 0;
-        try { $version = (int) wp_cache_get('site_version', 'version'); } catch (\Throwable $t) { $version = 0; }
+        $version = $this->get_site_cache_version();
         $key_parts = [ 'page_cache', $_SERVER['REQUEST_URI'] ?? '/', \is_ssl() ? 'https' : 'http', \wp_is_mobile() ? 'mobile' : 'desktop', 'v' . $version ];
         return implode(':', $key_parts);
+    }
+
+    private function get_site_cache_version() {
+        if ($this->site_cache_version !== null) {
+            return (int) $this->site_cache_version;
+        }
+        $version = 0;
+        try { $version = (int) wp_cache_get('site_version', 'version'); } catch (\Throwable $t) { $version = 0; }
+        $this->site_cache_version = $version;
+        return $version;
     }
 
     /**
@@ -1085,7 +1273,7 @@ class AceRedisCache {
      * @return string
      */
     private function build_page_cache_core_key($path, $scheme, $device, $version = null) {
-        if ($version === null) { try { $version = (int) wp_cache_get('site_version', 'version'); } catch (\Throwable $t) { $version = 0; } }
+        if ($version === null) { $version = $this->get_site_cache_version(); }
         return implode(':', ['page_cache', $path ?: '/', $scheme, $device, 'v' . (int)$version]);
     }
 
@@ -1237,6 +1425,7 @@ class AceRedisCache {
 
     /**
      * Hook: save_post (and similar) – decide whether to invalidate page cache.
+     * ALWAYS defer transient flushes to background/shutdown to prevent editorial blocking.
      */
     public function maybe_invalidate_post_page_cache($post_id, $post, $update) {
         if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
@@ -1249,7 +1438,7 @@ class AceRedisCache {
             return;
         }
         $this->invalidate_post_page_cache($post_id, true);
-        $this->maybe_flush_post_transients($post_id, $post->post_type);
+        $this->enqueue_deferred_post($post_id, ['transients'=>true]);
         $this->maybe_invalidate_related_archive_page_cache($post_id, $post);
     }
 
@@ -1265,7 +1454,7 @@ class AceRedisCache {
                 return;
             }
             $this->invalidate_post_page_cache($post_id, false); // no priming for deleted
-            $this->maybe_flush_post_transients($post_id, $post->post_type);
+            $this->enqueue_deferred_post($post_id, ['transients'=>true]);
             $this->maybe_invalidate_related_archive_page_cache($post_id, $post, false);
         }
     }
@@ -1286,7 +1475,7 @@ class AceRedisCache {
                     return;
                 }
                 $this->invalidate_post_page_cache($post->ID, true);
-                $this->maybe_flush_post_transients($post->ID, $post->post_type);
+                $this->enqueue_deferred_post($post->ID, ['transients'=>true]);
                 $this->maybe_invalidate_related_archive_page_cache($post->ID, $post);
             }
         }
@@ -1524,76 +1713,43 @@ class AceRedisCache {
             return 0;
         }
         
-        $post_id = (int)$post_id; if ($post_id <= 0) return;
-        // Allow developers to short-circuit or supply additional patterns
-        $default_patterns = [
-            'transient:_transient_timeout_%d_*', // safety (WordPress internal timeouts) though we will convert to raw key forms
-            'transient:%d:*',                    // generic id prefix
-            'transient:post_%d_*',
-            'transient:post-%d-*',
-            'transient:wp_rest_cache_*_%d*',     // typical REST cache patterns
-            'transient:acf_field_group_location_*_%d*',
-            'transient:related_posts_%d*',
-            'transient:seo_meta_%d*',
-            'transient:query_%d_*',
-            'transient:loop_%d_*',
-            // Third-party plugin patterns
-            'transient:wpseo_permalink_slug_%d',      // Yoast SEO permalink cache
-            'transient:wpseo_sitemap_*_%d*',          // Yoast SEO sitemap cache
-            'transient:wpseo_meta_%d*',               // Yoast SEO meta cache
-            'transient:rank_math_permalink_%d',       // RankMath permalink cache
-            'transient:rank_math_seo_%d*',           // RankMath SEO cache
-            'transient:jetpack_related_posts_%d*',   // Jetpack related posts
-            'transient:jetpack_stats_%d*',           // Jetpack stats
-            'transient:jetpack_sharing_%d*',         // Jetpack sharing
-            'transient:post_link_%d*',               // Generic post link cache
-            'transient:get_permalink_%d*',           // Permalink cache
-            'transient:acf_post_%d*',                // ACF post cache
-            'transient:acf_fields_%d*',              // ACF fields cache
-            'transient:elementor_post_%d*',          // Elementor post cache
-            'transient:wp_rocket_post_%d*',          // WP Rocket post cache
-            'transient:litespeed_post_%d*',          // LiteSpeed post cache
-        ];
-        $patterns = apply_filters('ace_rc_post_transient_patterns', $default_patterns, $post_id, $post_type, $this->settings);
+        $post_id = (int)$post_id; if ($post_id <= 0) return 0;
+        $compiled_patterns = $this->compile_batched_transient_patterns($post_id);
+        if (empty($compiled_patterns)) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf('Ace-Redis-Cache: no transient patterns for post_id=%d', $post_id));
+            }
+            return 0;
+        }
         $redis = $this->cache_manager ? $this->cache_manager : null;
         if (!$redis) return 0;
-        $conn = $this->cache_manager; // reuse manager scan API
         $to_delete = [];
         $use_object_cache = wp_using_ext_object_cache();
-        $augmented_patterns = [];
+        $scan_count = 0;
+        foreach ($compiled_patterns as $pattern) {
+            $keys = $this->cache_manager->scan_keys($pattern);
+            if (!empty($keys)) {
+                $to_delete = array_merge($to_delete, $keys);
+                $scan_count++;
+            }
+        }
         if ($use_object_cache) {
-            // When an external object cache (our drop-in) is active, WordPress core stores transients
-            // using the object cache groups 'transient' and 'site-transient'. Our targeted patterns
-            // above assume the plugin-managed direct key style (transient:NAME). Here we augment the
-            // pattern list to also cover object cache key forms so we actually match and purge them.
-            // Drop-in key schema: ace:(g:|<blog_id>:)<group>:<key>
-            $blog_id = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
-            $blog_prefix_pattern = (is_multisite() ? $blog_id : '1') . ':'; // we allow wildcard later for safety
-            foreach ($patterns as $p) {
-                if (!is_string($p)) continue;
-                // Base plugin pattern stays as-is
-                $augmented_patterns[] = $p;
-                if (str_starts_with($p, 'transient:')) {
-                    // Replace leading 'transient:' with object cache key prefix. Blog prefix can vary, so allow wildcard on it.
-                    $suffix = substr($p, strlen('transient:'));
-                    $augmented_patterns[] = 'ace:*:transient:' . $suffix; // wildcard blog id (covers 1: and multisite ids)
-                } elseif (str_starts_with($p, 'site_transient:')) {
-                    $suffix = substr($p, strlen('site_transient:'));
-                    $augmented_patterns[] = 'ace:g:site-transient:' . $suffix; // global scope
+            $obj_patterns = [
+                'ace:*:transient:%d:*',
+                'ace:*:transient:post_%d_*',
+                'ace:*:transient:post-%d-*',
+                'ace:g:site-transient:post_%d_*',
+            ];
+            foreach ($obj_patterns as $pattern) {
+                $keys = $this->cache_manager->scan_keys(sprintf($pattern, $post_id));
+                if (!empty($keys)) {
+                    $to_delete = array_merge($to_delete, $keys);
+                    $scan_count++;
                 }
             }
-        } else {
-            $augmented_patterns = $patterns; // no external object cache; plugin-managed format only
         }
-        foreach ($augmented_patterns as $pat) {
-            if (!is_string($pat) || strpos($pat, '%d') === false) continue;
-            $redis_pattern = sprintf($pat, $post_id);
-            $redis_pattern = str_replace('::', ':', $redis_pattern);
-            $keys = $this->cache_manager->scan_keys($redis_pattern);
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log(sprintf('Ace-Redis-Cache: transient-scan pattern=%s found=%d (object_cache=%s)', $redis_pattern, is_array($keys)?count($keys):0, $use_object_cache?'yes':'no'));
-            }
-            if (!empty($keys)) { $to_delete = array_merge($to_delete, $keys); }
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log(sprintf('Ace-Redis-Cache: transient-batch-scan post_id=%d scans=%d keys_found=%d', $post_id, $scan_count, count($to_delete)));
         }
         $to_delete = array_unique($to_delete);
         if (!empty($to_delete)) {
@@ -1699,6 +1855,48 @@ class AceRedisCache {
         foreach ($markers as $m) { if (strpos($html, $m) !== false) { $found++; if ($found >= $need) break; } }
         $result = ($found >= $need);
         return apply_filters('ace_rc_style_asset_complete', $result, $found, $markers, $html);
+    }
+
+    private function compile_batched_transient_patterns($post_id) {
+        $post_id = (int)$post_id;
+        if ($post_id <= 0) return [];
+
+        $default_patterns = [
+            'transient:_transient_timeout_%d_*',
+            'transient:%d:*',
+            'transient:post_%d_*',
+            'transient:post-%d-*',
+            'transient:wp_rest_cache_*_%d*',
+            'transient:acf_field_group_location_*_%d*',
+            'transient:related_posts_%d*',
+            'transient:seo_meta_%d*',
+            'transient:query_%d_*',
+            'transient:loop_%d_*',
+            'transient:wpseo_permalink_slug_%d',
+            'transient:wpseo_sitemap_*_%d*',
+            'transient:wpseo_meta_%d*',
+            'transient:rank_math_permalink_%d',
+            'transient:rank_math_seo_%d*',
+            'transient:jetpack_related_posts_%d*',
+            'transient:jetpack_stats_%d*',
+            'transient:jetpack_sharing_%d*',
+            'transient:post_link_%d*',
+            'transient:get_permalink_%d*',
+            'transient:acf_post_%d*',
+            'transient:acf_fields_%d*',
+            'transient:elementor_post_%d*',
+            'transient:wp_rocket_post_%d*',
+            'transient:litespeed_post_%d*',
+        ];
+
+        $patterns = apply_filters('ace_rc_post_transient_patterns', $default_patterns, $post_id, '', $this->settings);
+        $compiled = [];
+        foreach ($patterns as $pattern) {
+            if (!is_string($pattern) || strpos($pattern, '%d') === false) continue;
+            $compiled[] = sprintf($pattern, $post_id);
+        }
+
+        return array_unique($compiled);
     }
 
     /* ============================= Post-Save Option Priming ============================= */
@@ -1995,6 +2193,7 @@ class AceRedisCache {
                 'custom_cache_exclusions' => '',
                 'custom_transient_exclusions' => '',
                 'custom_content_exclusions' => '',
+                'exclude_sitemaps' => 0,
                 'enable_page_cache' => 1,
                 'enable_object_cache' => 0,
                 'ttl_page' => 3600,
@@ -2005,6 +2204,12 @@ class AceRedisCache {
                 'enable_dynamic_microcache' => 0,
                 'dynamic_microcache_ttl' => 10,
                 'enable_opcache_helpers' => 0,
+                'enable_static_asset_cache' => 0,
+                'static_asset_cache_ttl' => 604800,
+                'enable_asset_proxy_cache' => 0,
+                'asset_proxy_cache_ttl' => 604800,
+                'manage_static_cache_via_htaccess' => 0,
+                'prefer_existing_static_cache_headers' => 1,
             ];
             add_option('ace_redis_cache_settings', $defaults, '', 'no');
             if (function_exists('wp_cache_delete')) {
@@ -2085,6 +2290,144 @@ class AceRedisCache {
                 error_log('Ace-Redis-Cache drop-in management error: ' . $e->getMessage());
             }
         }
+
+        try {
+            $this->maybe_manage_static_cache_htaccess();
+        } catch (\Exception $e) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache .htaccess management error: ' . $e->getMessage());
+            }
+        }
+    }
+
+    private function maybe_manage_static_cache_htaccess() {
+        $static_enabled = !empty($this->settings['enable_static_asset_cache']);
+        $manage_htaccess = !empty($this->settings['manage_static_cache_via_htaccess']);
+        $prefer_existing = !empty($this->settings['prefer_existing_static_cache_headers']);
+
+        $htaccess_path = $this->get_site_root_htaccess_path();
+        if (!$htaccess_path) {
+            return;
+        }
+
+        $ttl = isset($this->settings['static_asset_cache_ttl']) ? (int) $this->settings['static_asset_cache_ttl'] : 604800;
+        if ($ttl < 86400) { $ttl = 86400; }
+        if ($ttl > 31536000) { $ttl = 31536000; }
+
+        if (!$static_enabled || !$manage_htaccess) {
+            $this->remove_managed_static_cache_block($htaccess_path);
+            return;
+        }
+
+        if ($prefer_existing && $this->detect_existing_static_cache_headers($ttl)) {
+            $this->remove_managed_static_cache_block($htaccess_path);
+            return;
+        }
+
+        $this->upsert_managed_static_cache_block($htaccess_path, $ttl);
+    }
+
+    private function get_site_root_htaccess_path() {
+        $site_root = rtrim(dirname(ABSPATH), '/');
+        if ($site_root === '') {
+            return null;
+        }
+        return $site_root . '/.htaccess';
+    }
+
+    private function get_managed_static_cache_block($ttl) {
+        $ttl = (int) $ttl;
+        return "# BEGIN Ace Redis Cache Static Assets\n"
+            . "<IfModule mod_headers.c>\n"
+            . "  <FilesMatch \"\\.(?:png|jpe?g|gif|webp|avif|svg|ico|css|js|mjs|woff2?|ttf|eot|otf|json|map)\\$\">\n"
+            . "    Header set Cache-Control \"public, max-age={$ttl}, immutable\"\n"
+            . "  </FilesMatch>\n"
+            . "</IfModule>\n"
+            . "<IfModule mod_expires.c>\n"
+            . "  ExpiresActive On\n"
+            . "  ExpiresDefault \"access plus {$ttl} seconds\"\n"
+            . "</IfModule>\n"
+            . "# END Ace Redis Cache Static Assets";
+    }
+
+    private function remove_managed_static_cache_block($htaccess_path) {
+        if (!file_exists($htaccess_path) || !is_readable($htaccess_path) || !is_writable($htaccess_path)) {
+            return;
+        }
+
+        $current = (string) file_get_contents($htaccess_path);
+        $updated = preg_replace('/\n?# BEGIN Ace Redis Cache Static Assets.*?# END Ace Redis Cache Static Assets\n?/s', "\n", $current);
+        if ($updated !== null && $updated !== $current) {
+            file_put_contents($htaccess_path, trim($updated) . "\n", LOCK_EX);
+        }
+    }
+
+    private function upsert_managed_static_cache_block($htaccess_path, $ttl) {
+        $block = $this->get_managed_static_cache_block($ttl);
+
+        if (!file_exists($htaccess_path)) {
+            $dir = dirname($htaccess_path);
+            if (!is_dir($dir) || !is_writable($dir)) {
+                return;
+            }
+            file_put_contents($htaccess_path, $block . "\n", LOCK_EX);
+            return;
+        }
+
+        if (!is_readable($htaccess_path) || !is_writable($htaccess_path)) {
+            return;
+        }
+
+        $current = (string) file_get_contents($htaccess_path);
+        $stripped = preg_replace('/\n?# BEGIN Ace Redis Cache Static Assets.*?# END Ace Redis Cache Static Assets\n?/s', "\n", $current);
+
+        if ($stripped === null) {
+            return;
+        }
+
+        $new_content = rtrim($stripped) . "\n\n" . $block . "\n";
+        if ($new_content !== $current) {
+            file_put_contents($htaccess_path, $new_content, LOCK_EX);
+        }
+    }
+
+    private function detect_existing_static_cache_headers($ttl) {
+        if (!function_exists('wp_remote_head')) {
+            return false;
+        }
+
+        $probe_candidates = array_filter(array_unique([
+            get_stylesheet_uri(),
+            trailingslashit(get_template_directory_uri()) . 'style.css',
+            includes_url('css/dashicons.min.css'),
+        ]));
+
+        foreach ($probe_candidates as $probe_url) {
+            $response = wp_remote_head(add_query_arg('ace_rc_probe', (string) time(), $probe_url), [
+                'timeout' => 4,
+                'redirection' => 2,
+                'sslverify' => true,
+            ]);
+
+            if (is_wp_error($response)) {
+                continue;
+            }
+
+            $cache_control = wp_remote_retrieve_header($response, 'cache-control');
+            if (!is_string($cache_control) || $cache_control === '') {
+                continue;
+            }
+
+            if (strpos(strtolower($cache_control), 'immutable') !== false) {
+                return true;
+            }
+
+            if (preg_match('/max-age=(\d+)/i', $cache_control, $m)) {
+                return ((int) $m[1]) >= (int) $ttl;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2317,6 +2660,184 @@ class AceRedisCache {
         return $this->redis_connection;
     }
 
+    public function maybe_serve_asset_proxy_request() {
+        $asset = isset($_GET['ace_rc_asset']) ? wp_unslash((string) $_GET['ace_rc_asset']) : '';
+        if ($asset === '') {
+            return;
+        }
+
+        $redirect_target = $this->normalize_same_origin_asset_url($asset);
+        if (!$redirect_target) {
+            status_header(404);
+            exit;
+        }
+
+        wp_safe_redirect($redirect_target, 302);
+        exit;
+    }
+
+    private function rewrite_image_urls_for_cache_busting($content) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_string($content) || $content === '') {
+            return $content;
+        }
+
+        if (!preg_match('/\.(?:png|jpe?g|gif|webp|avif|svg|ico)(?:\?(?:[^"\'\s>]+))?/i', $content)) {
+            return $content;
+        }
+
+        $content = preg_replace_callback('/\b(src|href)=(["\'])([^"\']+)\2/i', function ($matches) {
+            $versioned = $this->build_image_cache_busted_url($matches[3]);
+            if ($versioned === null) {
+                return $matches[0];
+            }
+            return $matches[1] . '=' . $matches[2] . esc_url($versioned) . $matches[2];
+        }, $content);
+
+        $content = preg_replace_callback('/\bsrcset=(["\'])([^"\']+)\1/i', function ($matches) {
+            $entries = array_map('trim', explode(',', $matches[2]));
+            $rewritten = [];
+            foreach ($entries as $entry) {
+                if ($entry === '') {
+                    continue;
+                }
+                $parts = preg_split('/\s+/', $entry, 2);
+                $url = $parts[0] ?? '';
+                $descriptor = $parts[1] ?? '';
+                $versioned = $this->build_image_cache_busted_url($url);
+                $rewritten[] = ($versioned ?: $url) . ($descriptor !== '' ? ' ' . $descriptor : '');
+            }
+            return 'srcset=' . $matches[1] . implode(', ', $rewritten) . $matches[1];
+        }, $content);
+
+        return $content;
+    }
+
+    private function build_image_cache_busted_url($url) {
+        if (!is_string($url) || $url === '' || str_starts_with($url, 'data:')) {
+            return null;
+        }
+
+        $resolved = $this->resolve_asset_proxy_file($url);
+        if (!$resolved) {
+            return null;
+        }
+
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        if ($path === '' || !preg_match('/\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i', $path)) {
+            return null;
+        }
+
+        $versioned = $this->append_static_asset_version($url);
+        return is_string($versioned) && $versioned !== '' ? $versioned : null;
+    }
+
+    private function normalize_same_origin_asset_url($asset) {
+        $asset = trim(rawurldecode($asset));
+        if ($asset === '') {
+            return null;
+        }
+
+        $home_host = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        $path = (string) parse_url($asset, PHP_URL_PATH);
+        if ($path === '') {
+            return null;
+        }
+
+        if (preg_match('#^https?://#i', $asset)) {
+            $asset_host = (string) parse_url($asset, PHP_URL_HOST);
+            if ($asset_host === '' || strcasecmp($asset_host, $home_host) !== 0) {
+                return null;
+            }
+            return $asset;
+        }
+
+        if (!str_starts_with($asset, '/')) {
+            return null;
+        }
+
+        return home_url($asset);
+    }
+
+    private function resolve_asset_proxy_file($asset) {
+        $asset = rawurldecode(trim($asset));
+        $path = (string) parse_url($asset, PHP_URL_PATH);
+        if ($path === '') {
+            return null;
+        }
+
+        $home_host = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        if (preg_match('#^https?://#i', $asset)) {
+            $asset_host = (string) parse_url($asset, PHP_URL_HOST);
+            if ($asset_host === '' || strcasecmp($asset_host, $home_host) !== 0) {
+                return null;
+            }
+        }
+
+        if (!preg_match('/\.(?:png|jpe?g|gif|webp|avif|svg|woff2?|ttf|eot|otf|ico)$/i', $path)) {
+            return null;
+        }
+
+        $root = rtrim(dirname(ABSPATH), '/');
+        $core = rtrim(ABSPATH, '/');
+        $candidates = [];
+
+        if (str_starts_with($path, '/assets/') || str_starts_with($path, '/core/')) {
+            $candidates[] = $root . $path;
+        }
+        if (str_starts_with($path, '/wp-includes/') || str_starts_with($path, '/wp-admin/') || str_starts_with($path, '/wp-content/')) {
+            $candidates[] = $core . $path;
+        }
+        $candidates[] = $root . $path;
+
+        foreach (array_unique($candidates) as $candidate) {
+            $real = realpath($candidate);
+            if ($real && is_file($real) && (str_starts_with($real, $root . '/') || $real === $root)) {
+                $mime = $this->get_asset_proxy_mime_type($real);
+                return [
+                    'file' => $real,
+                    'mime' => $mime,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    private function get_asset_proxy_mime_type($file) {
+        $ext = strtolower((string) pathinfo($file, PATHINFO_EXTENSION));
+        $map = [
+            'css' => 'text/css',
+            'js' => 'application/javascript',
+            'mjs' => 'application/javascript',
+            'json' => 'application/json',
+            'map' => 'application/json',
+            'png' => 'image/png',
+            'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'gif' => 'image/gif',
+            'webp' => 'image/webp',
+            'avif' => 'image/avif',
+            'svg' => 'image/svg+xml',
+            'ico' => 'image/x-icon',
+            'woff' => 'font/woff',
+            'woff2' => 'font/woff2',
+            'ttf' => 'font/ttf',
+            'otf' => 'font/otf',
+            'eot' => 'application/vnd.ms-fontobject',
+        ];
+
+        if (isset($map[$ext])) {
+            return $map[$ext];
+        }
+
+        $ft = wp_check_filetype($file);
+        if (!empty($ft['type'])) {
+            return $ft['type'];
+        }
+
+        return 'application/octet-stream';
+    }
+
     /**
      * Add long-lived Cache-Control headers to static assets when enabled.
      * @param array $headers
@@ -2340,6 +2861,108 @@ class AceRedisCache {
         $headers['Cache-Control'] = 'public, max-age=' . $ttl . ', immutable';
         $headers['Expires'] = gmdate('D, d M Y H:i:s', time() + $ttl) . ' GMT';
         return $headers;
+    }
+
+    public function version_attachment_url($url, $attachment_id) {
+        if (empty($this->settings['enable_static_asset_cache'])) {
+            return $url;
+        }
+        return $this->append_static_asset_version($url);
+    }
+
+    public function version_attachment_image_attributes($attr, $attachment, $size) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($attr)) {
+            return $attr;
+        }
+
+        if (!empty($attr['src'])) {
+            $attr['src'] = $this->append_static_asset_version($attr['src']);
+        }
+
+        if (!empty($attr['srcset']) && is_string($attr['srcset'])) {
+            $entries = array_map('trim', explode(',', $attr['srcset']));
+            $rebuilt = [];
+            foreach ($entries as $entry) {
+                if ($entry === '') {
+                    continue;
+                }
+                $parts = preg_split('/\s+/', $entry, 2);
+                $candidate_url = $parts[0] ?? '';
+                $descriptor = $parts[1] ?? '';
+                $candidate_url = $this->append_static_asset_version($candidate_url);
+                $rebuilt[] = $candidate_url . ($descriptor !== '' ? ' ' . $descriptor : '');
+            }
+
+            if (!empty($rebuilt)) {
+                $attr['srcset'] = implode(', ', $rebuilt);
+            }
+        }
+
+        return $attr;
+    }
+
+    public function version_attachment_image_src($image, $attachment_id, $size, $icon) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($image) || empty($image[0])) {
+            return $image;
+        }
+
+        $image[0] = $this->append_static_asset_version($image[0]);
+        return $image;
+    }
+
+    public function version_post_thumbnail_url($url, $post, $size) {
+        if (empty($this->settings['enable_static_asset_cache'])) {
+            return $url;
+        }
+        return $this->append_static_asset_version($url);
+    }
+
+    public function version_image_srcset_sources($sources, $size_array, $image_src, $image_meta, $attachment_id) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($sources)) {
+            return $sources;
+        }
+
+        foreach ($sources as $width => $source) {
+            if (empty($source['url']) || !is_string($source['url'])) {
+                continue;
+            }
+            $sources[$width]['url'] = $this->append_static_asset_version($source['url']);
+        }
+
+        return $sources;
+    }
+
+    public function version_avatar_url($url, $id_or_email, $args) {
+        if (empty($this->settings['enable_static_asset_cache'])) {
+            return $url;
+        }
+        return $this->append_static_asset_version($url);
+    }
+
+    public function version_enqueued_asset_url($src, $handle) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_string($src) || $src === '') {
+            return $src;
+        }
+        return $this->append_static_asset_version($src);
+    }
+
+    private function append_static_asset_version($url) {
+        if (!is_string($url) || $url === '' || str_starts_with($url, 'data:')) {
+            return $url;
+        }
+
+        $resolved = $this->resolve_asset_proxy_file($url);
+        if (!$resolved || empty($resolved['file']) || !is_file($resolved['file'])) {
+            return $url;
+        }
+
+        $mtime = @filemtime($resolved['file']);
+        if (!$mtime) {
+            return $url;
+        }
+
+        $base = remove_query_arg('acev', $url);
+        return add_query_arg('acev', (string) $mtime, $base);
     }
 
     /**

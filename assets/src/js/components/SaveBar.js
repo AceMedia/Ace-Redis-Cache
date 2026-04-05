@@ -49,6 +49,7 @@ class SaveBar {
         this.elapsedTime = 0;
         this.intervalId = null;
         this.originalFormData = null;
+        this.channel = null;
 
         this.init();
     }
@@ -57,10 +58,27 @@ class SaveBar {
         if (this.isInitialized) return;
         
         this.createSaveBar();
+        this.setupBroadcastChannel();
         this.setupEventListeners();
         this.captureOriginalFormData();
         this.updateSaveButtonState();
         this.isInitialized = true;
+    }
+
+    setupBroadcastChannel() {
+        try {
+            this.channel = new BroadcastChannel('ace_redis_settings');
+            this.channel.onmessage = (event) => {
+                const payload = event?.data;
+                if (!payload || payload.type !== 'settings_saved' || !payload.settings) {
+                    return;
+                }
+
+                this.applyServerSettings(payload.settings);
+            };
+        } catch (error) {
+            this.channel = null;
+        }
     }
 
     createSaveBar() {
@@ -128,6 +146,12 @@ class SaveBar {
             }
         });
 
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                this.syncFromServer();
+            }
+        });
+
         // WordPress admin menu resize handling
         if (window.wp && wp.hooks) {
             wp.hooks.addAction('wp-collapse-menu', 'ace-redis-cache', () => {
@@ -192,7 +216,7 @@ class SaveBar {
             if (hasChanges) {
                 this.startElapsedTimeTracking();
                 // Auto-save immediately when changes are detected (if enabled)
-                if (this.isAutoSaveEnabled) {
+                if (this.isAutoSaveEnabled && document.visibilityState === 'visible') {
                     setTimeout(() => this.handleAutoSave(), 500); // Small delay to avoid rapid saves
                 }
             } else {
@@ -231,20 +255,29 @@ class SaveBar {
         this.setSaving(true);
         
         try {
-            let success = false;
+            let saveResult = false;
             
             if (this.options.onSave && typeof this.options.onSave === 'function') {
-                success = await this.options.onSave();
+                saveResult = await this.options.onSave();
             } else {
                 // Default save logic - trigger the original form save
-                success = await this.defaultSave();
+                saveResult = await this.defaultSave();
             }
+
+            const success = !!saveResult;
+            const persistedSettings = (saveResult && typeof saveResult === 'object' && saveResult.settings) ? saveResult.settings : null;
 
             if (success) {
                 this.showMessage('Settings saved successfully!', 'success');
                 this.setSuccess(true);
-                this.captureOriginalFormData();
-                this.setUnsavedChanges(false);
+                if (persistedSettings) {
+                    this.applyServerSettings(persistedSettings);
+                    this.notifySavedSettings(persistedSettings);
+                } else {
+                    this.captureOriginalFormData();
+                    this.setUnsavedChanges(false);
+                    this.notifySavedSettings(this.originalFormData);
+                }
                 
                 // Clear success state after 3 seconds
                 setTimeout(() => this.setSuccess(false), 3000);
@@ -260,24 +293,33 @@ class SaveBar {
     }
 
     async handleAutoSave() {
-        if (!this.hasUnsavedChanges || this.isSaving) return;
+        if (!this.hasUnsavedChanges || this.isSaving || document.visibilityState !== 'visible') return;
 
         console.log('[SaveBar] Auto-saving changes...');
         this.showMessage('Auto-saving...', 'info');
 
         try {
-            let success = false;
+            let saveResult = false;
             
             if (this.options.onSave && typeof this.options.onSave === 'function') {
-                success = await this.options.onSave();
+                saveResult = await this.options.onSave();
             } else {
-                success = await this.defaultSave();
+                saveResult = await this.defaultSave();
             }
+
+            const success = !!saveResult;
+            const persistedSettings = (saveResult && typeof saveResult === 'object' && saveResult.settings) ? saveResult.settings : null;
 
             if (success) {
                 this.showMessage('Changes auto-saved!', 'success');
-                this.captureOriginalFormData();
-                this.setUnsavedChanges(false);
+                if (persistedSettings) {
+                    this.applyServerSettings(persistedSettings);
+                    this.notifySavedSettings(persistedSettings);
+                } else {
+                    this.captureOriginalFormData();
+                    this.setUnsavedChanges(false);
+                    this.notifySavedSettings(this.originalFormData);
+                }
             } else {
                 this.showMessage('Auto-save failed', 'error');
             }
@@ -303,13 +345,94 @@ class SaveBar {
                     nonce: ace_redis_admin.nonce
                 },
                 success: (response) => {
-                    resolve(response.success === true);
+                    if (response && response.success === true) {
+                        resolve(response.data || true);
+                        return;
+                    }
+                    resolve(false);
                 },
                 error: () => {
                     resolve(false);
                 }
             });
         });
+    }
+
+    async syncFromServer() {
+        if (typeof ace_redis_admin === 'undefined' || !ace_redis_admin.rest_url) {
+            return;
+        }
+
+        const preserveLocalChanges = this.hasUnsavedChanges;
+
+        try {
+            const response = await fetch(`${ace_redis_admin.rest_url}ace-redis-cache/v1/settings`, {
+                method: 'GET',
+                headers: {
+                    'X-WP-Nonce': ace_redis_admin.rest_nonce,
+                },
+                credentials: 'same-origin',
+            });
+
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = await response.json();
+            if (!payload || payload.success !== true || !payload.data || !payload.data.settings) {
+                return;
+            }
+
+            this.applyServerSettings(payload.data.settings, { preserveLocalChanges });
+        } catch (error) {
+            // Non-fatal sync failure.
+        }
+    }
+
+    applyServerSettings(settings, options = {}) {
+        if (!settings || typeof settings !== 'object') {
+            return;
+        }
+
+        const preserveLocalChanges = !!options.preserveLocalChanges;
+
+        if (!preserveLocalChanges) {
+            const $form = $(this.options.containerSelector);
+            Object.entries(settings).forEach(([key, value]) => {
+                const fieldName = `ace_redis_cache_settings[${key}]`;
+                const $fields = $form.find(`[name="${fieldName}"]`);
+                if (!$fields.length) {
+                    return;
+                }
+
+                $fields.each(function applyValue() {
+                    const $field = $(this);
+                    if ($field.is(':checkbox')) {
+                        $field.prop('checked', value === 1 || value === '1' || value === true);
+                    } else {
+                        $field.val(value ?? '');
+                    }
+                });
+            });
+        }
+
+        this.originalFormData = { ...settings };
+        this.checkForChanges();
+    }
+
+    notifySavedSettings(settings) {
+        if (!this.channel || !settings || typeof settings !== 'object') {
+            return;
+        }
+
+        try {
+            this.channel.postMessage({
+                type: 'settings_saved',
+                settings,
+            });
+        } catch (error) {
+            // Ignore BroadcastChannel failures.
+        }
     }
 
     setSaving(isSaving) {
@@ -426,6 +549,15 @@ class SaveBar {
         $(document).off('change', '#auto-save-toggle');
         $(window).off('resize scroll load');
         $(window).off('beforeunload');
+
+        if (this.channel) {
+            try {
+                this.channel.close();
+            } catch (error) {
+                // ignore
+            }
+            this.channel = null;
+        }
 
         // Remove SaveBar from DOM
         $('.ace-redis-save-bar').remove();

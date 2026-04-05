@@ -292,7 +292,10 @@ class AdminAjax {
      * @return array|false Validated settings or false on error
      */
     private function validate_settings($settings) {
-        $validated = [];
+        $validated = get_option('ace_redis_cache_settings', []);
+        if (!is_array($validated)) {
+            $validated = [];
+        }
         
         // Redis connection settings
         $validated['host'] = sanitize_text_field($settings['host'] ?? '127.0.0.1');
@@ -301,26 +304,59 @@ class AdminAjax {
         $validated['ttl'] = absint($settings['ttl'] ?? 3600);
         
         // Boolean settings - match form field names
-        $validated['enabled'] = !empty($settings['enabled']);
-    $validated['enable_compression'] = !empty($settings['enable_compression']);
-    $method = sanitize_text_field($settings['compression_method'] ?? 'brotli');
-    $validated['compression_method'] = in_array($method, ['brotli','gzip']) ? $method : 'brotli';
-        $validated['enable_tls'] = !empty($settings['enable_tls']);
-        $validated['enable_block_caching'] = !empty($settings['enable_block_caching']);
-        $validated['enable_minification'] = !empty($settings['enable_minification']);
-        $validated['debug_mode'] = !empty($settings['debug_mode']);
-        $validated['exclude_basic_blocks'] = !empty($settings['exclude_basic_blocks']);
+        $validated['enabled'] = !empty($settings['enabled']) ? 1 : 0;
+        $validated['enable_page_cache'] = !empty($settings['enable_page_cache']) ? 1 : 0;
+        $validated['enable_object_cache'] = !empty($settings['enable_object_cache']) ? 1 : 0;
+        $validated['enable_transient_cache'] = !empty($settings['enable_transient_cache']) ? 1 : 0;
+        $validated['enable_compression'] = !empty($settings['enable_compression']) ? 1 : 0;
+        $validated['enable_minification'] = !empty($settings['enable_minification']) ? 1 : 0;
+        $validated['enable_tls'] = !empty($settings['enable_tls']) ? 1 : 0;
+        $validated['enable_block_caching'] = !empty($settings['enable_block_caching']) ? 1 : 0;
+        $validated['enable_browser_cache_headers'] = !empty($settings['enable_browser_cache_headers']) ? 1 : 0;
+        $validated['send_cache_meta_headers'] = !empty($settings['send_cache_meta_headers']) ? 1 : 0;
+        $validated['enable_static_asset_cache'] = !empty($settings['enable_static_asset_cache']) ? 1 : 0;
+        $validated['enable_asset_proxy_cache'] = !empty($settings['enable_asset_proxy_cache']) ? 1 : 0;
+        $validated['manage_static_cache_via_htaccess'] = !empty($settings['manage_static_cache_via_htaccess']) ? 1 : 0;
+        $validated['prefer_existing_static_cache_headers'] = !empty($settings['prefer_existing_static_cache_headers']) ? 1 : 0;
+        $validated['enable_dynamic_microcache'] = !empty($settings['enable_dynamic_microcache']) ? 1 : 0;
+        $validated['enable_opcache_helpers'] = !empty($settings['enable_opcache_helpers']) ? 1 : 0;
+        $validated['dynamic_excluded_blocks'] = !empty($settings['dynamic_excluded_blocks']) ? 1 : 0;
+        $validated['exclude_sitemaps'] = !empty($settings['exclude_sitemaps']) ? 1 : 0;
+        $validated['debug_mode'] = !empty($settings['debug_mode']) ? 1 : 0;
+        $validated['exclude_basic_blocks'] = !empty($settings['exclude_basic_blocks']) ? 1 : 0;
+
+        $method = sanitize_text_field($settings['compression_method'] ?? 'brotli');
+        $validated['compression_method'] = in_array($method, ['brotli','gzip'], true) ? $method : 'brotli';
+
+        $validated['ttl_page'] = max(60, absint($settings['ttl_page'] ?? ($validated['ttl_page'] ?? 3600)));
+        $validated['ttl_object'] = max(60, absint($settings['ttl_object'] ?? ($validated['ttl_object'] ?? 3600)));
+        $validated['browser_cache_max_age'] = max(60, absint($settings['browser_cache_max_age'] ?? ($validated['browser_cache_max_age'] ?? 3600)));
+
+        $static_ttl = absint($settings['static_asset_cache_ttl'] ?? ($validated['static_asset_cache_ttl'] ?? 604800));
+        if ($static_ttl < 86400) { $static_ttl = 86400; }
+        if ($static_ttl > 31536000) { $static_ttl = 31536000; }
+        $validated['static_asset_cache_ttl'] = $static_ttl;
+
+        $proxy_ttl = absint($settings['asset_proxy_cache_ttl'] ?? ($validated['asset_proxy_cache_ttl'] ?? 604800));
+        if ($proxy_ttl < 86400) { $proxy_ttl = 86400; }
+        if ($proxy_ttl > 31536000) { $proxy_ttl = 31536000; }
+        $validated['asset_proxy_cache_ttl'] = $proxy_ttl;
+
+        $validated['dynamic_microcache_ttl'] = max(1, min(3600, absint($settings['dynamic_microcache_ttl'] ?? ($validated['dynamic_microcache_ttl'] ?? 10))));
         
         // Cache mode - match form field name
         $cache_mode = sanitize_text_field($settings['mode'] ?? 'full');
         $validated['mode'] = in_array($cache_mode, ['full', 'object']) ? $cache_mode : 'full';
         
         // Exclusions
-        $validated['exclude_pages'] = sanitize_textarea_field($settings['exclude_pages'] ?? '');
-        $validated['exclude_posts'] = sanitize_textarea_field($settings['exclude_posts'] ?? '');
-        $validated['exclude_urls'] = sanitize_textarea_field($settings['exclude_urls'] ?? '');
-        $validated['exclude_user_agents'] = sanitize_textarea_field($settings['exclude_user_agents'] ?? '');
-    $validated['excluded_blocks'] = sanitize_textarea_field($settings['excluded_blocks'] ?? '');
+        $validated['exclude_pages'] = sanitize_textarea_field($settings['exclude_pages'] ?? ($validated['exclude_pages'] ?? ''));
+        $validated['exclude_posts'] = sanitize_textarea_field($settings['exclude_posts'] ?? ($validated['exclude_posts'] ?? ''));
+        $validated['exclude_urls'] = sanitize_textarea_field($settings['exclude_urls'] ?? ($validated['exclude_urls'] ?? ''));
+        $validated['exclude_user_agents'] = sanitize_textarea_field($settings['exclude_user_agents'] ?? ($validated['exclude_user_agents'] ?? ''));
+        $validated['excluded_blocks'] = sanitize_textarea_field($settings['excluded_blocks'] ?? ($validated['excluded_blocks'] ?? ''));
+        $validated['custom_cache_exclusions'] = sanitize_textarea_field($settings['custom_cache_exclusions'] ?? ($validated['custom_cache_exclusions'] ?? ''));
+        $validated['custom_transient_exclusions'] = sanitize_textarea_field($settings['custom_transient_exclusions'] ?? ($validated['custom_transient_exclusions'] ?? ''));
+        $validated['custom_content_exclusions'] = sanitize_textarea_field($settings['custom_content_exclusions'] ?? ($validated['custom_content_exclusions'] ?? ''));
         
         // Optional compression level overrides and size threshold (ignored unless provided)
         // We store them to settings for reference but runtime levels are filter-driven.
@@ -344,7 +380,10 @@ class AdminAjax {
         $cache_affecting_keys = [
             'host', 'port', 'password', 'enabled', 'enable_compression', 'compression_method',
             'mode', 'enable_block_caching', 'exclude_pages', 'exclude_posts',
-            'exclude_urls', 'exclude_user_agents'
+            'exclude_urls', 'exclude_user_agents', 'enable_page_cache', 'enable_object_cache',
+            'ttl_page', 'ttl_object', 'enable_minification', 'enable_static_asset_cache',
+            'static_asset_cache_ttl', 'browser_cache_max_age', 'enable_browser_cache_headers',
+            'manage_static_cache_via_htaccess', 'prefer_existing_static_cache_headers'
         ];
         
         foreach ($cache_affecting_keys as $key) {

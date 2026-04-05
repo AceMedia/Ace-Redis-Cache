@@ -737,11 +737,13 @@ class CacheManager {
      * @return int Expiry time in seconds
      */
     private function get_cache_expiry() {
-        // Prefer specific page TTL when available, fallback to legacy ttl
-        if (isset($this->settings['ttl_page'])) {
-            return (int) $this->settings['ttl_page'];
+        $ttl = $this->settings['ttl_page'] ?? ($this->settings['ttl'] ?? 3600);
+
+        if (isset($_GET['sitemap']) || strpos($_SERVER['REQUEST_URI'] ?? '', 'sitemap') !== false) {
+            $ttl = 300;
         }
-        return (int) ($this->settings['ttl'] ?? 3600);
+
+        return (int) apply_filters('ace_redis_cache_ttl', $ttl, $this->settings);
     }
 
     /**

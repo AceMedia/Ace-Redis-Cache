@@ -201,11 +201,66 @@ class AdminInterface {
             // Pass variables to template
             $settings = $this->settings;
             $cache_manager = $this->cache_manager;
+            $static_header_probe = $this->probe_static_asset_header_support($settings);
             include $template_file;
         } else {
             // Fallback inline template if separate file doesn't exist
             $this->render_inline_settings_page();
         }
+    }
+
+    private function probe_static_asset_header_support($settings) {
+        $ttl = isset($settings['static_asset_cache_ttl']) ? (int) $settings['static_asset_cache_ttl'] : 604800;
+        if ($ttl < 86400) { $ttl = 86400; }
+        if ($ttl > 31536000) { $ttl = 31536000; }
+
+        $result = [
+            'checked' => false,
+            'detected' => false,
+            'cache_control' => '',
+            'status_code' => 0,
+            'url' => '',
+        ];
+
+        if (!function_exists('wp_remote_head')) {
+            return $result;
+        }
+
+        $probe_candidates = array_filter(array_unique([
+            get_stylesheet_uri(),
+            trailingslashit(get_template_directory_uri()) . 'style.css',
+            includes_url('css/dashicons.min.css'),
+        ]));
+
+        foreach ($probe_candidates as $probe_url) {
+            $response = wp_remote_head(add_query_arg('ace_rc_probe', (string) time(), $probe_url), [
+                'timeout' => 4,
+                'redirection' => 2,
+                'sslverify' => true,
+            ]);
+
+            if (is_wp_error($response)) {
+                continue;
+            }
+
+            $result['checked'] = true;
+            $result['url'] = (string) $probe_url;
+            $result['status_code'] = (int) wp_remote_retrieve_response_code($response);
+            $cache_control = wp_remote_retrieve_header($response, 'cache-control');
+            $result['cache_control'] = is_string($cache_control) ? $cache_control : '';
+
+            if (is_string($cache_control) && $cache_control !== '') {
+                if (strpos(strtolower($cache_control), 'immutable') !== false) {
+                    $result['detected'] = true;
+                } elseif (preg_match('/max-age=(\d+)/i', $cache_control, $m)) {
+                    $result['detected'] = ((int) $m[1]) >= $ttl;
+                }
+            }
+
+            break;
+        }
+
+        return $result;
     }
     
     /**
@@ -473,12 +528,15 @@ class AdminInterface {
         $sanitized['custom_cache_exclusions'] = sanitize_textarea_field($input['custom_cache_exclusions'] ?? '');
         $sanitized['custom_transient_exclusions'] = sanitize_textarea_field($input['custom_transient_exclusions'] ?? '');
         $sanitized['custom_content_exclusions'] = sanitize_textarea_field($input['custom_content_exclusions'] ?? '');
+        $sanitized['exclude_sitemaps'] = !empty($input['exclude_sitemaps']) ? 1 : 0;
         $sanitized['excluded_blocks'] = sanitize_textarea_field($input['excluded_blocks'] ?? '');
-    $sanitized['exclude_basic_blocks'] = !empty($input['exclude_basic_blocks']) ? 1 : 0;
-    // Unified dynamic runtime mode: treat excluded blocks as dynamic
-    $sanitized['dynamic_excluded_blocks'] = !empty($input['dynamic_excluded_blocks']) ? 1 : 0;
-    // Advanced: optionally include rendered block content hash (disabled by default)
-    $sanitized['include_rendered_block_hash'] = !empty($input['include_rendered_block_hash']) ? 1 : 0;
+        $sanitized['exclude_basic_blocks'] = !empty($input['exclude_basic_blocks']) ? 1 : 0;
+        // Unified dynamic runtime mode: treat excluded blocks as dynamic
+        $sanitized['dynamic_excluded_blocks'] = !empty($input['dynamic_excluded_blocks']) ? 1 : 0;
+        // Advanced: optionally include rendered block content hash (disabled by default)
+        $sanitized['include_rendered_block_hash'] = !empty($input['include_rendered_block_hash']) ? 1 : 0;
+        $sanitized['manage_static_cache_via_htaccess'] = !empty($input['manage_static_cache_via_htaccess']) ? 1 : 0;
+        $sanitized['prefer_existing_static_cache_headers'] = !empty($input['prefer_existing_static_cache_headers']) ? 1 : 0;
         
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log('Ace-Redis-Cache: admin sanitize outgoing enable_transient_cache=' . ($sanitized['enable_transient_cache'] ?? 'NA') . ' dropin=' . ($sanitized['enable_object_cache_dropin'] ?? 'NA'));

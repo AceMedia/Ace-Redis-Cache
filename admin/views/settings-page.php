@@ -272,12 +272,32 @@ if (!defined('ABSPATH')) exit;
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Set long-lived Cache-Control headers (public, immutable) for static files (images, CSS, JS, fonts) and pair with minification for optimal Lighthouse scores.</p>
+                            <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs.</p>
                             <div style="margin-top:8px;">
                                 <label for="static_asset_cache_ttl" style="width:140px; display:inline-block;">Static TTL</label>
                                 <input type="number" name="ace_redis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
                                 <p class="description" style="margin-top:4px;">Recommended: 7 days (604800) – 1 year (31536000). Values outside 1d–1y are clamped.</p>
                             </div>
+                            <label style="margin-top:8px; display:block;">
+                                <input type="checkbox" name="ace_redis_cache_settings[manage_static_cache_via_htaccess]" id="manage_static_cache_via_htaccess" value="1" <?php checked($settings['manage_static_cache_via_htaccess'] ?? 0); ?> />
+                                Manage static cache headers via site-root .htaccess (Apache only)
+                            </label>
+                            <p class="description">Writes a small managed block to <code>.htaccess</code> for static file Cache-Control and Expires headers when the server is not already doing it.</p>
+
+                            <label style="margin-top:8px; display:block;">
+                                <input type="checkbox" name="ace_redis_cache_settings[prefer_existing_static_cache_headers]" id="prefer_existing_static_cache_headers" value="1" <?php checked($settings['prefer_existing_static_cache_headers'] ?? 1); ?> />
+                                Prefer existing server/CDN static headers
+                            </label>
+                            <p class="description">If long-lived cache headers are already detected, the plugin removes its managed .htaccess block to avoid duplicate logic.</p>
+
+                            <?php if (!empty($static_header_probe['checked'])): ?>
+                                <?php if (!empty($static_header_probe['detected'])): ?>
+                                    <p class="description" style="margin-top:8px; color:#2e7d32;">Detected long-lived static cache headers on probe request<?php echo !empty($static_header_probe['cache_control']) ? ': ' . esc_html($static_header_probe['cache_control']) : '.'; ?></p>
+                                <?php else: ?>
+                                    <p class="description" style="margin-top:8px; color:#b26a00;">Probe did not detect long-lived static cache headers<?php echo !empty($static_header_probe['cache_control']) ? ': ' . esc_html($static_header_probe['cache_control']) : '.'; ?> You can enable .htaccess management above or configure headers at the server/CDN layer.</p>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                            <p class="description" style="margin-top:8px;">Legacy proxy mode remains disabled. The plugin now relies on long-lived headers plus filemtime-based asset URL versioning.</p>
                             <?php if (empty($settings['enable_minification'])): ?>
                                 <p class="description" style="margin-top:8px; color:#d63638;">Tip: Enable Minification above for smaller CSS/JS when using long-lived asset caching.</p>
                             <?php endif; ?>
@@ -320,6 +340,18 @@ if (!defined('ABSPATH')) exit;
                 <p class="description">Configure patterns to exclude specific content from caching. Use one pattern per line.</p>
                 
                 <div class="settings-form">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="exclude_sitemaps">Exclude Sitemaps</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[exclude_sitemaps]" id="exclude_sitemaps" value="1" <?php checked($settings['exclude_sitemaps'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <p class="description">Exclude sitemap URLs from full page cache when they are already cached elsewhere or need fresher regeneration.</p>
+                        </div>
+                    </div>
                     <div class="setting-row">
                         <div class="setting-label">
                             <label for="custom_cache_exclusions">Cache Key Exclusions</label>

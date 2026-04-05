@@ -103,9 +103,9 @@ import SaveBar from './components/SaveBar.js';
         // Save settings specifically for SaveBar component
         async saveSettingsViaSaveBar() {
             try {
-                const success = await this.performSaveSettings();
+                const saveResult = await this.performSaveSettings();
                 
-                if (success) {
+                if (saveResult) {
                     // Refresh connection status after successful save
                     setTimeout(() => {
                         if (typeof this.testConnection === 'function') {
@@ -114,7 +114,7 @@ import SaveBar from './components/SaveBar.js';
                     }, 1000);
                 }
                 
-                return success;
+                return saveResult;
             } catch (error) {
                 console.error('SaveBar save error:', error);
                 return false;
@@ -150,7 +150,7 @@ import SaveBar from './components/SaveBar.js';
                                 this.transientEnableTs = null;
                             }
                             setTimeout(() => this.refreshTransientHealth && this.refreshTransientHealth(), 300);
-                            resolve(true);
+                            resolve(response.data || true);
                         } else {
                             resolve(false);
                         }

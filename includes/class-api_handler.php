@@ -33,6 +33,8 @@ class API_Handler {
     private $saving_settings = false; // in-flight save guard
     private $last_saved_settings = null; // holds intended new settings during request
     private $after_update_option = false; // only begin overriding reads after update_option has executed
+    private $stats_cache_key = 'ace_redis_cache_stats_snapshot_v1';
+    private $stats_cache_ttl = 15;
     
     /**
      * Constructor
@@ -90,6 +92,12 @@ class API_Handler {
      * Register REST API routes
      */
     public function register_routes() {
+        register_rest_route($this->namespace, '/settings', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_settings'],
+            'permission_callback' => [$this, 'check_permissions'],
+        ]);
+
         // Save settings endpoint
         register_rest_route($this->namespace, '/settings', [
             'methods' => 'POST',
@@ -234,6 +242,16 @@ class API_Handler {
             'callback' => [$this, 'health_route'],
             'permission_callback' => [$this, 'check_permissions']
         ]);
+    }
+
+    public function get_settings($request) {
+        $settings = get_option('ace_redis_cache_settings', []);
+        return new \WP_REST_Response([
+            'success' => true,
+            'data' => [
+                'settings' => $this->sanitize_settings_for_response($settings),
+            ],
+        ], 200);
     }
 
     public function opcache_reset_route($request) {
@@ -526,7 +544,7 @@ class API_Handler {
                     $response_data = [
                         'message' => 'Saved with warning: transient flag may appear off until next request.',
                         'settings_changed' => true,
-                        'settings' => array_merge($sanitized_settings, ['enable_transient_cache' => 1]),
+                        'settings' => $this->sanitize_settings_for_response(array_merge($sanitized_settings, ['enable_transient_cache' => 1])),
                         'stored_flag' => $final_flag_check,
                         'raw_flag' => $raw2_flag,
                         'warning' => 'TRANSIENT_FLAG_STALE_READ'
@@ -556,7 +574,7 @@ class API_Handler {
             $response_data = [
                 'message' => $msg,
                 'settings_changed' => $changed,
-                'settings' => $sanitized_settings,
+                'settings' => $this->sanitize_settings_for_response($final_stored),
                 'transient_final' => $final_flag,
                 'update_result' => $result,
             ];
@@ -648,6 +666,17 @@ class API_Handler {
         // Bust object cache if present
         if (function_exists('wp_cache_delete')) { @wp_cache_delete($option, 'options'); }
         return $result !== false;
+    }
+
+    private function sanitize_settings_for_response($settings) {
+        if (!is_array($settings)) {
+            return [];
+        }
+
+        $sanitized = $settings;
+        unset($sanitized['password']);
+
+        return $sanitized;
     }
     
     /**
@@ -774,6 +803,7 @@ class API_Handler {
                 ], 400);
             }
             $type = $request->get_param('type');
+            $this->clear_stats_snapshot();
             
             if ($type === 'blocks') {
                 $result = $this->cache_manager->clear_block_cache();
@@ -834,7 +864,19 @@ class API_Handler {
                     ]
                 ], 200);
             }
+            $force_refresh = !empty($request->get_param('refresh'));
+            if (!$force_refresh) {
+                $cached_stats = get_transient($this->stats_cache_key);
+                if (is_array($cached_stats)) {
+                    return new \WP_REST_Response([
+                        'success' => true,
+                        'data' => $cached_stats
+                    ], 200);
+                }
+            }
+
             $stats = $this->cache_manager->get_cache_stats();
+            set_transient($this->stats_cache_key, $stats, $this->stats_cache_ttl);
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -861,6 +903,7 @@ class API_Handler {
             $settings_now = get_option('ace_redis_cache_settings', []);
             $diagnostics = new Diagnostics($this->redis_connection, $this->cache_manager, $settings_now);
             $result = $diagnostics->get_full_diagnostics();
+            $this->clear_stats_snapshot();
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -874,6 +917,10 @@ class API_Handler {
                 'error' => 'DIAGNOSTICS_FAILED'
             ], 500);
         }
+    }
+
+    private function clear_stats_snapshot() {
+        delete_transient($this->stats_cache_key);
     }
     
     /**
@@ -896,6 +943,7 @@ class API_Handler {
             
             // Clear all cache using the cache manager
             $result = $this->cache_manager->clear_all_cache();
+            $this->clear_stats_snapshot();
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -1293,6 +1341,7 @@ class API_Handler {
         $sanitized['custom_cache_exclusions'] = sanitize_textarea_field($input['custom_cache_exclusions'] ?? '');
         $sanitized['custom_transient_exclusions'] = sanitize_textarea_field($input['custom_transient_exclusions'] ?? '');
         $sanitized['custom_content_exclusions'] = sanitize_textarea_field($input['custom_content_exclusions'] ?? '');
+        $sanitized['exclude_sitemaps'] = !empty($input['exclude_sitemaps']) ? 1 : 0;
         $sanitized['excluded_blocks'] = sanitize_textarea_field($input['excluded_blocks'] ?? '');
         // New: allow excluding common basic blocks via checkbox
         $sanitized['exclude_basic_blocks'] = !empty($input['exclude_basic_blocks']) ? 1 : 0;
@@ -1314,6 +1363,10 @@ class API_Handler {
     if ($static_ttl_in < 86400) { $static_ttl_in = 86400; }
     if ($static_ttl_in > 31536000) { $static_ttl_in = 31536000; }
     $sanitized['static_asset_cache_ttl'] = $static_ttl_in;
+    $sanitized['enable_asset_proxy_cache'] = 0;
+    $sanitized['asset_proxy_cache_ttl'] = $static_ttl_in;
+    $sanitized['manage_static_cache_via_htaccess'] = !empty($input['manage_static_cache_via_htaccess']) ? 1 : 0;
+    $sanitized['prefer_existing_static_cache_headers'] = !empty($input['prefer_existing_static_cache_headers']) ? 1 : 0;
 
         // Optional compression level overrides
         if (isset($input['brotli_level_object'])) $sanitized['brotli_level_object'] = intval($input['brotli_level_object']);

@@ -121,25 +121,16 @@ class Diagnostics {
         }
         $diagnostics[] = "";
         
-        // Exclusion rules
-        $diagnostics[] = "=== Exclusion Rules ===";
+        // Exclusion rules (summary only to avoid huge diagnostics payloads)
+        $diagnostics[] = "=== Exclusion Rules (Summary) ===";
         $cache_exclusions = $this->cache_manager->get_cache_exclusions();
-        $diagnostics[] = "Cache Exclusions: " . count($cache_exclusions) . " patterns";
-        foreach ($cache_exclusions as $pattern) {
-            $diagnostics[] = "  - " . $pattern;
-        }
+        $diagnostics[] = "Cache Exclusions: " . count($cache_exclusions) . " patterns" . (count($cache_exclusions) > 0 ? " (use REST API for details)" : "");
         
         $transient_exclusions = $this->cache_manager->get_transient_exclusions();
-        $diagnostics[] = "Transient Exclusions: " . count($transient_exclusions) . " patterns";
-        foreach ($transient_exclusions as $pattern) {
-            $diagnostics[] = "  - " . $pattern;
-        }
+        $diagnostics[] = "Transient Exclusions: " . count($transient_exclusions) . " patterns" . (count($transient_exclusions) > 0 ? " (use REST API for details)" : "");
         
         $content_exclusions = $this->cache_manager->get_content_exclusions();
-        $diagnostics[] = "Content Exclusions: " . count($content_exclusions) . " patterns";
-        foreach ($content_exclusions as $pattern) {
-            $diagnostics[] = "  - " . $pattern;
-        }
+        $diagnostics[] = "Content Exclusions: " . count($content_exclusions) . " patterns" . (count($content_exclusions) > 0 ? " (use REST API for details)" : "");
         $diagnostics[] = "";
         
         // Performance diagnostics

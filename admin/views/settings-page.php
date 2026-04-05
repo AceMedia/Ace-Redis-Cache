@@ -313,46 +313,47 @@ if (!defined('ABSPATH')) exit;
                             $abspath_str     = esc_js(ABSPATH);
                             $site_root       = rtrim(ABSPATH, '/\\');
                             ?>
-                            <details style="margin-top:12px; border:1px solid #ddd; border-radius:4px; padding:0;">
-                                <summary style="padding:8px 12px; cursor:pointer; background:#f6f7f7; border-radius:4px; font-weight:600; font-size:13px; list-style:revert;">
+                            <details class="ace-server-config-details" <?php echo !empty($static_header_probe['checked']) && empty($static_header_probe['detected']) ? 'open' : ''; ?>>
+                                <summary>
                                     Server Configuration Instructions
                                     <?php if ($server_headers_detected): ?>
-                                        <span style="margin-left:8px; font-weight:400; color:#2e7d32; font-size:12px;">(already applied)</span>
+                                        <span class="ace-config-badge ace-config-badge--detected">&#10003; already applied</span>
                                     <?php else: ?>
-                                        <span style="margin-left:8px; font-weight:400; color:#b26a00; font-size:12px;">(not yet detected)</span>
+                                        <span class="ace-config-badge ace-config-badge--missing">not yet detected</span>
                                     <?php endif; ?>
                                 </summary>
-                                <div style="padding:12px 16px;">
-                                    <p style="margin-top:0; font-size:13px;">Apply one of these at the server level instead of using the .htaccess toggle above. Apache and Nginx options are provided.</p>
+                                <div class="ace-server-config-body">
+                                    <p class="ace-snippet-intro">Apply one of these at the server level instead of using the .htaccess toggle above. Apache and Nginx options are provided.</p>
 
-                                    <p style="font-weight:600; margin-bottom:4px;">Apache — add to <code><?php echo esc_html($site_root); ?>/.htaccess</code> (inside <code>&lt;IfModule mod_rewrite.c&gt;</code> block or at the top level):</p>
-                                    <div style="position:relative;">
-                                        <textarea id="ace-htaccess-rules" readonly rows="26" class="large-text code" style="font-size:11px; line-height:1.5; background:#f6f7f7; border:1px solid #ccc; resize:vertical; white-space:pre; font-family:monospace;"><?php
+                                    <div class="ace-snippet-block">
+                                        <p class="ace-snippet-label">Apache — add to <code><?php echo esc_html($site_root); ?>/.htaccess</code></p>
+                                        <div class="ace-snippet-wrap">
+                                            <pre id="ace-htaccess-rules"><?php
 echo htmlspecialchars(
 '# BEGIN Ace Redis Cache - Static Asset Headers
 <IfModule mod_expires.c>
     ExpiresActive On
-    ExpiresDefault                             "access plus 1 month"
-    ExpiresByType text/html                    "access plus 0 seconds"
-    ExpiresByType text/css                     "access plus ' . $htaccess_years . '"
-    ExpiresByType application/javascript       "access plus ' . $htaccess_years . '"
-    ExpiresByType text/javascript              "access plus ' . $htaccess_years . '"
-    ExpiresByType application/x-javascript    "access plus ' . $htaccess_years . '"
-    ExpiresByType image/jpeg                   "access plus ' . $htaccess_years . '"
-    ExpiresByType image/png                    "access plus ' . $htaccess_years . '"
-    ExpiresByType image/gif                    "access plus ' . $htaccess_years . '"
-    ExpiresByType image/webp                   "access plus ' . $htaccess_years . '"
-    ExpiresByType image/avif                   "access plus ' . $htaccess_years . '"
-    ExpiresByType image/svg+xml               "access plus ' . $htaccess_years . '"
-    ExpiresByType image/x-icon                "access plus ' . $htaccess_years . '"
-    ExpiresByType font/woff                   "access plus ' . $htaccess_years . '"
-    ExpiresByType font/woff2                  "access plus ' . $htaccess_years . '"
-    ExpiresByType application/font-woff2      "access plus ' . $htaccess_years . '"
-    ExpiresByType application/x-font-woff     "access plus ' . $htaccess_years . '"
-    ExpiresByType application/x-font-ttf      "access plus ' . $htaccess_years . '"
-    ExpiresByType font/opentype               "access plus ' . $htaccess_years . '"
-    ExpiresByType video/mp4                   "access plus ' . $htaccess_years . '"
-    ExpiresByType application/pdf             "access plus 1 month"
+    ExpiresDefault                              "access plus 1 month"
+    ExpiresByType text/html                     "access plus 0 seconds"
+    ExpiresByType text/css                      "access plus ' . $htaccess_years . '"
+    ExpiresByType application/javascript        "access plus ' . $htaccess_years . '"
+    ExpiresByType text/javascript               "access plus ' . $htaccess_years . '"
+    ExpiresByType application/x-javascript      "access plus ' . $htaccess_years . '"
+    ExpiresByType image/jpeg                    "access plus ' . $htaccess_years . '"
+    ExpiresByType image/png                     "access plus ' . $htaccess_years . '"
+    ExpiresByType image/gif                     "access plus ' . $htaccess_years . '"
+    ExpiresByType image/webp                    "access plus ' . $htaccess_years . '"
+    ExpiresByType image/avif                    "access plus ' . $htaccess_years . '"
+    ExpiresByType image/svg+xml                 "access plus ' . $htaccess_years . '"
+    ExpiresByType image/x-icon                  "access plus ' . $htaccess_years . '"
+    ExpiresByType font/woff                     "access plus ' . $htaccess_years . '"
+    ExpiresByType font/woff2                    "access plus ' . $htaccess_years . '"
+    ExpiresByType application/font-woff2        "access plus ' . $htaccess_years . '"
+    ExpiresByType application/x-font-woff       "access plus ' . $htaccess_years . '"
+    ExpiresByType application/x-font-ttf        "access plus ' . $htaccess_years . '"
+    ExpiresByType font/opentype                 "access plus ' . $htaccess_years . '"
+    ExpiresByType video/mp4                     "access plus ' . $htaccess_years . '"
+    ExpiresByType application/pdf               "access plus 1 month"
 </IfModule>
 <IfModule mod_headers.c>
     <FilesMatch "\.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|mp4|pdf)$">
@@ -363,13 +364,15 @@ echo htmlspecialchars(
 </IfModule>
 # END Ace Redis Cache - Static Asset Headers'
 );
-                                        ?></textarea>
-                                        <button type="button" onclick="(function(btn){var ta=document.getElementById('ace-htaccess-rules');ta.select();ta.setSelectionRange(0,99999);navigator.clipboard.writeText(ta.value).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy';},2000);})})(this)" style="position:absolute; top:6px; right:6px; padding:2px 10px; font-size:12px;">Copy</button>
+                                            ?></pre>
+                                            <button type="button" class="ace-copy-btn" data-target="ace-htaccess-rules">Copy</button>
+                                        </div>
                                     </div>
 
-                                    <p style="font-weight:600; margin:16px 0 4px;">Nginx — add inside your <code>server {}</code> block (or a <code>location</code> matching static files):</p>
-                                    <div style="position:relative;">
-                                        <textarea id="ace-nginx-rules" readonly rows="14" class="large-text code" style="font-size:11px; line-height:1.5; background:#f6f7f7; border:1px solid #ccc; resize:vertical; white-space:pre; font-family:monospace;"><?php
+                                    <div class="ace-snippet-block">
+                                        <p class="ace-snippet-label">Nginx — add inside your <code>server {}</code> block</p>
+                                        <div class="ace-snippet-wrap">
+                                            <pre id="ace-nginx-rules"><?php
 echo htmlspecialchars(
 '# Ace Redis Cache - Static Asset Headers (Nginx)
 location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|mp4|pdf)$ {
@@ -379,13 +382,16 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
     etag off;
     access_log off;
 }
-# (Reload Nginx after editing: sudo nginx -t && sudo systemctl reload nginx)'
+
+# Reload after editing:
+# sudo nginx -t && sudo systemctl reload nginx'
 );
-                                        ?></textarea>
-                                        <button type="button" onclick="(function(btn){var ta=document.getElementById('ace-nginx-rules');ta.select();ta.setSelectionRange(0,99999);navigator.clipboard.writeText(ta.value).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy';},2000);})})(this)" style="position:absolute; top:6px; right:6px; padding:2px 10px; font-size:12px;">Copy</button>
+                                            ?></pre>
+                                            <button type="button" class="ace-copy-btn" data-target="ace-nginx-rules">Copy</button>
+                                        </div>
                                     </div>
 
-                                    <p style="margin-top:12px; font-size:12px; color:#666;">After applying, save settings here and the probe will re-run to confirm detection. The <em>Manage via .htaccess</em> option above will then be automatically disabled.</p>
+                                    <p class="ace-snippet-footer">After applying, save settings here and the probe will re-run to confirm detection. The <em>Manage via .htaccess</em> option above will then be automatically disabled.</p>
                                 </div>
                             </details>
 
@@ -670,5 +676,22 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                 }).catch(function(){ alert('Error clearing cache'); });
         });
     }
+
+    // Code snippet copy buttons
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.ace-copy-btn');
+        if (!btn) return;
+        var targetId = btn.getAttribute('data-target');
+        var pre = targetId ? document.getElementById(targetId) : null;
+        if (!pre) return;
+        navigator.clipboard.writeText(pre.textContent).then(function() {
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.textContent = 'Copy';
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    });
 })();
 </script>

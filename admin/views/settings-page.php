@@ -278,11 +278,18 @@ if (!defined('ABSPATH')) exit;
                                 <input type="number" name="ace_redis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
                                 <p class="description" style="margin-top:4px;">Recommended: 7 days (604800) – 1 year (31536000). Values outside 1d–1y are clamped.</p>
                             </div>
-                            <label style="margin-top:8px; display:block;">
-                                <input type="checkbox" name="ace_redis_cache_settings[manage_static_cache_via_htaccess]" id="manage_static_cache_via_htaccess" value="1" <?php checked($settings['manage_static_cache_via_htaccess'] ?? 0); ?> />
+                            <?php $server_headers_detected = !empty($static_header_probe['checked']) && !empty($static_header_probe['detected']); ?>
+                            <label style="margin-top:8px; display:block; <?php echo $server_headers_detected ? 'opacity:0.5;' : ''; ?>">
+                                <input type="checkbox" name="ace_redis_cache_settings[manage_static_cache_via_htaccess]" id="manage_static_cache_via_htaccess" value="1"
+                                    <?php checked($settings['manage_static_cache_via_htaccess'] ?? 0); ?>
+                                    <?php disabled($server_headers_detected); ?> />
                                 Manage static cache headers via site-root .htaccess (Apache only)
                             </label>
-                            <p class="description">Writes a small managed block to <code>.htaccess</code> for static file Cache-Control and Expires headers when the server is not already doing it.</p>
+                            <?php if ($server_headers_detected): ?>
+                                <p class="description" style="margin-top:4px; color:#2e7d32;">&#10003; Server-level headers already detected — .htaccess management disabled to avoid conflicts.</p>
+                            <?php else: ?>
+                                <p class="description">Writes a small managed block to <code>.htaccess</code> for static file Cache-Control and Expires headers when the server is not already doing it.</p>
+                            <?php endif; ?>
 
                             <label style="margin-top:8px; display:block;">
                                 <input type="checkbox" name="ace_redis_cache_settings[prefer_existing_static_cache_headers]" id="prefer_existing_static_cache_headers" value="1" <?php checked($settings['prefer_existing_static_cache_headers'] ?? 1); ?> />
@@ -291,12 +298,97 @@ if (!defined('ABSPATH')) exit;
                             <p class="description">If long-lived cache headers are already detected, the plugin removes its managed .htaccess block to avoid duplicate logic.</p>
 
                             <?php if (!empty($static_header_probe['checked'])): ?>
-                                <?php if (!empty($static_header_probe['detected'])): ?>
-                                    <p class="description" style="margin-top:8px; color:#2e7d32;">Detected long-lived static cache headers on probe request<?php echo !empty($static_header_probe['cache_control']) ? ': ' . esc_html($static_header_probe['cache_control']) : '.'; ?></p>
+                                <?php if ($server_headers_detected): ?>
+                                    <p class="description" style="margin-top:8px; color:#2e7d32;">&#10003; Server is already sending long-lived static cache headers<?php echo !empty($static_header_probe['cache_control']) ? ' (<code>' . esc_html($static_header_probe['cache_control']) . '</code>)' : '.'; ?></p>
                                 <?php else: ?>
-                                    <p class="description" style="margin-top:8px; color:#b26a00;">Probe did not detect long-lived static cache headers<?php echo !empty($static_header_probe['cache_control']) ? ': ' . esc_html($static_header_probe['cache_control']) : '.'; ?> You can enable .htaccess management above or configure headers at the server/CDN layer.</p>
+                                    <p class="description" style="margin-top:8px; color:#b26a00;">Probe did not detect long-lived static cache headers<?php echo !empty($static_header_probe['cache_control']) ? ': ' . esc_html($static_header_probe['cache_control']) : '.'; ?> Enable .htaccess management above, or apply the server configuration below.</p>
                                 <?php endif; ?>
                             <?php endif; ?>
+
+                            <?php
+                            $htaccess_ttl = (int)($settings['static_asset_cache_ttl'] ?? 604800);
+                            if ($htaccess_ttl < 86400) { $htaccess_ttl = 86400; }
+                            if ($htaccess_ttl > 31536000) { $htaccess_ttl = 31536000; }
+                            $htaccess_years  = $htaccess_ttl >= 31536000 ? '1 year'   : ($htaccess_ttl >= 2592000 ? '1 month' : '1 week');
+                            $abspath_str     = esc_js(ABSPATH);
+                            $site_root       = rtrim(ABSPATH, '/\\');
+                            ?>
+                            <details style="margin-top:12px; border:1px solid #ddd; border-radius:4px; padding:0;">
+                                <summary style="padding:8px 12px; cursor:pointer; background:#f6f7f7; border-radius:4px; font-weight:600; font-size:13px; list-style:revert;">
+                                    Server Configuration Instructions
+                                    <?php if ($server_headers_detected): ?>
+                                        <span style="margin-left:8px; font-weight:400; color:#2e7d32; font-size:12px;">(already applied)</span>
+                                    <?php else: ?>
+                                        <span style="margin-left:8px; font-weight:400; color:#b26a00; font-size:12px;">(not yet detected)</span>
+                                    <?php endif; ?>
+                                </summary>
+                                <div style="padding:12px 16px;">
+                                    <p style="margin-top:0; font-size:13px;">Apply one of these at the server level instead of using the .htaccess toggle above. Apache and Nginx options are provided.</p>
+
+                                    <p style="font-weight:600; margin-bottom:4px;">Apache — add to <code><?php echo esc_html($site_root); ?>/.htaccess</code> (inside <code>&lt;IfModule mod_rewrite.c&gt;</code> block or at the top level):</p>
+                                    <div style="position:relative;">
+                                        <textarea id="ace-htaccess-rules" readonly rows="26" class="large-text code" style="font-size:11px; line-height:1.5; background:#f6f7f7; border:1px solid #ccc; resize:vertical; white-space:pre; font-family:monospace;"><?php
+echo htmlspecialchars(
+'# BEGIN Ace Redis Cache - Static Asset Headers
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresDefault                             "access plus 1 month"
+    ExpiresByType text/html                    "access plus 0 seconds"
+    ExpiresByType text/css                     "access plus ' . $htaccess_years . '"
+    ExpiresByType application/javascript       "access plus ' . $htaccess_years . '"
+    ExpiresByType text/javascript              "access plus ' . $htaccess_years . '"
+    ExpiresByType application/x-javascript    "access plus ' . $htaccess_years . '"
+    ExpiresByType image/jpeg                   "access plus ' . $htaccess_years . '"
+    ExpiresByType image/png                    "access plus ' . $htaccess_years . '"
+    ExpiresByType image/gif                    "access plus ' . $htaccess_years . '"
+    ExpiresByType image/webp                   "access plus ' . $htaccess_years . '"
+    ExpiresByType image/avif                   "access plus ' . $htaccess_years . '"
+    ExpiresByType image/svg+xml               "access plus ' . $htaccess_years . '"
+    ExpiresByType image/x-icon                "access plus ' . $htaccess_years . '"
+    ExpiresByType font/woff                   "access plus ' . $htaccess_years . '"
+    ExpiresByType font/woff2                  "access plus ' . $htaccess_years . '"
+    ExpiresByType application/font-woff2      "access plus ' . $htaccess_years . '"
+    ExpiresByType application/x-font-woff     "access plus ' . $htaccess_years . '"
+    ExpiresByType application/x-font-ttf      "access plus ' . $htaccess_years . '"
+    ExpiresByType font/opentype               "access plus ' . $htaccess_years . '"
+    ExpiresByType video/mp4                   "access plus ' . $htaccess_years . '"
+    ExpiresByType application/pdf             "access plus 1 month"
+</IfModule>
+<IfModule mod_headers.c>
+    <FilesMatch "\.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|mp4|pdf)$">
+        Header set Cache-Control "public, max-age=' . $htaccess_ttl . ', immutable"
+        Header unset ETag
+    </FilesMatch>
+    FileETag None
+</IfModule>
+# END Ace Redis Cache - Static Asset Headers'
+);
+                                        ?></textarea>
+                                        <button type="button" onclick="(function(btn){var ta=document.getElementById('ace-htaccess-rules');ta.select();ta.setSelectionRange(0,99999);navigator.clipboard.writeText(ta.value).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy';},2000);})})(this)" style="position:absolute; top:6px; right:6px; padding:2px 10px; font-size:12px;">Copy</button>
+                                    </div>
+
+                                    <p style="font-weight:600; margin:16px 0 4px;">Nginx — add inside your <code>server {}</code> block (or a <code>location</code> matching static files):</p>
+                                    <div style="position:relative;">
+                                        <textarea id="ace-nginx-rules" readonly rows="14" class="large-text code" style="font-size:11px; line-height:1.5; background:#f6f7f7; border:1px solid #ccc; resize:vertical; white-space:pre; font-family:monospace;"><?php
+echo htmlspecialchars(
+'# Ace Redis Cache - Static Asset Headers (Nginx)
+location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|mp4|pdf)$ {
+    expires ' . $htaccess_ttl . 's;
+    add_header Cache-Control "public, max-age=' . $htaccess_ttl . ', immutable";
+    add_header X-Content-Type-Options "nosniff";
+    etag off;
+    access_log off;
+}
+# (Reload Nginx after editing: sudo nginx -t && sudo systemctl reload nginx)'
+);
+                                        ?></textarea>
+                                        <button type="button" onclick="(function(btn){var ta=document.getElementById('ace-nginx-rules');ta.select();ta.setSelectionRange(0,99999);navigator.clipboard.writeText(ta.value).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy';},2000);})})(this)" style="position:absolute; top:6px; right:6px; padding:2px 10px; font-size:12px;">Copy</button>
+                                    </div>
+
+                                    <p style="margin-top:12px; font-size:12px; color:#666;">After applying, save settings here and the probe will re-run to confirm detection. The <em>Manage via .htaccess</em> option above will then be automatically disabled.</p>
+                                </div>
+                            </details>
+
                             <p class="description" style="margin-top:8px;">Legacy proxy mode remains disabled. The plugin now relies on long-lived headers plus filemtime-based asset URL versioning.</p>
                             <?php if (empty($settings['enable_minification'])): ?>
                                 <p class="description" style="margin-top:8px; color:#d63638;">Tip: Enable Minification above for smaller CSS/JS when using long-lived asset caching.</p>

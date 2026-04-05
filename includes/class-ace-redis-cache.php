@@ -583,6 +583,22 @@ class AceRedisCache {
 
         return false;
     }
+
+    /**
+     * True when request is an admin/auth/system endpoint where plugin cache URL/header mutation must not run.
+     */
+    private function is_admin_auth_or_system_request() {
+        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+            return true;
+        }
+
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        if ($request_uri === '') {
+            return false;
+        }
+
+        return (bool) preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri);
+    }
     
     /**
      * Attempt to serve compressed cache directly without decompression if no dynamic placeholders exist.
@@ -2853,7 +2869,7 @@ class AceRedisCache {
     public function set_static_cache_headers($headers) {
         if (empty($this->settings['enable_static_asset_cache'])) { return $headers; }
         // Avoid altering login, admin ajax endpoints, REST
-        if (is_admin() || (defined('REST_REQUEST') && REST_REQUEST) || wp_doing_ajax()) { return $headers; }
+        if ($this->is_admin_auth_or_system_request()) { return $headers; }
         $uri = $_SERVER['REQUEST_URI'] ?? '';
         if ($uri === '') { return $headers; }
         if (preg_match('#/(wp-admin/load-(?:styles|scripts)\.php|wp-login\.php)#i', $uri)) {
@@ -2874,14 +2890,14 @@ class AceRedisCache {
     }
 
     public function version_attachment_url($url, $attachment_id) {
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (empty($this->settings['enable_static_asset_cache']) || $this->is_admin_auth_or_system_request()) {
             return $url;
         }
         return $this->append_static_asset_version($url);
     }
 
     public function version_attachment_image_attributes($attr, $attachment, $size) {
-        if (empty($this->settings['enable_static_asset_cache']) || !is_array($attr)) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($attr) || $this->is_admin_auth_or_system_request()) {
             return $attr;
         }
 
@@ -2912,7 +2928,7 @@ class AceRedisCache {
     }
 
     public function version_attachment_image_src($image, $attachment_id, $size, $icon) {
-        if (empty($this->settings['enable_static_asset_cache']) || !is_array($image) || empty($image[0])) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($image) || empty($image[0]) || $this->is_admin_auth_or_system_request()) {
             return $image;
         }
 
@@ -2921,14 +2937,14 @@ class AceRedisCache {
     }
 
     public function version_post_thumbnail_url($url, $post, $size) {
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (empty($this->settings['enable_static_asset_cache']) || $this->is_admin_auth_or_system_request()) {
             return $url;
         }
         return $this->append_static_asset_version($url);
     }
 
     public function version_image_srcset_sources($sources, $size_array, $image_src, $image_meta, $attachment_id) {
-        if (empty($this->settings['enable_static_asset_cache']) || !is_array($sources)) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($sources) || $this->is_admin_auth_or_system_request()) {
             return $sources;
         }
 
@@ -2943,7 +2959,7 @@ class AceRedisCache {
     }
 
     public function version_avatar_url($url, $id_or_email, $args) {
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (empty($this->settings['enable_static_asset_cache']) || $this->is_admin_auth_or_system_request()) {
             return $url;
         }
         return $this->append_static_asset_version($url);
@@ -2955,12 +2971,7 @@ class AceRedisCache {
         }
 
         // Never rewrite admin/auth/system asset URLs.
-        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
-            return $src;
-        }
-
-        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
-        if ($request_uri !== '' && preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri)) {
+        if ($this->is_admin_auth_or_system_request()) {
             return $src;
         }
 

@@ -1281,7 +1281,7 @@ body.admin-color-midnight {
         
         .setting-row {
             display: grid;
-            grid-template-columns: 150px 1fr;
+            grid-template-columns: 150px minmax(0, 1fr);
             gap: 1rem;
             align-items: start;
             background: $background-color;
@@ -1329,6 +1329,7 @@ body.admin-color-midnight {
             display: flex;
             flex-direction: column;
             gap: 0.5rem;
+            min-width: 0;
 
             select {
                 appearance: auto;
@@ -1614,6 +1615,8 @@ body.admin-color-midnight {
     border: 1px solid $border-color;
     border-radius: 8px;
     overflow: hidden;
+    max-width: 100%;
+    min-width: 0;
 
     summary {
         display: flex;
@@ -1675,6 +1678,8 @@ body.admin-color-midnight {
     .ace-server-config-body {
         padding: 16px;
         background: #fff;
+        max-width: 100%;
+        min-width: 0;
     }
 
     .ace-snippet-intro {
@@ -1694,6 +1699,7 @@ body.admin-color-midnight {
         font-weight: 600;
         color: $text-color;
         margin: 0 0 6px;
+        overflow-wrap: anywhere;
 
         code {
             background: rgba($primary-color, 0.07);
@@ -1702,6 +1708,8 @@ body.admin-color-midnight {
             padding: 1px 5px;
             font-size: 11px;
             font-weight: 500;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
     }
 
@@ -1710,8 +1718,13 @@ body.admin-color-midnight {
         border-radius: 6px;
         overflow: hidden;
         border: 1px solid #2d2d2d;
+        max-width: 100%;
+        min-width: 0;
 
         pre {
+            display: block;
+            width: 100%;
+            max-width: 100%;
             margin: 0;
             padding: 14px 16px;
             background: #1e1e1e;
@@ -1722,6 +1735,7 @@ body.admin-color-midnight {
             overflow-x: auto;
             white-space: pre;
             tab-size: 4;
+            box-sizing: border-box;
         }
 
         .ace-copy-btn {

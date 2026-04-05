@@ -505,6 +505,13 @@ class AceRedisCache {
      * @return bool True if request should be cached
      */
     private function should_cache_request() {
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+
+        // Never cache core auth/admin/system endpoints.
+        if ($request_uri !== '' && preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri)) {
+            return false;
+        }
+
         // Don't cache admin pages
         if (is_admin()) {
             return false;
@@ -2849,6 +2856,9 @@ class AceRedisCache {
         if (is_admin() || (defined('REST_REQUEST') && REST_REQUEST) || wp_doing_ajax()) { return $headers; }
         $uri = $_SERVER['REQUEST_URI'] ?? '';
         if ($uri === '') { return $headers; }
+        if (preg_match('#/(wp-admin/load-(?:styles|scripts)\.php|wp-login\.php)#i', $uri)) {
+            return $headers;
+        }
         $path = parse_url($uri, PHP_URL_PATH);
         if (!$path) { return $headers; }
         // Match common static file extensions (allow .gz/.br suffixes)
@@ -2943,6 +2953,17 @@ class AceRedisCache {
         if (empty($this->settings['enable_static_asset_cache']) || !is_string($src) || $src === '') {
             return $src;
         }
+
+        // Never rewrite admin/auth/system asset URLs.
+        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+            return $src;
+        }
+
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        if ($request_uri !== '' && preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri)) {
+            return $src;
+        }
+
         return $this->append_static_asset_version($src);
     }
 

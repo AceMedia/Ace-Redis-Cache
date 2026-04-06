@@ -231,10 +231,12 @@ if (!defined('ABSPATH')) exit;
                                 $available_methods = [];
                                 if ($brotli_available) { $available_methods[] = 'brotli'; }
                                 if ($gzip_available) { $available_methods[] = 'gzip'; }
-                                if (!empty($settings['enable_compression']) && count($available_methods) === 1) {
+                                if (count($available_methods) === 1) {
                                     $method = $available_methods[0];
                                 } elseif (!in_array($method, ['brotli', 'gzip'], true)) {
-                                    $method = 'brotli';
+                                    $method = !empty($available_methods) ? $available_methods[0] : 'brotli';
+                                } elseif (!empty($available_methods) && !in_array($method, $available_methods, true)) {
+                                    $method = in_array('gzip', $available_methods, true) ? 'gzip' : $available_methods[0];
                                 }
                             ?>
                             <div class="compression-methods" style="margin-top:8px;">
@@ -248,6 +250,27 @@ if (!defined('ABSPATH')) exit;
                                 </label>
                             </div>
                             <p class="description">If a method is unavailable in PHP, it will be greyed out.</p>
+                            <?php if (!$brotli_available || !$gzip_available): ?>
+                            <details style="margin-top:10px;">
+                                <summary style="cursor:pointer;">Install commands for missing compression methods</summary>
+                                <div style="margin-top:8px;">
+                                    <?php if (!$brotli_available): ?>
+                                    <p style="margin:6px 0;"><strong>Brotli missing:</strong></p>
+                                    <pre style="white-space:pre-wrap;">sudo apt update
+sudo apt install -y php-brotli
+sudo systemctl restart php8.4-fpm || sudo systemctl restart php8.3-fpm
+php -m | grep -i brotli</pre>
+                                    <?php endif; ?>
+                                    <?php if (!$gzip_available): ?>
+                                    <p style="margin:6px 0;"><strong>Gzip (zlib) missing:</strong></p>
+                                    <pre style="white-space:pre-wrap;">sudo apt update
+sudo apt install -y php8.4-common zlib1g
+sudo systemctl restart php8.4-fpm || sudo systemctl restart php8.3-fpm
+php -m | grep -i zlib</pre>
+                                    <?php endif; ?>
+                                </div>
+                            </details>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="setting-row">

@@ -554,6 +554,20 @@ class AceRedisCache {
         if (preg_match('#^/(cart|checkout|my-account)(/|$)#i', $uri)) {
             return false;
         }
+
+        // Allow operators to provide additional URL/query exclusions (e.g. WooCommerce endpoints).
+        $exclusions = apply_filters('ace_redis_cache_excluded_urls', []);
+        if (is_array($exclusions) && !empty($exclusions)) {
+            foreach ($exclusions as $pattern) {
+                $pattern = trim((string) $pattern);
+                if ($pattern === '') {
+                    continue;
+                }
+                if (stripos($uri, $pattern) !== false) {
+                    return false;
+                }
+            }
+        }
         
         return true;
     }

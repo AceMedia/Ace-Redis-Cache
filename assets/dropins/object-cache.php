@@ -2,7 +2,7 @@
 /**
  * Ace Redis Cache Drop-In (object-cache.php)
  *
- * Lean + safe: forwards to Redis via phpredis, excludes options/transients,
+ * Lean + safe: forwards to Redis via phpredis, excludes options,
  * and fully flushes our namespace on post save/status change.
  *
  * Signature: Ace Redis Cache Drop-In
@@ -96,7 +96,7 @@ if (!class_exists('WP_Object_Cache')) {
         ];
 
         // Never persist these groups (avoid theme/plugin UI issues)
-        protected $excluded_cache_groups = ['options','transient'];
+        protected $excluded_cache_groups = ['options'];
 
         protected $igbinary = false;
         protected $serializer_active = false;
@@ -447,9 +447,9 @@ if (!class_exists('WP_Object_Cache')) {
 
                 if (@is_readable($socket)) {
                     $attempted_socket = true;
-                    @$this->redis->pconnect($socket, 0, $timeout, $persistent_id);
+                    @$this->redis->connect($socket, 0, $timeout, $persistent_id);
                     if (method_exists($this->redis,'isConnected') && !$this->redis->isConnected()) { $this->redis->close(); }
-                    else { $this->connect_via = 'socket-persistent'; }
+                    else { $this->connect_via = 'socket'; }
                 }
 
                 if ($this->connect_via === null) {
@@ -463,15 +463,15 @@ if (!class_exists('WP_Object_Cache')) {
                             $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
-                            @$this->redis->pconnect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
-                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls-persistent'; $connected = true; }
+                            @$this->redis->connect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; $connected = true; }
                         } catch (\Throwable $t) {}
                     }
 
                     if (!$connected) {
                         try {
-                            @$this->redis->pconnect($plain_host, $port, $timeout, $persistent_id);
-                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp-persistent'; $connected = true; }
+                            @$this->redis->connect($plain_host, $port, $timeout, $persistent_id);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp'; $connected = true; }
                         } catch (\Throwable $t) {}
                     }
 
@@ -480,8 +480,8 @@ if (!class_exists('WP_Object_Cache')) {
                             $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
-                            @$this->redis->pconnect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
-                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls-persistent'; }
+                            @$this->redis->connect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; }
                         } catch (\Throwable $t) {}
                     }
                 }

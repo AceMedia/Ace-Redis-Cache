@@ -162,10 +162,12 @@ See source for additional key derivation, compression and diagnostics hooks.
 ---
 ## Installation & Requirements
 1. Install plugin into `wp-content/plugins/ace-redis-cache`
-2. (Optional) Copy `assets/dropins/object-cache.php` to `wp-content/object-cache.php`
-3. Configure Redis host/port (TLS params if needed)
-4. Enable desired caching layers & tune TTLs
-5. (Optional) Enable dynamic micro-cache
+2. Copy `assets/dropins/object-cache.php` to `wp-content/object-cache.php`
+3. Copy `assets/dropins/advanced-cache.php` to `wp-content/advanced-cache.php`
+4. Ensure `define('WP_CACHE', true);` is set in `wp-config.php`
+5. Configure Redis host/port (TLS params if needed)
+6. Enable desired caching layers & tune TTLs
+7. (Optional) Enable dynamic micro-cache
 
 Requires: PHP 7.4+ (8.x recommended), Redis/Valkey 5+, optional Brotli extension.
 

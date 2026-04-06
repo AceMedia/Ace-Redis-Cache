@@ -840,6 +840,21 @@ class CacheManager {
     private function maybe_decompress($stored, $for_html = false) {
         if (!is_string($stored)) return $stored;
         static $logged_once = false;
+
+        // Some Redis serializer configurations can wrap marker strings (e.g. s:123:"gz6:...").
+        // Unwrap once so marker parsing below still works.
+        if (preg_match('/^s:\\d+:/', $stored) === 1) {
+            $decoded = null;
+            if (function_exists('maybe_unserialize')) {
+                $decoded = maybe_unserialize($stored);
+            } else {
+                $decoded = @unserialize($stored);
+            }
+            if (is_string($decoded)) {
+                $stored = $decoded;
+            }
+        }
+
         // Detect marker
         if (preg_match('/^br(\d{0,2}):/', $stored, $m) === 1) {
             // Accept both br: (no level) and brX: with level

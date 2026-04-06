@@ -632,10 +632,11 @@ class AceRedisCache {
             if (!empty($this->settings['enable_minification'])) {
                 $minified_key = 'page_cache_min:' . $cache_key;
                 $compressed = $redis->get($minified_key);
+                $compressed = $this->normalize_cached_payload_for_marker_parse($compressed);
                 if ($compressed !== false && is_string($compressed) && preg_match('/^(br\\d{0,2}|gz\\d{0,2}|br|gz):/', $compressed, $m) === 1) {
                     $prefix_len = strlen($m[0]);
                     $compressed_bytes = substr($compressed, $prefix_len);
-                    if (preg_match('/^br/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
+                    if (preg_match('/^br/', $m[1]) && $this->client_accepts_encoding('br')) {
                         if (!headers_sent()) {
                             header('Content-Encoding: br');
                             header('Vary: Accept-Encoding');
@@ -644,7 +645,8 @@ class AceRedisCache {
                         }
                         return $compressed_bytes;
                     }
-                    if (preg_match('/^gz/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false) {
+                    // Serve direct gzip bytes only if payload is true gzip stream (not zlib deflate wrapper).
+                    if (preg_match('/^gz/', $m[1]) && $this->client_accepts_encoding('gzip') && $this->is_gzip_stream($compressed_bytes)) {
                         if (!headers_sent()) {
                             header('Content-Encoding: gzip');
                             header('Vary: Accept-Encoding');
@@ -658,10 +660,11 @@ class AceRedisCache {
 
             $regular_key = 'page_cache:' . $cache_key;
             $compressed = $redis->get($regular_key);
+            $compressed = $this->normalize_cached_payload_for_marker_parse($compressed);
             if ($compressed !== false && is_string($compressed) && preg_match('/^(br\\d{0,2}|gz\\d{0,2}|br|gz):/', $compressed, $m) === 1) {
                 $prefix_len = strlen($m[0]);
                 $compressed_bytes = substr($compressed, $prefix_len);
-                if (preg_match('/^br/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
+                if (preg_match('/^br/', $m[1]) && $this->client_accepts_encoding('br')) {
                     if (!headers_sent()) {
                         header('Content-Encoding: br');
                         header('Vary: Accept-Encoding');
@@ -670,7 +673,7 @@ class AceRedisCache {
                     }
                     return $compressed_bytes;
                 }
-                if (preg_match('/^gz/', $m[1]) && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false) {
+                if (preg_match('/^gz/', $m[1]) && $this->client_accepts_encoding('gzip') && $this->is_gzip_stream($compressed_bytes)) {
                     if (!headers_sent()) {
                         header('Content-Encoding: gzip');
                         header('Vary: Accept-Encoding');
@@ -683,6 +686,50 @@ class AceRedisCache {
         }
 
         return null;
+    }
+
+    /**
+     * Normalize cached payload values so marker parsing works even if a serializer wrapped strings.
+     *
+     * @param mixed $payload
+     * @return mixed
+     */
+    private function normalize_cached_payload_for_marker_parse($payload) {
+        if (!is_string($payload)) {
+            return $payload;
+        }
+
+        if (preg_match('/^(?:br\\d{0,2}|gz\\d{0,2}|br|gz|raw):/', $payload) === 1) {
+            return $payload;
+        }
+
+        $decoded = null;
+        if (function_exists('maybe_unserialize')) {
+            $decoded = maybe_unserialize($payload);
+        } else {
+            $decoded = @unserialize($payload);
+        }
+
+        if (is_string($decoded)) {
+            return $decoded;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Case-insensitive Accept-Encoding check.
+     */
+    private function client_accepts_encoding($encoding) {
+        $accept = $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '';
+        return stripos((string) $accept, (string) $encoding) !== false;
+    }
+
+    /**
+     * True when byte sequence looks like gzip stream.
+     */
+    private function is_gzip_stream($bytes) {
+        return is_string($bytes) && strlen($bytes) >= 2 && substr($bytes, 0, 2) === "\x1f\x8b";
     }
 
     /**

@@ -1385,7 +1385,22 @@ class API_Handler {
         $sanitized['enable_minification'] = !empty($input['enable_minification']) ? 1 : 0;
         $sanitized['enable_compression'] = !empty($input['enable_compression']) ? 1 : 0;
         $method = sanitize_text_field($input['compression_method'] ?? 'brotli');
-        $sanitized['compression_method'] = in_array($method, ['brotli','gzip']) ? $method : 'brotli';
+        $sanitized['compression_method'] = in_array($method, ['brotli','gzip'], true) ? $method : 'brotli';
+        $available_methods = [];
+        if (function_exists('brotli_compress')) { $available_methods[] = 'brotli'; }
+        if (function_exists('gzencode') || function_exists('gzcompress')) { $available_methods[] = 'gzip'; }
+        if (!empty($sanitized['enable_compression'])) {
+            if (count($available_methods) === 1) {
+                // Auto-select the only available compression method.
+                $sanitized['compression_method'] = $available_methods[0];
+            } elseif (!empty($available_methods) && !in_array($sanitized['compression_method'], $available_methods, true)) {
+                // Selected method unavailable in this PHP runtime; fall back deterministically.
+                $sanitized['compression_method'] = in_array('brotli', $available_methods, true) ? 'brotli' : $available_methods[0];
+            } elseif (empty($available_methods)) {
+                // No codec available at runtime; keep pages readable by disabling compression.
+                $sanitized['enable_compression'] = 0;
+            }
+        }
         
         // Sanitize exclusion patterns
         $sanitized['custom_cache_exclusions'] = sanitize_textarea_field($input['custom_cache_exclusions'] ?? '');

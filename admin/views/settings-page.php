@@ -228,6 +228,14 @@ if (!defined('ABSPATH')) exit;
                                 $brotli_available = function_exists('brotli_compress');
                                 $gzip_available = function_exists('gzencode') || function_exists('gzcompress');
                                 $method = $settings['compression_method'] ?? 'brotli';
+                                $available_methods = [];
+                                if ($brotli_available) { $available_methods[] = 'brotli'; }
+                                if ($gzip_available) { $available_methods[] = 'gzip'; }
+                                if (!empty($settings['enable_compression']) && count($available_methods) === 1) {
+                                    $method = $available_methods[0];
+                                } elseif (!in_array($method, ['brotli', 'gzip'], true)) {
+                                    $method = 'brotli';
+                                }
                             ?>
                             <div class="compression-methods" style="margin-top:8px;">
                                 <label style="margin-right: 12px; opacity: <?php echo $brotli_available ? '1' : '0.5'; ?>;">

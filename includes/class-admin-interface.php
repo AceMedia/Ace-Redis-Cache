@@ -142,6 +142,7 @@ class AdminInterface {
                 'rest_nonce' => wp_create_nonce('wp_rest'),
                 'user_auto_save' => ($user_auto === '' ? null : (int) (bool) $user_auto)
             ]);
+            wp_add_inline_script('ace-redis-cache-admin', $this->get_compression_autoselect_script());
         } else {
             // Fallback to inline JavaScript if compiled version doesn't exist
             wp_enqueue_script('jquery');
@@ -155,6 +156,7 @@ class AdminInterface {
                 'rest_nonce' => wp_create_nonce('wp_rest'),
                 'user_auto_save' => ($user_auto === '' ? null : (int) (bool) $user_auto)
             ]);
+            wp_add_inline_script('jquery', $this->get_compression_autoselect_script());
             
             add_action('admin_footer', [$this, 'inline_admin_scripts']);
             if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -205,6 +207,24 @@ class AdminInterface {
         });
         </script>
         <?php
+    }
+
+    /**
+     * Small admin script to auto-select the only available compression method when compression is enabled.
+     */
+    private function get_compression_autoselect_script() {
+        return "jQuery(function($){\n"
+            . "  function aceAutoSelectSingleCompressionMethod(){\n"
+            . "    var enabled = $('#enable_compression').is(':checked');\n"
+            . "    if (!enabled) { return; }\n"
+            . "    var radios = $('input[name=\\\"ace_redis_cache_settings[compression_method]\\\"]');\n"
+            . "    if (!radios.length) { return; }\n"
+            . "    var available = radios.filter(function(){ return !this.disabled; });\n"
+            . "    if (available.length === 1) { available.prop('checked', true).trigger('change'); }\n"
+            . "  }\n"
+            . "  aceAutoSelectSingleCompressionMethod();\n"
+            . "  $(document).on('change', '#enable_compression', aceAutoSelectSingleCompressionMethod);\n"
+            . "});";
     }
     
     /**

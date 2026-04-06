@@ -597,6 +597,10 @@ if (!class_exists('WP_Object_Cache')) {
                     strpos($key, '_terms') !== false || strpos($key, 'term_') !== false) {
                     return false;
                 }
+                // Cache PPCP/PayPal transients (prevent blocking API calls on every page)
+                if (strpos($key, "ppcp") !== false || strpos($key, "paypal") !== false) {
+                    return false;
+                }
                 // Exclude other transients to prevent cache pollution
                 return true;
             }

@@ -232,11 +232,27 @@ class AdminInterface {
             includes_url('css/dashicons.min.css'),
         ]));
 
+        // Build a local-loopback version of each candidate URL so the probe
+        // hits Apache directly, bypassing any upstream proxy/CDN/ALB that may
+        // strip or override Cache-Control headers before they reach the client.
+        $local_probe_candidates = [];
+        foreach ($probe_candidates as $public_url) {
+            $parsed = wp_parse_url($public_url);
+            if (!empty($parsed['path'])) {
+                $scheme = is_ssl() ? 'https' : 'http';
+                $local_probe_candidates[] = $scheme . '://127.0.0.1' . $parsed['path'];
+            }
+        }
+        if (!empty($local_probe_candidates)) {
+            $probe_candidates = $local_probe_candidates;
+        }
+
         foreach ($probe_candidates as $probe_url) {
             $response = wp_remote_head(add_query_arg('ace_rc_probe', (string) time(), $probe_url), [
                 'timeout' => 4,
                 'redirection' => 2,
-                'sslverify' => true,
+                'sslverify' => false,
+                'headers' => ['Host' => wp_parse_url(home_url(), PHP_URL_HOST)],
             ]);
 
             if (is_wp_error($response)) {

@@ -99,7 +99,9 @@ class AceRedisCache {
      * Load plugin settings
      */
     private function load_settings() {
-        $loaded = get_option('ace_redis_cache_settings', [
+        SettingsStore::maybe_migrate_legacy_settings_to_network();
+
+        $loaded = SettingsStore::get_settings([
             'host' => '127.0.0.1',
             'port' => 6379,
             'password' => '',
@@ -312,19 +314,20 @@ class AceRedisCache {
      * Setup WordPress hooks
      */
     private function setup_hooks() {
-        // Plugin lifecycle hooks
-        register_activation_hook($this->plugin_path . '/ace-redis-cache.php', [$this, 'on_activation']);
-        register_deactivation_hook($this->plugin_path . '/ace-redis-cache.php', [$this, 'on_deactivation']);
-        
-        // Settings update hook
+        // Settings update hooks (single-site + network mode).
         add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
-        // Pre-update filter (fires before DB write) to trace and preserve transient flag if it mysteriously drops
+        add_action('update_site_option_ace_redis_cache_settings', [$this, 'on_site_settings_updated'], 10, 4);
+
+        // Pre-update filter (fires before DB write) to trace and preserve transient flag if it mysteriously drops.
         add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace'], 10, 2);
-    // Late-stage tracker to detect other filters mutating value after ours
-    add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace_late'], 9999, 2);
-        // Trace reads to detect external mutation (low priority to run after other filters)
+        add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace_late'], 9999, 2);
+        add_filter('pre_update_site_option_ace_redis_cache_settings', [$this, 'pre_update_site_settings_trace'], 10, 3);
+
+        // Trace reads to detect external mutation (low priority to run after other filters).
         add_filter('option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
-            add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
+        add_filter('site_option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
+
+        add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
         
         // Prime critical options after permalink or rewrite changes
         add_action('update_option_permalink_structure', [$this, 'prime_critical_options_after_permalink_change']);
@@ -505,6 +508,13 @@ class AceRedisCache {
      * @return bool True if request should be cached
      */
     private function should_cache_request() {
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+
+        // Never cache core auth/admin/system endpoints.
+        if ($request_uri !== '' && preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri)) {
+            return false;
+        }
+
         // Don't cache admin pages
         if (is_admin()) {
             return false;
@@ -531,6 +541,17 @@ class AceRedisCache {
         }
 
         if (!empty($this->settings['exclude_sitemaps']) && $this->is_sitemap_request()) {
+            return false;
+        }
+
+        // Skip page cache when WooCommerce indicates an active cart.
+        if (isset($_COOKIE['woocommerce_cart_hash']) && $_COOKIE['woocommerce_cart_hash'] !== '') {
+            return false;
+        }
+
+        // Never page-cache cart, checkout, or account endpoints.
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        if (preg_match('#^/(cart|checkout|my-account)(/|$)#i', $uri)) {
             return false;
         }
         
@@ -575,6 +596,22 @@ class AceRedisCache {
         }
 
         return false;
+    }
+
+    /**
+     * True when request is an admin/auth/system endpoint where plugin cache URL/header mutation must not run.
+     */
+    private function is_admin_auth_or_system_request() {
+        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+            return true;
+        }
+
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        if ($request_uri === '') {
+            return false;
+        }
+
+        return (bool) preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri);
     }
     
     /**
@@ -1250,8 +1287,26 @@ class AceRedisCache {
      */
     private function generate_page_cache_key() {
         $version = $this->get_site_cache_version();
-        $key_parts = [ 'page_cache', $_SERVER['REQUEST_URI'] ?? '/', \is_ssl() ? 'https' : 'http', \wp_is_mobile() ? 'mobile' : 'desktop', 'v' . $version ];
-        return implode(':', $key_parts);
+        $host = $this->normalize_cache_host($_SERVER['HTTP_HOST'] ?? '');
+        $request_path = $_SERVER['REQUEST_URI'] ?? '/';
+        $key_parts = [
+            'page_cache',
+            $request_path,
+            \is_ssl() ? 'https' : 'http',
+            \wp_is_mobile() ? 'mobile' : 'desktop',
+            $host,
+            'v' . $version,
+        ];
+
+        $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
+            'request_uri' => $request_path,
+            'scheme' => \is_ssl() ? 'https' : 'http',
+            'device' => \wp_is_mobile() ? 'mobile' : 'desktop',
+            'host' => $host,
+            'version' => (int) $version,
+        ]);
+
+        return implode(':', array_map('strval', (array) $key_parts));
     }
 
     private function get_site_cache_version() {
@@ -1265,6 +1320,19 @@ class AceRedisCache {
     }
 
     /**
+     * Normalize host for cache key composition.
+     */
+    private function normalize_cache_host($host) {
+        $host = strtolower(trim((string) $host));
+        if ($host === '') {
+            return '';
+        }
+
+        $host = preg_replace('/:\\d+$/', '', $host);
+        return $host ?: '';
+    }
+
+    /**
      * Build a page cache core key (without redis prefix) for an arbitrary relative path.
      * Mirrors generate_page_cache_key logic but parameterized.
      * @param string $path Relative URI path beginning with '/'
@@ -1272,9 +1340,29 @@ class AceRedisCache {
      * @param string $device 'desktop'|'mobile'
      * @return string
      */
-    private function build_page_cache_core_key($path, $scheme, $device, $version = null) {
+    private function build_page_cache_core_key($path, $scheme, $device, $version = null, $host = null) {
         if ($version === null) { $version = $this->get_site_cache_version(); }
-        return implode(':', ['page_cache', $path ?: '/', $scheme, $device, 'v' . (int)$version]);
+        if ($host === null) { $host = parse_url(home_url(), PHP_URL_HOST) ?: ''; }
+        $host = $this->normalize_cache_host($host);
+
+        $key_parts = [
+            'page_cache',
+            $path ?: '/',
+            $scheme,
+            $device,
+            $host,
+            'v' . (int) $version,
+        ];
+
+        $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
+            'request_uri' => $path ?: '/',
+            'scheme' => $scheme,
+            'device' => $device,
+            'host' => $host,
+            'version' => (int) $version,
+        ]);
+
+        return implode(':', array_map('strval', (array) $key_parts));
     }
 
     /**
@@ -2168,9 +2256,10 @@ class AceRedisCache {
     /**
      * Handle plugin activation
      */
-    public function on_activation() {
-        // Ensure option exists and is non-autoloaded to prevent notoptions poisoning
-        $existing = get_option('ace_redis_cache_settings', null);
+    public function on_activation($network_wide = false) {
+        // Ensure option exists in the active scope.
+        $use_network_scope = is_multisite() && (bool) $network_wide;
+        $existing = $use_network_scope ? get_site_option('ace_redis_cache_settings', null) : SettingsStore::get_settings(null);
         if ($existing === null) {
             // Build defaults (mirrors load_settings defaults)
             $defaults = [
@@ -2211,8 +2300,12 @@ class AceRedisCache {
                 'manage_static_cache_via_htaccess' => 0,
                 'prefer_existing_static_cache_headers' => 1,
             ];
-            add_option('ace_redis_cache_settings', $defaults, '', 'no');
-            if (function_exists('wp_cache_delete')) {
+            if ($use_network_scope) {
+                add_site_option('ace_redis_cache_settings', $defaults);
+            } else {
+                SettingsStore::ensure_settings_exists($defaults);
+            }
+            if (!SettingsStore::is_network_mode() && function_exists('wp_cache_delete')) {
                 @wp_cache_delete('notoptions', 'options');
                 @wp_cache_delete('ace_redis_cache_settings', 'options');
                 @wp_cache_delete('alloptions', 'options');
@@ -2256,10 +2349,10 @@ class AceRedisCache {
     }
     
     /**
-     * Handle settings updates
+     * Handle settings updates.
      */
     public function on_settings_updated($old_value, $new_value) {
-        // Reload settings
+        // Reload settings.
         if (is_string($new_value)) {
             $decoded = json_decode($new_value, true);
             $this->settings = is_array($decoded) ? $decoded : [];
@@ -2273,16 +2366,20 @@ class AceRedisCache {
             error_log('Ace-Redis-Cache: on_settings_updated old_transient=' . $old_flag . ' new_transient=' . $new_flag);
         }
 
-        // Proactively clear any cached copy (defensive; our drop-in now bypasses but keep for other caches)
-        if (function_exists('wp_cache_delete')) { @wp_cache_delete('ace_redis_cache_settings', 'options'); }
-        
-        // Reinitialize components with new settings
-        $this->init_components();
-        
-        // Clear cache when settings change
-        $this->cache_manager->clear_all_cache();
+        // Proactively clear any cached copy (defensive; our drop-in now bypasses but keep for other caches).
+        if (!SettingsStore::is_network_mode() && function_exists('wp_cache_delete')) {
+            @wp_cache_delete('ace_redis_cache_settings', 'options');
+        }
 
-        // Manage object-cache.php drop-in based on setting
+        // Reinitialize components with new settings.
+        $this->init_components();
+
+        // Clear cache when settings change.
+        if ($this->cache_manager) {
+            $this->cache_manager->clear_all_cache();
+        }
+
+        // Manage object-cache.php drop-in based on setting.
         try {
             $this->maybe_manage_dropin();
         } catch (\Exception $e) {
@@ -2298,6 +2395,13 @@ class AceRedisCache {
                 error_log('Ace-Redis-Cache .htaccess management error: ' . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Wrapper for update_site_option_ace_redis_cache_settings action.
+     */
+    public function on_site_settings_updated($option, $value, $old_value, $network_id = null) {
+        $this->on_settings_updated($old_value, $value);
     }
 
     private function maybe_manage_static_cache_htaccess() {
@@ -2548,6 +2652,13 @@ class AceRedisCache {
             }
         }
         return $new_value;
+    }
+
+    /**
+     * Wrapper for pre_update_site_option_ace_redis_cache_settings filter.
+     */
+    public function pre_update_site_settings_trace($new_value, $old_value, $option = null) {
+        return $this->pre_update_settings_trace($new_value, $old_value);
     }
 
     /**
@@ -2846,9 +2957,12 @@ class AceRedisCache {
     public function set_static_cache_headers($headers) {
         if (empty($this->settings['enable_static_asset_cache'])) { return $headers; }
         // Avoid altering login, admin ajax endpoints, REST
-        if (is_admin() || (defined('REST_REQUEST') && REST_REQUEST) || wp_doing_ajax()) { return $headers; }
+        if ($this->is_admin_auth_or_system_request()) { return $headers; }
         $uri = $_SERVER['REQUEST_URI'] ?? '';
         if ($uri === '') { return $headers; }
+        if (preg_match('#/(wp-admin/load-(?:styles|scripts)\.php|wp-login\.php)#i', $uri)) {
+            return $headers;
+        }
         $path = parse_url($uri, PHP_URL_PATH);
         if (!$path) { return $headers; }
         // Match common static file extensions (allow .gz/.br suffixes)
@@ -2864,14 +2978,14 @@ class AceRedisCache {
     }
 
     public function version_attachment_url($url, $attachment_id) {
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (empty($this->settings['enable_static_asset_cache']) || $this->is_admin_auth_or_system_request()) {
             return $url;
         }
         return $this->append_static_asset_version($url);
     }
 
     public function version_attachment_image_attributes($attr, $attachment, $size) {
-        if (empty($this->settings['enable_static_asset_cache']) || !is_array($attr)) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($attr) || $this->is_admin_auth_or_system_request()) {
             return $attr;
         }
 
@@ -2902,7 +3016,7 @@ class AceRedisCache {
     }
 
     public function version_attachment_image_src($image, $attachment_id, $size, $icon) {
-        if (empty($this->settings['enable_static_asset_cache']) || !is_array($image) || empty($image[0])) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($image) || empty($image[0]) || $this->is_admin_auth_or_system_request()) {
             return $image;
         }
 
@@ -2911,14 +3025,14 @@ class AceRedisCache {
     }
 
     public function version_post_thumbnail_url($url, $post, $size) {
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (empty($this->settings['enable_static_asset_cache']) || $this->is_admin_auth_or_system_request()) {
             return $url;
         }
         return $this->append_static_asset_version($url);
     }
 
     public function version_image_srcset_sources($sources, $size_array, $image_src, $image_meta, $attachment_id) {
-        if (empty($this->settings['enable_static_asset_cache']) || !is_array($sources)) {
+        if (empty($this->settings['enable_static_asset_cache']) || !is_array($sources) || $this->is_admin_auth_or_system_request()) {
             return $sources;
         }
 
@@ -2933,7 +3047,7 @@ class AceRedisCache {
     }
 
     public function version_avatar_url($url, $id_or_email, $args) {
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (empty($this->settings['enable_static_asset_cache']) || $this->is_admin_auth_or_system_request()) {
             return $url;
         }
         return $this->append_static_asset_version($url);
@@ -2943,6 +3057,12 @@ class AceRedisCache {
         if (empty($this->settings['enable_static_asset_cache']) || !is_string($src) || $src === '') {
             return $src;
         }
+
+        // Never rewrite admin/auth/system asset URLs.
+        if ($this->is_admin_auth_or_system_request()) {
+            return $src;
+        }
+
         return $this->append_static_asset_version($src);
     }
 

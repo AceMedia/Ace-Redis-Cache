@@ -43,6 +43,13 @@ class RedisConnection {
      * @return \Redis|null Redis instance or null if connection fails
      */
     public function get_connection($force_reconnect = false, $bypass_circuit_breaker = false) {
+        global $ace_redis_shared_connection;
+
+        if (!$force_reconnect && $ace_redis_shared_connection instanceof \Redis) {
+            $this->redis = $ace_redis_shared_connection;
+            return $this->redis;
+        }
+
         // Check if circuit breaker should be bypassed
         if (!$bypass_circuit_breaker && !$this->should_bypass_circuit_breaker()) {
             if ($this->is_circuit_breaker_open()) {

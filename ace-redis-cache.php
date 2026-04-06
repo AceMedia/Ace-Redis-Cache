@@ -7,7 +7,7 @@
  * Requires at least: 5.0
  * Tested up to: 6.4
  * Requires PHP: 7.4
- * Network: false
+ * Network: true
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: ace-redis-cache
@@ -173,6 +173,10 @@ class AceRedisCacheBootstrap {
      * Load and initialize the main plugin
      */
     public function load_plugin() {
+        if (class_exists('AceMedia\\RedisCache\\SettingsStore')) {
+            \AceMedia\RedisCache\SettingsStore::maybe_migrate_legacy_settings_to_network();
+        }
+
         if (class_exists('AceMedia\\RedisCache\\AceRedisCache')) {
             $this->plugin = new \AceMedia\RedisCache\AceRedisCache();
             // Register CLI commands if available
@@ -190,7 +194,7 @@ class AceRedisCacheBootstrap {
     /**
      * Plugin activation
      */
-    public function on_activation() {
+    public function on_activation($network_wide = false) {
         // Check requirements again on activation
         if (!$this->check_requirements()) {
             deactivate_plugins(plugin_basename(__FILE__));
@@ -209,7 +213,7 @@ class AceRedisCacheBootstrap {
         
         // Call plugin activation if available
         if ($this->plugin && method_exists($this->plugin, 'on_activation')) {
-            $this->plugin->on_activation();
+            $this->plugin->on_activation((bool) $network_wide);
         }
 
         
@@ -234,9 +238,16 @@ class AceRedisCacheBootstrap {
      * Plugin uninstallation
      */
     public static function on_uninstall() {
-        // Clean up options
-        delete_option('ace_redis_cache_settings');
-        delete_option('ace_redis_cache_dismissed_version');
+        // Clean up options in the active storage scope.
+        if (class_exists('AceMedia\\RedisCache\\SettingsStore')) {
+            \AceMedia\RedisCache\SettingsStore::delete('ace_redis_cache_settings');
+            \AceMedia\RedisCache\SettingsStore::delete('ace_redis_cache_dismissed_version');
+        } else {
+            delete_option('ace_redis_cache_settings');
+            delete_site_option('ace_redis_cache_settings');
+            delete_option('ace_redis_cache_dismissed_version');
+            delete_site_option('ace_redis_cache_dismissed_version');
+        }
         
         // Clean up transients
         delete_transient('ace_redis_circuit_breaker');

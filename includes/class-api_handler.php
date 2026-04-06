@@ -84,8 +84,9 @@ class API_Handler {
      */
     private function init() {
         add_action('rest_api_init', [$this, 'register_routes']);
-    // Early option filter to provide freshly saved settings during the same request
-    add_filter('option_ace_redis_cache_settings', [$this, 'override_option_during_save'], 1, 1);
+        // Early option filters to provide freshly saved settings during the same request.
+        add_filter('option_ace_redis_cache_settings', [$this, 'override_option_during_save'], 1, 1);
+        add_filter('site_option_ace_redis_cache_settings', [$this, 'override_option_during_save'], 1, 1);
     }
     
     /**
@@ -245,7 +246,7 @@ class API_Handler {
     }
 
     public function get_settings($request) {
-        $settings = get_option('ace_redis_cache_settings', []);
+        $settings = SettingsStore::get_settings([]);
         return new \WP_REST_Response([
             'success' => true,
             'data' => [
@@ -256,7 +257,7 @@ class API_Handler {
 
     public function opcache_reset_route($request) {
         // Always fetch latest settings to avoid stale constructor snapshot
-        $current = get_option('ace_redis_cache_settings', []);
+        $current = SettingsStore::get_settings([]);
         if (empty($current['enable_opcache_helpers'])) {
             return new \WP_REST_Response(['success' => false, 'message' => 'OPcache helpers disabled'], 400);
         }
@@ -272,7 +273,7 @@ class API_Handler {
     }
 
     public function opcache_prime_route($request) {
-        $current = get_option('ace_redis_cache_settings', []);
+        $current = SettingsStore::get_settings([]);
         if (empty($current['enable_opcache_helpers'])) {
             return new \WP_REST_Response(['success' => false, 'message' => 'OPcache helpers disabled'], 400);
         }
@@ -333,11 +334,25 @@ class API_Handler {
         $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
     $dropin_connected = false; // physical connection
     $dropin_active = false;    // effective (not bypassed) guest perspective
-    $conn_details = null; $via = null; $error = null; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
+    $conn_details = null; $via = null; $error = null; $runtime_stats = []; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
         if ($using_dropin && isset($wp_object_cache) && is_object($wp_object_cache)) {
             if (method_exists($wp_object_cache,'is_connected')) { $dropin_connected = (bool)$wp_object_cache->is_connected(); }
-            if (method_exists($wp_object_cache,'connection_details')) { $conn_details = $wp_object_cache->connection_details(); $via = $conn_details['via'] ?? null; $error = $conn_details['error'] ?? null; $dropin_active = isset($conn_details['active']) ? (bool)$conn_details['active'] : false; }
+            if (method_exists($wp_object_cache,'connection_details')) {
+                $conn_details = $wp_object_cache->connection_details();
+                $via = $conn_details['via'] ?? null;
+                $error = $conn_details['error'] ?? null;
+                $dropin_active = isset($conn_details['active']) ? (bool)$conn_details['active'] : false;
+                if (isset($conn_details['stats']) && is_array($conn_details['stats'])) {
+                    $runtime_stats = $conn_details['stats'];
+                }
+            }
             if (method_exists($wp_object_cache,'is_bypassed')) { $runtime_bypass = $wp_object_cache->is_bypassed(); }
+        }
+        if (empty($runtime_stats) && function_exists('wp_cache_get_runtime_stats')) {
+            $tmp_stats = wp_cache_get_runtime_stats();
+            if (is_array($tmp_stats)) {
+                $runtime_stats = $tmp_stats;
+            }
         }
         $const_bypass = defined('ACE_OC_BYPASS') && ACE_OC_BYPASS; $bypass = $const_bypass || $runtime_bypass;
         // Determine bypass reason (admin/editor vs fail-open)
@@ -364,6 +379,21 @@ class API_Handler {
         }
         if ($profiling && $slow_ops>0) { $tips[] = 'Detected ' . $slow_ops . ' slow ops (>=100ms). Consider inspecting heavy queries or raising threshold.'; }
         if ($autoload_size > 50*1024*1024) { $tips[] = 'Autoloaded options exceed 50MB (' . size_format($autoload_size) . '). This can hurt performance.'; }
+        if (!empty($runtime_stats) && is_array($runtime_stats)) {
+            $local_hits = isset($runtime_stats['local_hits']) ? (int)$runtime_stats['local_hits'] : 0;
+            $redis_hits = isset($runtime_stats['redis_hits']) ? (int)$runtime_stats['redis_hits'] : 0;
+            $redis_misses = isset($runtime_stats['redis_misses']) ? (int)$runtime_stats['redis_misses'] : 0;
+            $writes = isset($runtime_stats['persist_writes']) ? (int)$runtime_stats['persist_writes'] : 0;
+            $deletes = isset($runtime_stats['persist_deletes']) ? (int)$runtime_stats['persist_deletes'] : 0;
+            $tips[] = sprintf(
+                'Runtime counters: local hits %d, redis hits %d, misses %d, writes %d, deletes %d.',
+                $local_hits,
+                $redis_hits,
+                $redis_misses,
+                $writes,
+                $deletes
+            );
+        }
         // Provide WP_CACHE guidance
         if (!defined('WP_CACHE') || !WP_CACHE) { $tips[] = 'WP_CACHE is not enabled. Add define(\'WP_CACHE\', true); to wp-config.php for full object cache effectiveness.'; }
         // Unique tips only
@@ -379,6 +409,7 @@ class API_Handler {
                 'active' => $dropin_active,
                 'via' => $via,
                 'error' => $error,
+                'runtime_stats' => $runtime_stats,
                 'slow_ops' => $slow_ops,
                 'profiling' => $profiling,
                 'autoload_size' => $autoload_size,
@@ -388,6 +419,13 @@ class API_Handler {
     }
     
     /**
+     * Resolve capability required for admin actions.
+     */
+    private function get_manage_capability() {
+        return SettingsStore::is_network_mode() ? 'manage_network_options' : 'manage_options';
+    }
+
+    /**
      * Check user permissions for API access
      *
      * @param \WP_REST_Request $request
@@ -395,7 +433,7 @@ class API_Handler {
      */
     public function check_permissions($request) {
         // Check if user can manage options
-        if (!current_user_can('manage_options')) {
+        if (!current_user_can($this->get_manage_capability())) {
             return false;
         }
         
@@ -418,7 +456,7 @@ class API_Handler {
      */
     public function check_simple_permissions($request) {
         // Only check if user can manage options (no nonce required)
-        return current_user_can('manage_options');
+        return current_user_can($this->get_manage_capability());
     }
     
     /**
@@ -442,7 +480,7 @@ class API_Handler {
                     $file = sanitize_text_field($file);
                     $mp_store['plugins'][$file] = [ 'enabled_on_init' => !empty($meta['enabled_on_init']) ? 1 : 0 ];
                 }
-                update_option(Plugin_Manager::OPTION, $mp_store, 'no');
+                Plugin_Manager::update_store($mp_store);
                 unset($settings['__managed_plugins']);
             }
             
@@ -465,7 +503,7 @@ class API_Handler {
             // Fetch current settings to detect no-op saves & diff
             // Mark in-flight save so any get_option during this request reflects new intent
             $this->saving_settings = true;
-            $old_settings = get_option('ace_redis_cache_settings', []);
+            $old_settings = SettingsStore::get_settings([]);
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 $old_flag_dbg = is_array($old_settings) ? ($old_settings['enable_transient_cache'] ?? 'MISS') : 'NA';
                 $new_flag_dbg = $sanitized_settings['enable_transient_cache'] ?? 'MISS';
@@ -480,7 +518,7 @@ class API_Handler {
             // Primary update attempt
             // IMPORTANT: Do NOT set last_saved_settings before update_option runs, or our override filter
             // will cause core to think nothing changed (old == new) and skip the actual DB write.
-            $result = update_option('ace_redis_cache_settings', $sanitized_settings);
+            $result = SettingsStore::update_settings($sanitized_settings);
             // Purge related option caches after primary write (whether core performed a DB write or not)
             $this->purge_option_caches();
             // Now enable override for subsequent stale reads within this same request
@@ -490,8 +528,27 @@ class API_Handler {
             // Immediately sync in-memory autoload snapshot to avoid stale read when enabling transient cache alone
             // NOTE: Do NOT repopulate $alloptions manually; let the next request rebuild it (per requirements)
 
+            // In network mode we avoid legacy wp_options autoload remediation paths.
+            if (SettingsStore::is_network_mode()) {
+                $this->saving_settings = false;
+                $this->last_saved_settings = null;
+                $this->after_update_option = false;
+
+                $final_stored = SettingsStore::get_settings([]);
+                $changed = $old_settings != $final_stored;
+                return new \WP_REST_Response([
+                    'success' => true,
+                    'data' => [
+                        'message' => $changed ? 'Network settings saved.' : 'No changes to save (or unchanged after write).',
+                        'settings_changed' => $changed,
+                        'settings' => $this->sanitize_settings_for_response($final_stored),
+                        'update_result' => $result,
+                    ],
+                ], 200);
+            }
+
             // Unconditional verification (even if $result is false)
-            $stored = get_option('ace_redis_cache_settings', []);
+            $stored = SettingsStore::get_settings([]);
             $raw_db = $this->raw_db_get_option('ace_redis_cache_settings');
             $stored_flag = is_array($stored) ? ($stored['enable_transient_cache'] ?? 'MISS') : 'NA';
             $raw_flag = is_array($raw_db) ? ($raw_db['enable_transient_cache'] ?? 'MISS') : 'NA';
@@ -504,7 +561,7 @@ class API_Handler {
                 // Step 1: direct SQL update (in-place)
                 $forced_sql = $this->force_update_option_row('ace_redis_cache_settings', $sanitized_settings);
                 $this->purge_option_caches(); // After direct SQL path
-                $stored2 = get_option('ace_redis_cache_settings', []);
+                $stored2 = SettingsStore::get_settings([]);
                 $stored2_flag = is_array($stored2) ? ($stored2['enable_transient_cache'] ?? 'MISS') : 'NA';
                 $raw2 = $this->raw_db_get_option('ace_redis_cache_settings');
                 $raw2_flag = is_array($raw2) ? ($raw2['enable_transient_cache'] ?? 'MISS') : 'NA';
@@ -516,28 +573,21 @@ class API_Handler {
     // (override_option_during_save moved to end of class)
                 if ((int)$raw2_flag === 1 && (int)$stored2_flag !== 1) {
                     if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: rewrite fallback delete+add because stored mismatch despite raw=1');
-                    delete_option('ace_redis_cache_settings');
-                    // Re-add explicitly non-autoloaded (autoload = 'no') per new policy
-                    add_option('ace_redis_cache_settings', $raw2, '', 'no');
+                    SettingsStore::delete('ace_redis_cache_settings');
+                    SettingsStore::update_settings($raw2);
                     $this->purge_option_caches(); // After delete+add path
-                    $stored3 = get_option('ace_redis_cache_settings', []);
+                    $stored3 = SettingsStore::get_settings([]);
                     $stored3_flag = is_array($stored3) ? ($stored3['enable_transient_cache'] ?? 'MISS') : 'NA';
                     if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: rewrite fallback post-add stored=' . $stored3_flag);
-                    // Step 2a: If still stale inside this request due to autoloaded $alloptions snapshot, update it manually
+                    // Step 2a: if still stale in this request, force a fresh scoped read once more.
                     if ((int)$stored3_flag !== 1 && (int)$raw2_flag === 1) {
-                        global $alloptions;
-                        if (is_array($alloptions) && isset($alloptions['ace_redis_cache_settings'])) {
-                            $alloptions['ace_redis_cache_settings'] = $raw2; // force in-memory sync
-                            if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: manually refreshed $alloptions cache for ace_redis_cache_settings');
-                            // Re-read
-                            $stored3b = get_option('ace_redis_cache_settings', []);
-                            $stored3b_flag = is_array($stored3b) ? ($stored3b['enable_transient_cache'] ?? 'MISS') : 'NA';
-                            if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: post manual refresh stored=' . $stored3b_flag);
-                        }
+                        $stored3b = SettingsStore::get_settings([]);
+                        $stored3b_flag = is_array($stored3b) ? ($stored3b['enable_transient_cache'] ?? 'MISS') : 'NA';
+                        if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: post refresh stored=' . $stored3b_flag);
                     }
                 }
                 // Step 3: final attempt – if still not 1, override return payload but mark warning (so UI reflects true desired state even if get_option stale inside this request)
-                $final_check = get_option('ace_redis_cache_settings', []);
+                $final_check = SettingsStore::get_settings([]);
                 $final_flag_check = is_array($final_check) ? ($final_check['enable_transient_cache'] ?? 0) : 0;
                 if ((int)$final_flag_check !== 1) {
                     if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: final mismatch after all corrections – reporting soft success with warning');
@@ -567,7 +617,7 @@ class API_Handler {
             $this->ensure_settings_not_autoloaded();
             // Always purge key + meta caches after save to ensure fresh read next request
             $this->purge_option_caches();
-            $final_stored = get_option('ace_redis_cache_settings', []);
+            $final_stored = SettingsStore::get_settings([]);
             $final_flag = is_array($final_stored) ? ($final_stored['enable_transient_cache'] ?? 'MISS') : 'NA';
             $changed = $old_settings != $final_stored;
             $msg = $changed ? 'Settings saved.' : 'No changes to save (or unchanged after write).';
@@ -759,7 +809,7 @@ class API_Handler {
     public function test_write_read($request) {
         try {
             // Always fetch fresh settings (avoid stale constructor snapshot)
-            $settings_now = get_option('ace_redis_cache_settings', []);
+            $settings_now = SettingsStore::get_settings([]);
             // Guard when cache is disabled or manager unavailable
             if (empty($settings_now['enabled']) || !$this->cache_manager) {
                 return new \WP_REST_Response([
@@ -793,7 +843,7 @@ class API_Handler {
      */
     public function flush_cache($request) {
         try {
-            $settings_now = get_option('ace_redis_cache_settings', []);
+            $settings_now = SettingsStore::get_settings([]);
             // Guard when cache is disabled or manager unavailable
             if (empty($settings_now['enabled']) || !$this->cache_manager) {
                 return new \WP_REST_Response([
@@ -850,7 +900,7 @@ class API_Handler {
      */
     public function get_cache_stats($request) {
         try {
-            $settings_now = get_option('ace_redis_cache_settings', []);
+            $settings_now = SettingsStore::get_settings([]);
             // Guard when cache is disabled or manager unavailable
             if (empty($settings_now['enabled']) || !$this->cache_manager) {
                 return new \WP_REST_Response([
@@ -900,7 +950,7 @@ class API_Handler {
      */
     public function run_diagnostics($request) {
         try {
-            $settings_now = get_option('ace_redis_cache_settings', []);
+            $settings_now = SettingsStore::get_settings([]);
             $diagnostics = new Diagnostics($this->redis_connection, $this->cache_manager, $settings_now);
             $result = $diagnostics->get_full_diagnostics();
             $this->clear_stats_snapshot();
@@ -932,7 +982,7 @@ class API_Handler {
     public function simple_flush_cache($request) {
         try {
             // Check if cache is enabled first
-            $settings = get_option('ace_redis_cache_settings', []);
+            $settings = SettingsStore::get_settings([]);
             if (empty($settings['enabled'])) {
                 return new \WP_REST_Response([
                     'success' => false,
@@ -969,7 +1019,7 @@ class API_Handler {
     public function get_simple_status($request) {
         try {
             // Check if cache is enabled first
-            $settings = get_option('ace_redis_cache_settings', []);
+            $settings = SettingsStore::get_settings([]);
             if (empty($settings['enabled'])) {
                 return new \WP_REST_Response([
                     'success' => true,
@@ -1037,7 +1087,7 @@ class API_Handler {
             }
             
             // Check if cache is enabled before attempting any connections
-            $settings = get_option('ace_redis_cache_settings', []);
+            $settings = SettingsStore::get_settings([]);
             if (empty($settings['enabled'])) {
                 $metrics['cache_enabled'] = false;
                 return new \WP_REST_Response([
@@ -1232,7 +1282,7 @@ class API_Handler {
      */
     public function get_plugin_memory_metrics($request) {
         try {
-            $settings_now = get_option('ace_redis_cache_settings', []);
+            $settings_now = SettingsStore::get_settings([]);
             if (empty($settings_now['enabled']) || !$this->cache_manager) {
                 return new \WP_REST_Response([
                     'success' => false,

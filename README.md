@@ -34,6 +34,7 @@ High-performance full-page, block-aware, and object caching layer for WordPress 
 
 ---
 ## Key Features
+- Multisite network support: plugin can be network-activated and stores primary plugin settings in network scope when network mode is active.
 - Full page cache with placeholder expansion for dynamic blocks: first uncached request captures a canonical HTML frame with marker placeholders; subsequent hits serve the cached frame and re-hydrate dynamic regions.
 - Block-level dynamic placeholders: always-render model allows specific blocks (patterns or exact names) to bypass the static snapshot. Core dynamic blocks auto-detected; custom allow-list & wildcard patterns supported. Optional micro-cache (per-block TTL) evens load for hot fragments.
 - Object cache toggles: integrates with Redis object caching drop-in; can enable/disable object layer independently from page layer.
@@ -136,7 +137,7 @@ Dynamic blocks always freshly rendered (or micro-cached) then substituted.
 ## Developer Hooks (Representative)
 Filters:
 - `ace_redis_cache_enable_page_cache`
-- `ace_redis_cache_key_parts`
+- `ace_redis_cache_page_cache_key_parts`
 - `ace_redis_cache_page_ttl`
 - `ace_redis_cache_dynamic_blocks`
 - `ace_redis_cache_excluded_urls`
@@ -155,6 +156,8 @@ Actions:
 - `ace_redis_cache_connection_failed`
 
 See source for additional key derivation, compression and diagnostics hooks.
+
+`ace_redis_cache_page_cache_key_parts` receives both key-part array and context (`request_uri`, `scheme`, `device`, `host`, `version`) and can be used to customize key derivation without forking.
 
 ---
 ## Installation & Requirements

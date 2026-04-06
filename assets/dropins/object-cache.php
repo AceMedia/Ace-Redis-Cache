@@ -29,8 +29,54 @@ if ($is_admin_req && !defined('ACE_OC_BYPASS')) {
     define('ACE_OC_BYPASS', true);
 }
 
+if (!function_exists('ace_object_cache_is_woocommerce')) {
+    function ace_object_cache_is_woocommerce() {
+        if (defined('WC_ABSPATH')) {
+            return true;
+        }
+
+        static $result = null;
+        if ($result !== null) {
+            return $result;
+        }
+
+        $plugins = get_option('active_plugins', []);
+        $result = in_array('woocommerce/woocommerce.php', (array) $plugins, true);
+
+        return $result;
+    }
+}
+
 if (!class_exists('WP_Object_Cache')) {
     class WP_Object_Cache {
+        private const MAX_VALUE_BYTES_DEFAULT = 65536;
+        private const MAX_VALUE_BYTES_WC = 32768;
+
+        private const BYPASS_GROUPS_DEFAULT = [
+            'woocommerce_sessions',
+            'wc_session_id',
+            'woocommerce_notices',
+            'counts',
+            'plugins',
+            'woocommerce_transients',
+        ];
+
+        private const PERSISTENT_GROUPS_DEFAULT = [
+            'post_meta',
+            'posts',
+            'terms',
+            'term_meta',
+            'term-queries',
+            'term_taxonomy',
+            'product_type_relationships',
+            'product_visibility_relationships',
+            'product_shipping_class_relationships',
+            'options',
+            'woocommerce',
+            'wc_cache',
+            'site-transient',
+        ];
+
         protected $redis;
         protected $global_groups = [
             'users','userlogins','useremail','usermeta','site-transient',
@@ -60,6 +106,9 @@ if (!class_exists('WP_Object_Cache')) {
         protected $connect_error = null;
         protected $suspend_persistent_writes = false;
         protected $request_context = [];
+        protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
+        protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
+        protected $persistent_groups = self::PERSISTENT_GROUPS_DEFAULT;
 
         public function __construct() {
             // Emergency bypass
@@ -150,6 +199,10 @@ if (!class_exists('WP_Object_Cache')) {
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
 
+            if (function_exists('ace_object_cache_is_woocommerce') && ace_object_cache_is_woocommerce()) {
+                $this->apply_woocommerce_profile();
+            }
+
             // Only initialize Redis connection if not bypassing
             if (!$this->bypass && extension_loaded('redis')) { 
                 $this->init_redis(); 
@@ -167,6 +220,41 @@ if (!class_exists('WP_Object_Cache')) {
             // Post changes: flush on edits of public posts and on visibility flips (public <-> non-public)
             add_action('save_post',              [$this, 'maybe_flush_on_save'], 10, 3);
             add_action('transition_post_status', [$this, 'maybe_flush_on_visibility_change'], 10, 3);
+        }
+
+        public function apply_woocommerce_profile() {
+            $this->max_value_bytes = self::MAX_VALUE_BYTES_WC;
+            $this->bypass_groups = apply_filters('ace_oc_bypass_groups', self::BYPASS_GROUPS_DEFAULT);
+            $this->persistent_groups = apply_filters('ace_oc_persistent_groups', self::PERSISTENT_GROUPS_DEFAULT);
+        }
+
+        protected function is_bypass_group($group) {
+            $g = $group ?: 'default';
+            return in_array($g, (array) $this->bypass_groups, true);
+        }
+
+        protected function is_persistent_group($group) {
+            $g = $group ?: 'default';
+            return in_array($g, (array) $this->persistent_groups, true);
+        }
+
+        protected function exceeds_max_value_size($data) {
+            if ($data === null) {
+                return false;
+            }
+
+            if ($this->serializer_active) {
+                // phpredis serializer runs inside extension; approximate by serialize size.
+                $payload = @serialize($data);
+            } else {
+                $payload = is_scalar($data) ? (string) $data : @serialize($data);
+            }
+
+            if (!is_string($payload)) {
+                return false;
+            }
+
+            return strlen($payload) > (int) $this->max_value_bytes;
         }
 
         /** Is this a publicly visible status? */
@@ -266,6 +354,14 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         protected function init_redis() {
+            global $ace_redis_shared_connection;
+            if ($ace_redis_shared_connection instanceof \Redis) {
+                $this->redis = $ace_redis_shared_connection;
+                $this->connected = true;
+                $this->connect_via = 'shared';
+                return;
+            }
+
             // Get settings directly from database to avoid circular dependency with get_option()
             $plugin_settings = null;
             if (function_exists('wpdb') || (isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'])) {
@@ -313,15 +409,16 @@ if (!class_exists('WP_Object_Cache')) {
 
             $attempted_socket = false;
             $use_tls_config = $use_tls;
+            $persistent_id = 'ace-object-cache';
 
             try {
                 $this->redis = new Redis();
 
                 if (@is_readable($socket)) {
                     $attempted_socket = true;
-                    @$this->redis->connect($socket, 0, $timeout);
+                    @$this->redis->pconnect($socket, 0, $timeout, $persistent_id);
                     if (method_exists($this->redis,'isConnected') && !$this->redis->isConnected()) { $this->redis->close(); }
-                    else { $this->connect_via = 'socket'; }
+                    else { $this->connect_via = 'socket-persistent'; }
                 }
 
                 if ($this->connect_via === null) {
@@ -335,15 +432,15 @@ if (!class_exists('WP_Object_Cache')) {
                             $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
-                            @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
-                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; $connected = true; }
+                            @$this->redis->pconnect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls-persistent'; $connected = true; }
                         } catch (\Throwable $t) {}
                     }
 
                     if (!$connected) {
                         try {
-                            @$this->redis->connect($plain_host, $port, $timeout);
-                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp'; $connected = true; }
+                            @$this->redis->pconnect($plain_host, $port, $timeout, $persistent_id);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp-persistent'; $connected = true; }
                         } catch (\Throwable $t) {}
                     }
 
@@ -352,8 +449,8 @@ if (!class_exists('WP_Object_Cache')) {
                             $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
-                            @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
-                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; }
+                            @$this->redis->pconnect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
+                            if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls-persistent'; }
                         } catch (\Throwable $t) {}
                     }
                 }
@@ -378,6 +475,7 @@ if (!class_exists('WP_Object_Cache')) {
                 try { $this->redis->client('SETNAME', 'ace-object-cache'); } catch (\Throwable $t) {}
 
                 $this->connected = true;
+                $ace_redis_shared_connection = $this->redis;
             } catch (\Throwable $e) {
                 $this->connect_error = $e->getMessage();
                 $this->bypass = true; $this->redis = null;
@@ -493,6 +591,8 @@ if (!class_exists('WP_Object_Cache')) {
         protected function can_persist_to_redis($group, $key = null, $allow_override = false) {
             if ($this->redis === null || !$this->connected) { return false; }
             if ($this->suspend_persistent_writes) { return false; }
+            if ($this->is_bypass_group($group)) { return false; }
+            if (!$this->is_persistent_group($group)) { return false; }
             if ($this->bypass && !$this->should_write_through($group, $key) && !$allow_override) {
                 return false;
             }
@@ -511,6 +611,11 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             if ($this->should_block_post_object_persistence($group, $data)) {
+                if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
+                return false;
+            }
+
+            if ($this->exceeds_max_value_size($data)) {
                 if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
                 return false;
             }
@@ -541,6 +646,10 @@ if (!class_exists('WP_Object_Cache')) {
 
             $this->runtime_set($group, $key, $data);
             if ($this->should_block_post_object_persistence($group, $data)) {
+                return true;
+            }
+
+            if ($this->is_bypass_group($group) || $this->exceeds_max_value_size($data)) {
                 return true;
             }
             
@@ -616,11 +725,26 @@ if (!class_exists('WP_Object_Cache')) {
                 return false; 
             }
 
+            if ($this->is_bypass_group($group)) {
+                $local = $this->runtime_get($group, $key, $local_found);
+                if ($local_found) {
+                    $found = true;
+                    return $local;
+                }
+                $found = false;
+                return false;
+            }
+
             $local = $this->runtime_get($group, $key, $local_found);
             if ($local_found && !$force) { 
                 $found = true; 
                 $this->prof_log('RUNTIME_HIT', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
                 return $local; 
+            }
+
+            if (!$this->is_persistent_group($group)) {
+                $found = false;
+                return false;
             }
 
             // Special handling for site-transients: allow them even during bypass (admin)  
@@ -702,6 +826,9 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             unset($this->runtime[$group][$key]);
+            if ($this->is_bypass_group($group) || !$this->is_persistent_group($group)) {
+                return true;
+            }
             if (!$this->can_persist_to_redis($group, $key)) return true;
             $k = $this->k($key, $group);
             try { return (bool)$this->redis->del($k); } catch (\Throwable $e) { $this->bypass = true; return true; }
@@ -947,9 +1074,13 @@ if (!class_exists('WP_Object_Cache')) {
         public function add_non_persistent_groups($groups) {
             foreach ((array)$groups as $g) { if (!in_array($g, $this->non_persistent_groups, true)) { $this->non_persistent_groups[] = $g; } }
         }
-        public function switch_to_blog($blog_id) { $this->blog_prefix = (is_multisite()? $blog_id . ':' : '1:'); }
+        public function switch_to_blog($blog_id) {
+            $this->blog_prefix = (is_multisite()? $blog_id . ':' : '1:');
+            $this->runtime = [];
+        }
         public function reset() {}
         public function close() { if ($this->redis) { try { $this->redis->close(); } catch (\Throwable $t) {} } }
+        public function get_redis() { return $this->redis; }
 
         // Health helpers
         public function is_connected() { return (bool)$this->connected && ($this->redis instanceof \Redis); }
@@ -967,7 +1098,11 @@ if (!class_exists('WP_Object_Cache')) {
     }
 }
 
-function wp_cache_init() { global $wp_object_cache; $wp_object_cache = new WP_Object_Cache(); }
+function wp_cache_init() {
+    global $wp_object_cache, $ace_redis_shared_connection;
+    $wp_object_cache = new WP_Object_Cache();
+    $ace_redis_shared_connection = method_exists($wp_object_cache, 'get_redis') ? $wp_object_cache->get_redis() : null;
+}
 
 function wp_cache_get($key, $group = '', $force = false, &$found = null) {
     global $wp_object_cache;

@@ -533,6 +533,17 @@ class AceRedisCache {
         if (!empty($this->settings['exclude_sitemaps']) && $this->is_sitemap_request()) {
             return false;
         }
+
+        // Skip page cache when WooCommerce indicates an active cart.
+        if (isset($_COOKIE['woocommerce_cart_hash']) && $_COOKIE['woocommerce_cart_hash'] !== '') {
+            return false;
+        }
+
+        // Never page-cache cart, checkout, or account endpoints.
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        if (preg_match('#^/(cart|checkout|my-account)(/|$)#i', $uri)) {
+            return false;
+        }
         
         return true;
     }

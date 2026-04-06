@@ -447,7 +447,7 @@ if (!class_exists('WP_Object_Cache')) {
 
                 if (@is_readable($socket)) {
                     $attempted_socket = true;
-                    @$this->redis->connect($socket, 0, $timeout, $persistent_id);
+                    @$this->redis->connect($socket, 0, $timeout);
                     if (method_exists($this->redis,'isConnected') && !$this->redis->isConnected()) { $this->redis->close(); }
                     else { $this->connect_via = 'socket'; }
                 }
@@ -463,14 +463,14 @@ if (!class_exists('WP_Object_Cache')) {
                             $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
-                            @$this->redis->connect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
+                            @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
                             if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; $connected = true; }
                         } catch (\Throwable $t) {}
                     }
 
                     if (!$connected) {
                         try {
-                            @$this->redis->connect($plain_host, $port, $timeout, $persistent_id);
+                            @$this->redis->connect($plain_host, $port, $timeout);
                             if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tcp'; $connected = true; }
                         } catch (\Throwable $t) {}
                     }
@@ -480,7 +480,7 @@ if (!class_exists('WP_Object_Cache')) {
                             $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
-                            @$this->redis->connect($tls_host, $port, $timeout, $persistent_id, 0, 0, $ctx);
+                            @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
                             if (method_exists($this->redis,'isConnected') && $this->redis->isConnected()) { $this->connect_via = 'tls'; }
                         } catch (\Throwable $t) {}
                     }

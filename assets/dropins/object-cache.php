@@ -73,6 +73,7 @@ if (!class_exists('WP_Object_Cache')) {
             'options',
             'woocommerce',
             'wc_cache',
+            'transient',
             'site-transient',
         ];
 

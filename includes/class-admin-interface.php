@@ -683,6 +683,24 @@ class AdminInterface {
     if ($dropin_connected && isset($wp_object_cache->redis)) {
             try { $info = $wp_object_cache->redis->info(); $transport = !empty($info['redis_mode']) ? $info['redis_mode'] : 'tcp'; } catch (\Throwable $t) {}
         }
+        $runtime_stats = [];
+        if (isset($wp_object_cache) && method_exists($wp_object_cache, 'connection_details')) {
+            try {
+                $cd_probe = $wp_object_cache->connection_details();
+                if (isset($cd_probe['stats']) && is_array($cd_probe['stats'])) {
+                    $runtime_stats = $cd_probe['stats'];
+                }
+            } catch (\Throwable $t) {}
+        }
+        if (empty($runtime_stats) && function_exists('wp_cache_get_runtime_stats')) {
+            $tmp_stats = wp_cache_get_runtime_stats();
+            if (is_array($tmp_stats)) {
+                $runtime_stats = $tmp_stats;
+            }
+        }
+        $stat = static function(array $stats_arr, string $key): int {
+            return isset($stats_arr[$key]) ? (int)$stats_arr[$key] : 0;
+        };
         // Basic environment
         $autoload_size = $this->estimate_autoload_size();
         ?>
@@ -701,6 +719,12 @@ class AdminInterface {
                     <?php } } ?>
                     <tr><th>Profiling</th><td><?php echo $prof ? 'enabled' : 'disabled'; ?></td></tr>
                     <tr><th>Slow Ops (>=100ms)</th><td><?php echo (int)$slow_ops; ?></td></tr>
+                    <tr><th>Runtime Hits (local / redis)</th><td><?php echo esc_html(number_format_i18n($stat($runtime_stats, 'local_hits')) . ' / ' . number_format_i18n($stat($runtime_stats, 'redis_hits'))); ?></td></tr>
+                    <tr><th>Runtime Misses</th><td><?php echo esc_html(number_format_i18n($stat($runtime_stats, 'redis_misses'))); ?></td></tr>
+                    <tr><th>Runtime Writes / Deletes</th><td><?php echo esc_html(number_format_i18n($stat($runtime_stats, 'persist_writes')) . ' / ' . number_format_i18n($stat($runtime_stats, 'persist_deletes'))); ?></td></tr>
+                    <tr><th>Runtime Short-Circuits</th><td><?php echo esc_html(number_format_i18n($stat($runtime_stats, 'bypass_short_circuit') + $stat($runtime_stats, 'non_persistent_group_short_circuit'))); ?></td></tr>
+                    <tr><th>Runtime Bypass/Oversize</th><td><?php echo esc_html(number_format_i18n($stat($runtime_stats, 'bypass_group_hits')) . ' / ' . number_format_i18n($stat($runtime_stats, 'oversize_skips'))); ?></td></tr>
+                    <tr><th>Runtime Errors (redis / write / delete)</th><td><?php echo esc_html(number_format_i18n($stat($runtime_stats, 'redis_errors')) . ' / ' . number_format_i18n($stat($runtime_stats, 'persist_write_errors')) . ' / ' . number_format_i18n($stat($runtime_stats, 'persist_delete_errors'))); ?></td></tr>
                     <tr><th>Autoload Option Size (approx)</th><td><?php echo esc_html(size_format($autoload_size)); ?></td></tr>
                 </tbody>
             </table>

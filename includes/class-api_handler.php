@@ -333,11 +333,25 @@ class API_Handler {
         $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
     $dropin_connected = false; // physical connection
     $dropin_active = false;    // effective (not bypassed) guest perspective
-    $conn_details = null; $via = null; $error = null; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
+    $conn_details = null; $via = null; $error = null; $runtime_stats = []; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
         if ($using_dropin && isset($wp_object_cache) && is_object($wp_object_cache)) {
             if (method_exists($wp_object_cache,'is_connected')) { $dropin_connected = (bool)$wp_object_cache->is_connected(); }
-            if (method_exists($wp_object_cache,'connection_details')) { $conn_details = $wp_object_cache->connection_details(); $via = $conn_details['via'] ?? null; $error = $conn_details['error'] ?? null; $dropin_active = isset($conn_details['active']) ? (bool)$conn_details['active'] : false; }
+            if (method_exists($wp_object_cache,'connection_details')) {
+                $conn_details = $wp_object_cache->connection_details();
+                $via = $conn_details['via'] ?? null;
+                $error = $conn_details['error'] ?? null;
+                $dropin_active = isset($conn_details['active']) ? (bool)$conn_details['active'] : false;
+                if (isset($conn_details['stats']) && is_array($conn_details['stats'])) {
+                    $runtime_stats = $conn_details['stats'];
+                }
+            }
             if (method_exists($wp_object_cache,'is_bypassed')) { $runtime_bypass = $wp_object_cache->is_bypassed(); }
+        }
+        if (empty($runtime_stats) && function_exists('wp_cache_get_runtime_stats')) {
+            $tmp_stats = wp_cache_get_runtime_stats();
+            if (is_array($tmp_stats)) {
+                $runtime_stats = $tmp_stats;
+            }
         }
         $const_bypass = defined('ACE_OC_BYPASS') && ACE_OC_BYPASS; $bypass = $const_bypass || $runtime_bypass;
         // Determine bypass reason (admin/editor vs fail-open)
@@ -364,6 +378,21 @@ class API_Handler {
         }
         if ($profiling && $slow_ops>0) { $tips[] = 'Detected ' . $slow_ops . ' slow ops (>=100ms). Consider inspecting heavy queries or raising threshold.'; }
         if ($autoload_size > 50*1024*1024) { $tips[] = 'Autoloaded options exceed 50MB (' . size_format($autoload_size) . '). This can hurt performance.'; }
+        if (!empty($runtime_stats) && is_array($runtime_stats)) {
+            $local_hits = isset($runtime_stats['local_hits']) ? (int)$runtime_stats['local_hits'] : 0;
+            $redis_hits = isset($runtime_stats['redis_hits']) ? (int)$runtime_stats['redis_hits'] : 0;
+            $redis_misses = isset($runtime_stats['redis_misses']) ? (int)$runtime_stats['redis_misses'] : 0;
+            $writes = isset($runtime_stats['persist_writes']) ? (int)$runtime_stats['persist_writes'] : 0;
+            $deletes = isset($runtime_stats['persist_deletes']) ? (int)$runtime_stats['persist_deletes'] : 0;
+            $tips[] = sprintf(
+                'Runtime counters: local hits %d, redis hits %d, misses %d, writes %d, deletes %d.',
+                $local_hits,
+                $redis_hits,
+                $redis_misses,
+                $writes,
+                $deletes
+            );
+        }
         // Provide WP_CACHE guidance
         if (!defined('WP_CACHE') || !WP_CACHE) { $tips[] = 'WP_CACHE is not enabled. Add define(\'WP_CACHE\', true); to wp-config.php for full object cache effectiveness.'; }
         // Unique tips only
@@ -379,6 +408,7 @@ class API_Handler {
                 'active' => $dropin_active,
                 'via' => $via,
                 'error' => $error,
+                'runtime_stats' => $runtime_stats,
                 'slow_ops' => $slow_ops,
                 'profiling' => $profiling,
                 'autoload_size' => $autoload_size,

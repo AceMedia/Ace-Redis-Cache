@@ -109,6 +109,20 @@ if (!class_exists('WP_Object_Cache')) {
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
         protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
         protected $persistent_groups = self::PERSISTENT_GROUPS_DEFAULT;
+        protected $stats = [
+            'local_hits' => 0,
+            'redis_hits' => 0,
+            'redis_misses' => 0,
+            'bypass_group_hits' => 0,
+            'oversize_skips' => 0,
+            'persist_writes' => 0,
+            'persist_write_errors' => 0,
+            'persist_deletes' => 0,
+            'persist_delete_errors' => 0,
+            'redis_errors' => 0,
+            'bypass_short_circuit' => 0,
+            'non_persistent_group_short_circuit' => 0,
+        ];
 
         public function __construct() {
             // Emergency bypass
@@ -255,6 +269,24 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             return strlen($payload) > (int) $this->max_value_bytes;
+        }
+
+        protected function stat_inc($key, $by = 1) {
+            if (!isset($this->stats[$key])) {
+                $this->stats[$key] = 0;
+            }
+            $this->stats[$key] += (int) $by;
+        }
+
+        public function get_runtime_stats() {
+            return $this->stats;
+        }
+
+        public function reset_runtime_stats() {
+            foreach ($this->stats as $k => $v) {
+                $this->stats[$k] = 0;
+            }
+            return true;
         }
 
         /** Is this a publicly visible status? */
@@ -616,6 +648,7 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             if ($this->exceeds_max_value_size($data)) {
+                $this->stat_inc('oversize_skips');
                 if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
                 return false;
             }
@@ -629,9 +662,12 @@ if (!class_exists('WP_Object_Cache')) {
             try {
                 $ok = $expire > 0 ? (bool)$this->redis->set($k, $payload, ['nx','ex'=>(int)$expire])
                                   : (bool)$this->redis->set($k, $payload, ['nx']);
-                if ($ok) { $this->runtime_set($group, $key, $data); }
+                if ($ok) {
+                    $this->runtime_set($group, $key, $data);
+                    $this->stat_inc('persist_writes');
+                }
                 return $ok;
-            } catch (\Throwable $e) { $this->bypass = true; $this->runtime_set($group, $key, $data); return true; }
+            } catch (\Throwable $e) { $this->bypass = true; $this->runtime_set($group, $key, $data); $this->stat_inc('persist_write_errors'); return true; }
         }
 
         public function set($key, $data, $group = 'default', $expire = 0) {
@@ -649,7 +685,16 @@ if (!class_exists('WP_Object_Cache')) {
                 return true;
             }
 
-            if ($this->is_bypass_group($group) || $this->exceeds_max_value_size($data)) {
+            $is_bypass_group = $this->is_bypass_group($group);
+            $is_oversize = $this->exceeds_max_value_size($data);
+
+            if ($is_bypass_group || $is_oversize) {
+                if ($this->is_bypass_group($group)) {
+                    $this->stat_inc('bypass_group_hits');
+                }
+                if ($is_oversize) {
+                    $this->stat_inc('oversize_skips');
+                }
                 return true;
             }
             
@@ -668,11 +713,15 @@ if (!class_exists('WP_Object_Cache')) {
                                         : (bool)$this->redis->set($k, $payload);
                 $redis_time = (microtime(true) - $redis_start) * 1000;
                 $total_time = (microtime(true) - $start_time) * 1000;
+                if ($result) {
+                    $this->stat_inc('persist_writes');
+                }
                 
                 $this->prof_log('REDIS_SET', $group . ':' . $key, $total_time, sprintf(' redis=%.1fms exp=%d', $redis_time, $expire));
                 return $result;
             } catch (\Throwable $e) { 
                 $this->bypass = true; 
+                $this->stat_inc('persist_write_errors');
                 $this->prof_log('REDIS_SET_ERROR', $group . ':' . $key, (microtime(true) - $start_time) * 1000, ' err=' . $e->getMessage());
                 return true; 
             }
@@ -726,9 +775,11 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             if ($this->is_bypass_group($group)) {
+                $this->stat_inc('bypass_group_hits');
                 $local = $this->runtime_get($group, $key, $local_found);
                 if ($local_found) {
                     $found = true;
+                    $this->stat_inc('local_hits');
                     return $local;
                 }
                 $found = false;
@@ -738,11 +789,13 @@ if (!class_exists('WP_Object_Cache')) {
             $local = $this->runtime_get($group, $key, $local_found);
             if ($local_found && !$force) { 
                 $found = true; 
+                $this->stat_inc('local_hits');
                 $this->prof_log('RUNTIME_HIT', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
                 return $local; 
             }
 
             if (!$this->is_persistent_group($group)) {
+                $this->stat_inc('non_persistent_group_short_circuit');
                 $found = false;
                 return false;
             }
@@ -752,6 +805,7 @@ if (!class_exists('WP_Object_Cache')) {
             
             if (($this->bypass && !$allow_during_bypass) || $this->redis === null) { 
                 $found = false; 
+                $this->stat_inc('bypass_short_circuit');
                 $this->prof_log('BYPASS', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
                 return false; 
             }
@@ -765,6 +819,7 @@ if (!class_exists('WP_Object_Cache')) {
                 
                 if ($val === false || $val === null) { 
                     $found = false; 
+                    $this->stat_inc('redis_misses');
                     $this->prof_log('REDIS_MISS', $group . ':' . $key, (microtime(true) - $start_time) * 1000, sprintf(' redis=%.1fms', $redis_time));
                     return false; 
                 }
@@ -786,11 +841,13 @@ if (!class_exists('WP_Object_Cache')) {
 
                 $this->runtime_set($group, $key, $out);
                 $found = true; 
+                $this->stat_inc('redis_hits');
                 $this->prof_log('REDIS_HIT', $group . ':' . $key, (microtime(true) - $start_time) * 1000, sprintf(' redis=%.1fms', $redis_time));
                 return $out;
             } catch (\Throwable $e) { 
                 $this->bypass = true; 
                 $found = false; 
+                $this->stat_inc('redis_errors');
                 $this->prof_log('REDIS_ERROR', $group . ':' . $key, (microtime(true) - $start_time) * 1000, ' err=' . $e->getMessage());
                 return false; 
             }
@@ -831,7 +888,17 @@ if (!class_exists('WP_Object_Cache')) {
             }
             if (!$this->can_persist_to_redis($group, $key)) return true;
             $k = $this->k($key, $group);
-            try { return (bool)$this->redis->del($k); } catch (\Throwable $e) { $this->bypass = true; return true; }
+            try {
+                $deleted = (bool)$this->redis->del($k);
+                if ($deleted) {
+                    $this->stat_inc('persist_deletes');
+                }
+                return $deleted;
+            } catch (\Throwable $e) {
+                $this->bypass = true;
+                $this->stat_inc('persist_delete_errors');
+                return true;
+            }
         }
 
         /**
@@ -1093,6 +1160,7 @@ if (!class_exists('WP_Object_Cache')) {
                 'via'       => $this->connect_via,
                 'bypassed'  => $this->is_bypassed(),
                 'error'     => $this->connect_error,
+                'stats'     => $this->get_runtime_stats(),
             ];
         }
     }
@@ -1156,3 +1224,21 @@ function wp_cache_add_non_persistent_groups($groups) { global $wp_object_cache; 
 function wp_cache_switch_to_blog($blog_id) { global $wp_object_cache; return $wp_object_cache->switch_to_blog($blog_id); }
 function wp_cache_close() { global $wp_object_cache; return $wp_object_cache && method_exists($wp_object_cache, 'close') ? $wp_object_cache->close() : false; }
 function wp_cache_reset() { global $wp_object_cache; return $wp_object_cache && method_exists($wp_object_cache, 'reset') ? $wp_object_cache->reset() : false; }
+
+function wp_cache_get_runtime_stats() {
+    global $wp_object_cache;
+    if ($wp_object_cache && method_exists($wp_object_cache, 'get_runtime_stats')) {
+        return $wp_object_cache->get_runtime_stats();
+    }
+
+    return [];
+}
+
+function wp_cache_reset_runtime_stats() {
+    global $wp_object_cache;
+    if ($wp_object_cache && method_exists($wp_object_cache, 'reset_runtime_stats')) {
+        return $wp_object_cache->reset_runtime_stats();
+    }
+
+    return false;
+}

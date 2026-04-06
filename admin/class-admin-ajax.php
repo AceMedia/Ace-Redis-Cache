@@ -68,7 +68,7 @@ class AdminAjax {
      * Handle Redis status request
      */
     public function handle_status_request() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -118,7 +118,7 @@ class AdminAjax {
      * Handle cache flush request
      */
     public function handle_flush_request() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -148,7 +148,7 @@ class AdminAjax {
      * Handle block cache flush request
      */
     public function handle_flush_blocks_request() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -178,7 +178,7 @@ class AdminAjax {
      * Handle Redis write test request
      */
     public function handle_test_write_request() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -210,7 +210,7 @@ class AdminAjax {
      * Handle diagnostics request
      */
     public function handle_diagnostics_request() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -228,7 +228,7 @@ class AdminAjax {
      * Handle save settings request
      */
     public function handle_save_settings() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -399,7 +399,7 @@ class AdminAjax {
      * Handle metrics request
      */
     public function handle_metrics_request() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -470,7 +470,7 @@ class AdminAjax {
      * Handle notice dismissal
      */
     public function handle_dismiss_notice() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_dismiss') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_dismiss') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -488,7 +488,7 @@ class AdminAjax {
      * Persist user auto-save preference
      */
     public function handle_toggle_autosave() {
-        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can(->get_manage_capability())) {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }

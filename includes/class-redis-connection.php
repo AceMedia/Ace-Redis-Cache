@@ -80,8 +80,10 @@ class RedisConnection {
                     ];
                 }
                 
-                // Use persistent connections for better performance
-                $connect_method = 'pconnect';
+                // Use regular connect() — pconnect() causes SIGSEGV on PHP 8.4 with phpredis 6.x.
+                // The shared connection from object-cache.php is reused above, so this path
+                // is only hit when the object cache drop-in is not active.
+                $connect_method = 'connect';
                 $connect_params = [
                     $host,
                     $port,

@@ -40,8 +40,7 @@ if (!function_exists('ace_object_cache_is_woocommerce')) {
             return $result;
         }
 
-        $plugins = get_option('active_plugins', []);
-        $result = in_array('woocommerce/woocommerce.php', (array) $plugins, true);
+        $result = file_exists(WP_PLUGIN_DIR . '/woocommerce/woocommerce.php');
 
         return $result;
     }

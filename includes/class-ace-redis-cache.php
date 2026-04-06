@@ -99,7 +99,9 @@ class AceRedisCache {
      * Load plugin settings
      */
     private function load_settings() {
-        $loaded = get_option('ace_redis_cache_settings', [
+        SettingsStore::maybe_migrate_legacy_settings_to_network();
+
+        $loaded = SettingsStore::get_settings([
             'host' => '127.0.0.1',
             'port' => 6379,
             'password' => '',
@@ -312,19 +314,20 @@ class AceRedisCache {
      * Setup WordPress hooks
      */
     private function setup_hooks() {
-        // Plugin lifecycle hooks
-        register_activation_hook($this->plugin_path . '/ace-redis-cache.php', [$this, 'on_activation']);
-        register_deactivation_hook($this->plugin_path . '/ace-redis-cache.php', [$this, 'on_deactivation']);
-        
-        // Settings update hook
+        // Settings update hooks (single-site + network mode).
         add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
-        // Pre-update filter (fires before DB write) to trace and preserve transient flag if it mysteriously drops
+        add_action('update_site_option_ace_redis_cache_settings', [$this, 'on_site_settings_updated'], 10, 4);
+
+        // Pre-update filter (fires before DB write) to trace and preserve transient flag if it mysteriously drops.
         add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace'], 10, 2);
-    // Late-stage tracker to detect other filters mutating value after ours
-    add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace_late'], 9999, 2);
-        // Trace reads to detect external mutation (low priority to run after other filters)
+        add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace_late'], 9999, 2);
+        add_filter('pre_update_site_option_ace_redis_cache_settings', [$this, 'pre_update_site_settings_trace'], 10, 3);
+
+        // Trace reads to detect external mutation (low priority to run after other filters).
         add_filter('option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
-            add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
+        add_filter('site_option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
+
+        add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
         
         // Prime critical options after permalink or rewrite changes
         add_action('update_option_permalink_structure', [$this, 'prime_critical_options_after_permalink_change']);
@@ -1284,8 +1287,26 @@ class AceRedisCache {
      */
     private function generate_page_cache_key() {
         $version = $this->get_site_cache_version();
-        $key_parts = [ 'page_cache', $_SERVER['REQUEST_URI'] ?? '/', \is_ssl() ? 'https' : 'http', \wp_is_mobile() ? 'mobile' : 'desktop', 'v' . $version ];
-        return implode(':', $key_parts);
+        $host = $this->normalize_cache_host($_SERVER['HTTP_HOST'] ?? '');
+        $request_path = $_SERVER['REQUEST_URI'] ?? '/';
+        $key_parts = [
+            'page_cache',
+            $request_path,
+            \is_ssl() ? 'https' : 'http',
+            \wp_is_mobile() ? 'mobile' : 'desktop',
+            $host,
+            'v' . $version,
+        ];
+
+        $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
+            'request_uri' => $request_path,
+            'scheme' => \is_ssl() ? 'https' : 'http',
+            'device' => \wp_is_mobile() ? 'mobile' : 'desktop',
+            'host' => $host,
+            'version' => (int) $version,
+        ]);
+
+        return implode(':', array_map('strval', (array) $key_parts));
     }
 
     private function get_site_cache_version() {
@@ -1299,6 +1320,19 @@ class AceRedisCache {
     }
 
     /**
+     * Normalize host for cache key composition.
+     */
+    private function normalize_cache_host($host) {
+        $host = strtolower(trim((string) $host));
+        if ($host === '') {
+            return '';
+        }
+
+        $host = preg_replace('/:\\d+$/', '', $host);
+        return $host ?: '';
+    }
+
+    /**
      * Build a page cache core key (without redis prefix) for an arbitrary relative path.
      * Mirrors generate_page_cache_key logic but parameterized.
      * @param string $path Relative URI path beginning with '/'
@@ -1306,9 +1340,29 @@ class AceRedisCache {
      * @param string $device 'desktop'|'mobile'
      * @return string
      */
-    private function build_page_cache_core_key($path, $scheme, $device, $version = null) {
+    private function build_page_cache_core_key($path, $scheme, $device, $version = null, $host = null) {
         if ($version === null) { $version = $this->get_site_cache_version(); }
-        return implode(':', ['page_cache', $path ?: '/', $scheme, $device, 'v' . (int)$version]);
+        if ($host === null) { $host = parse_url(home_url(), PHP_URL_HOST) ?: ''; }
+        $host = $this->normalize_cache_host($host);
+
+        $key_parts = [
+            'page_cache',
+            $path ?: '/',
+            $scheme,
+            $device,
+            $host,
+            'v' . (int) $version,
+        ];
+
+        $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
+            'request_uri' => $path ?: '/',
+            'scheme' => $scheme,
+            'device' => $device,
+            'host' => $host,
+            'version' => (int) $version,
+        ]);
+
+        return implode(':', array_map('strval', (array) $key_parts));
     }
 
     /**
@@ -2202,9 +2256,10 @@ class AceRedisCache {
     /**
      * Handle plugin activation
      */
-    public function on_activation() {
-        // Ensure option exists and is non-autoloaded to prevent notoptions poisoning
-        $existing = get_option('ace_redis_cache_settings', null);
+    public function on_activation($network_wide = false) {
+        // Ensure option exists in the active scope.
+        $use_network_scope = is_multisite() && (bool) $network_wide;
+        $existing = $use_network_scope ? get_site_option('ace_redis_cache_settings', null) : SettingsStore::get_settings(null);
         if ($existing === null) {
             // Build defaults (mirrors load_settings defaults)
             $defaults = [
@@ -2245,8 +2300,12 @@ class AceRedisCache {
                 'manage_static_cache_via_htaccess' => 0,
                 'prefer_existing_static_cache_headers' => 1,
             ];
-            add_option('ace_redis_cache_settings', $defaults, '', 'no');
-            if (function_exists('wp_cache_delete')) {
+            if ($use_network_scope) {
+                add_site_option('ace_redis_cache_settings', $defaults);
+            } else {
+                SettingsStore::ensure_settings_exists($defaults);
+            }
+            if (!SettingsStore::is_network_mode() && function_exists('wp_cache_delete')) {
                 @wp_cache_delete('notoptions', 'options');
                 @wp_cache_delete('ace_redis_cache_settings', 'options');
                 @wp_cache_delete('alloptions', 'options');
@@ -2290,10 +2349,10 @@ class AceRedisCache {
     }
     
     /**
-     * Handle settings updates
+     * Handle settings updates.
      */
     public function on_settings_updated($old_value, $new_value) {
-        // Reload settings
+        // Reload settings.
         if (is_string($new_value)) {
             $decoded = json_decode($new_value, true);
             $this->settings = is_array($decoded) ? $decoded : [];
@@ -2307,16 +2366,20 @@ class AceRedisCache {
             error_log('Ace-Redis-Cache: on_settings_updated old_transient=' . $old_flag . ' new_transient=' . $new_flag);
         }
 
-        // Proactively clear any cached copy (defensive; our drop-in now bypasses but keep for other caches)
-        if (function_exists('wp_cache_delete')) { @wp_cache_delete('ace_redis_cache_settings', 'options'); }
-        
-        // Reinitialize components with new settings
-        $this->init_components();
-        
-        // Clear cache when settings change
-        $this->cache_manager->clear_all_cache();
+        // Proactively clear any cached copy (defensive; our drop-in now bypasses but keep for other caches).
+        if (!SettingsStore::is_network_mode() && function_exists('wp_cache_delete')) {
+            @wp_cache_delete('ace_redis_cache_settings', 'options');
+        }
 
-        // Manage object-cache.php drop-in based on setting
+        // Reinitialize components with new settings.
+        $this->init_components();
+
+        // Clear cache when settings change.
+        if ($this->cache_manager) {
+            $this->cache_manager->clear_all_cache();
+        }
+
+        // Manage object-cache.php drop-in based on setting.
         try {
             $this->maybe_manage_dropin();
         } catch (\Exception $e) {
@@ -2332,6 +2395,13 @@ class AceRedisCache {
                 error_log('Ace-Redis-Cache .htaccess management error: ' . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Wrapper for update_site_option_ace_redis_cache_settings action.
+     */
+    public function on_site_settings_updated($option, $value, $old_value, $network_id = null) {
+        $this->on_settings_updated($old_value, $value);
     }
 
     private function maybe_manage_static_cache_htaccess() {
@@ -2582,6 +2652,13 @@ class AceRedisCache {
             }
         }
         return $new_value;
+    }
+
+    /**
+     * Wrapper for pre_update_site_option_ace_redis_cache_settings filter.
+     */
+    public function pre_update_site_settings_trace($new_value, $old_value, $option = null) {
+        return $this->pre_update_settings_trace($new_value, $old_value);
     }
 
     /**

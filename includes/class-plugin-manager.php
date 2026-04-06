@@ -13,11 +13,24 @@ class Plugin_Manager {
      * Ensure option exists.
      */
     public static function bootstrap() {
-        $opt = get_option(self::OPTION);
+        $opt = self::get_store();
         if (!is_array($opt)) {
-            $opt = [ 'plugins' => [] ];
-            add_option(self::OPTION, $opt, '', 'no');
+            self::update_store([ 'plugins' => [] ]);
         }
+    }
+
+    /**
+     * Read managed-plugin store from the active scope.
+     */
+    public static function get_store() {
+        return SettingsStore::get(self::OPTION, [ 'plugins' => [] ]);
+    }
+
+    /**
+     * Persist managed-plugin store in the active scope.
+     */
+    public static function update_store($value) {
+        return SettingsStore::update(self::OPTION, $value);
     }
 
     /**
@@ -25,7 +38,7 @@ class Plugin_Manager {
      */
     public static function activate_managed() {
         if (!function_exists('activate_plugin')) return;
-        $opt = get_option(self::OPTION);
+        $opt = self::get_store();
         if (!is_array($opt) || empty($opt['plugins'])) return;
         foreach ($opt['plugins'] as $plugin_file => $meta) {
             $flag = isset($meta['enabled_on_init']) ? (bool)$meta['enabled_on_init'] : false;
@@ -44,7 +57,7 @@ class Plugin_Manager {
      */
     public static function deactivate_managed() {
         if (!function_exists('deactivate_plugins')) return;
-        $opt = get_option(self::OPTION);
+        $opt = self::get_store();
         if (!is_array($opt) || empty($opt['plugins'])) return;
         $to_deactivate = [];
         foreach ($opt['plugins'] as $plugin_file => $meta) {
@@ -59,6 +72,9 @@ class Plugin_Manager {
 
     private static function is_active($plugin_file) {
         if (!function_exists('is_plugin_active')) return false;
-        return is_plugin_active($plugin_file);
+        if (is_plugin_active($plugin_file)) {
+            return true;
+        }
+        return function_exists('is_plugin_active_for_network') && is_plugin_active_for_network($plugin_file);
     }
 }

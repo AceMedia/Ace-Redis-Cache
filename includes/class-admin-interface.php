@@ -40,10 +40,12 @@ class AdminInterface {
      */
     public function setup_hooks() {
         add_action('admin_menu', [$this, 'admin_menu']);
+        add_action('network_admin_menu', [$this, 'network_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
+        add_action('network_admin_notices', [$this, 'show_version_notice']);
         add_action('admin_notices', [$this, 'show_version_notice']);
-        
+
         // Note: Removed update_option hook - now using AJAX save
     }
     
@@ -54,7 +56,21 @@ class AdminInterface {
         add_options_page(
             'Ace Redis Cache Settings',
             'Ace Redis Cache',
-            'manage_options',
+            $this->get_manage_capability(),
+            'ace-redis-cache',
+            [$this, 'render_settings_page']
+        );
+    }
+
+    /**
+     * Add network admin menu for multisite network settings.
+     */
+    public function network_admin_menu() {
+        add_submenu_page(
+            'settings.php',
+            'Ace Redis Cache Settings',
+            'Ace Redis Cache',
+            'manage_network_options',
             'ace-redis-cache',
             [$this, 'render_settings_page']
         );
@@ -195,6 +211,10 @@ class AdminInterface {
      * Render settings page
      */
     public function render_settings_page() {
+        if (!$this->current_user_can_manage()) {
+            wp_die(__('You do not have sufficient permissions to access this page.'));
+        }
+
         $template_file = dirname(__DIR__) . '/admin/views/settings-page.php';
         
         if (file_exists($template_file)) {
@@ -283,7 +303,7 @@ class AdminInterface {
      * Render inline settings page as fallback
      */
     private function render_inline_settings_page() {
-        if (!current_user_can('manage_options')) {
+        if (!$this->current_user_can_manage()) {
             wp_die(__('You do not have sufficient permissions to access this page.'));
         }
         
@@ -459,24 +479,24 @@ class AdminInterface {
      */
     public function show_version_notice() {
         $screen = get_current_screen();
-        if ($screen->id !== 'settings_page_ace-redis-cache') {
+        if (!$screen || strpos((string) $screen->id, 'ace-redis-cache') === false) {
             return;
         }
 
         // Check if this version notice has been dismissed
-        $dismissed_version = get_option('ace_redis_cache_dismissed_version', '');
+        $dismissed_version = SettingsStore::get('ace_redis_cache_dismissed_version', '');
         if ($dismissed_version === $this->plugin_version) {
             return;
         }
 
         // Only show the notice once per version, and only if it's a significant update (0.5.0)
-        $shown_version = get_option('ace_redis_cache_shown_version', '');
+        $shown_version = SettingsStore::get('ace_redis_cache_shown_version', '');
         if ($shown_version === $this->plugin_version) {
             return;
         }
 
         // Mark this version as shown
-        update_option('ace_redis_cache_shown_version', $this->plugin_version);
+        SettingsStore::update('ace_redis_cache_shown_version', $this->plugin_version);
 
         ?>
         <div class="notice notice-info is-dismissible ace-redis-update-notice" data-notice="ace-redis-version">
@@ -530,7 +550,7 @@ class AdminInterface {
         $sanitized['enable_object_cache_dropin'] = !empty($sanitized['enable_transient_cache']) ? 1 : 0;
         // If object cache was enabled but transient flag missing from POST (unchecked or JS omission), preserve previous stored state
         if ($sanitized['enable_object_cache'] && !isset($input['enable_transient_cache'])) {
-            $prev = get_option('ace_redis_cache_settings', []);
+            $prev = SettingsStore::get_settings([]);
             if (isset($prev['enable_transient_cache'])) {
                 $sanitized['enable_transient_cache'] = (int)!empty($prev['enable_transient_cache']);
                 if (!empty($sanitized['enable_transient_cache'])) {
@@ -561,11 +581,33 @@ class AdminInterface {
     }
     
     /**
+     * Get required capability for settings access.
+     *
+     * @return string
+     */
+    private function get_manage_capability() {
+        return SettingsStore::is_network_mode() ? 'manage_network_options' : 'manage_options';
+    }
+
+    /**
+     * Capability helper shared across admin render paths.
+     *
+     * @return bool
+     */
+    private function current_user_can_manage() {
+        return current_user_can($this->get_manage_capability());
+    }
+
+    /**
      * Get admin page URL
      *
      * @return string Admin page URL
      */
     public function get_admin_url() {
+        if (SettingsStore::is_network_mode()) {
+            return network_admin_url('settings.php?page=ace-redis-cache');
+        }
+
         return admin_url('options-general.php?page=ace-redis-cache');
     }
     
@@ -676,7 +718,7 @@ class AdminInterface {
      * Render simple cache health page
      */
     public function render_health_page() {
-        if (!current_user_can('manage_options')) { wp_die('Insufficient permissions'); }
+        if (!$this->current_user_can_manage()) { wp_die('Insufficient permissions'); }
         $health = [ 'connected' => null, 'status' => 'unknown' ];
         $stats = [];
         $slow_ops = get_transient('ace_rc_slow_op_count');

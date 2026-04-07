@@ -2663,45 +2663,16 @@ class AceRedisCache {
                     }
                 }
             }
-            // Only backup if file exists and is NOT ours or differs (avoid piling up backups of identical file)
-            if (file_exists($dropin_target) && (!$existing_is_ours || !$existing_same_hash)) {
-                $backup = $dropin_target . '.bak.' . date('YmdHis');
-                @rename($dropin_target, $backup);
-            } else if ($existing_is_ours && $existing_same_hash) {
-                // Nothing to do; already deployed and identical
+            if ($existing_is_ours && $existing_same_hash) {
+                // Already deployed and identical — nothing to do
                 $need_copy = false;
             }
             if ($need_copy) {
                 if (!@copy($dropin_source, $dropin_target)) {
-                    $msg = 'Ace-Redis-Cache: Failed to deploy object-cache.php. Try manually:\n'
+                    $msg = 'Ace-Redis-Cache: Failed to deploy object-cache.php. Try manually: '
                         . 'cp ' . escapeshellarg($dropin_source) . ' ' . escapeshellarg($dropin_target);
                     if (defined('WP_DEBUG') && WP_DEBUG) { error_log($msg); }
                 } else { $did_install_or_remove = true; }
-            }
-            // Cleanup: keep only the latest 2 backups created by our plugin pattern
-            $pattern = $dropin_target . '.bak.';
-            $dir = dirname($dropin_target);
-            if (is_dir($dir)) {
-                $files = @scandir($dir);
-                if ($files) {
-                    $bak = [];
-                    foreach ($files as $f) {
-                        if (strpos($f, 'object-cache.php.bak.') === 0 || str_starts_with($f, 'object-cache.php.bak.')) { // handles local naming
-                            if ($f === 'object-cache.php.bak.' ) continue;
-                        }
-                        if (strpos($f, 'object-cache.php.bak.') === 0) {
-                            $bak[] = $f;
-                        }
-                    }
-                    if (count($bak) > 2) {
-                        // Sort descending (latest first) by timestamp portion
-                        usort($bak, function($a,$b){ return strcmp($b,$a); });
-                        $to_delete = array_slice($bak, 2); // keep first two
-                        foreach ($to_delete as $del) {
-                            @unlink(trailingslashit($dir) . $del);
-                        }
-                    }
-                }
             }
         } else {
             // Remove drop-in if we own it (basic heuristic: look for our signature header)

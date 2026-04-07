@@ -509,9 +509,15 @@ class AceRedisCache {
      */
     private function should_cache_request() {
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        $path = (string) wp_parse_url($request_uri, PHP_URL_PATH);
 
         // Never cache core auth/admin/system endpoints.
         if ($request_uri !== '' && preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri)) {
+            return false;
+        }
+
+        // Never cache WooCommerce cart/session sensitive requests.
+        if ($this->is_woocommerce_uncacheable_request($request_uri, $path)) {
             return false;
         }
 
@@ -544,17 +550,6 @@ class AceRedisCache {
             return false;
         }
 
-        // Skip page cache when WooCommerce indicates an active cart.
-        if (isset($_COOKIE['woocommerce_cart_hash']) && $_COOKIE['woocommerce_cart_hash'] !== '') {
-            return false;
-        }
-
-        // Never page-cache cart, checkout, or account endpoints.
-        $uri = $_SERVER['REQUEST_URI'] ?? '';
-        if (preg_match('#^/(cart|checkout|my-account)(/|$)#i', $uri)) {
-            return false;
-        }
-
         // Allow operators to provide additional URL/query exclusions (e.g. WooCommerce endpoints).
         $exclusions = apply_filters('ace_redis_cache_excluded_urls', []);
         if (is_array($exclusions) && !empty($exclusions)) {
@@ -563,13 +558,54 @@ class AceRedisCache {
                 if ($pattern === '') {
                     continue;
                 }
-                if (stripos($uri, $pattern) !== false) {
+                if (stripos($request_uri, $pattern) !== false) {
                     return false;
                 }
             }
         }
         
         return true;
+    }
+
+    /**
+     * Detect WooCommerce request patterns that must never be page-cached.
+     */
+    private function is_woocommerce_uncacheable_request($request_uri, $path) {
+        $session_cookies = [
+            'woocommerce_cart_hash',
+            'woocommerce_items_in_cart',
+            'wp_woocommerce_session_',
+        ];
+
+        foreach ($_COOKIE as $cookie_name => $cookie_value) {
+            foreach ($session_cookies as $prefix) {
+                if (strpos((string) $cookie_name, $prefix) === 0 && (string) $cookie_value !== '') {
+                    return true;
+                }
+            }
+        }
+
+        if ($path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $path)) {
+            return true;
+        }
+
+        if (isset($_GET['wc-ajax']) || isset($_GET['add-to-cart']) || isset($_GET['remove_item']) || isset($_GET['undo_item'])) {
+            return true;
+        }
+
+        if (
+            (isset($_GET['action']) && in_array((string) $_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
+            isset($_GET['password-reset']) ||
+            isset($_GET['key'])
+        ) {
+            return true;
+        }
+
+        if ($request_uri !== '' && preg_match('#[?&](wc-ajax|add-to-cart|remove_item|undo_item|password-reset|key)=#i', $request_uri)) {
+            return true;
+        }
+
+        return false;
     }
 
     private function is_sitemap_request() {

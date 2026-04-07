@@ -159,6 +159,12 @@ if (!defined('ABSPATH')) exit;
                                     <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
+                                    <div id="ace-rc-advanced-dropin-box" style="margin-top:8px; font-size:12px; line-height:1.4;">
+                                        <strong>Advanced Cache Drop-in:</strong>
+                                        <span class="ace-rc-dropin-status">Checking status...</span>
+                                        <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="advanced" style="display:none; margin-left:8px;">Update Drop-in</button>
+                                        <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"></div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -193,6 +199,12 @@ if (!defined('ABSPATH')) exit;
                             When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
                             <div id="ace-rc-transient-tips" class="ace-rc-tips" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                 <!-- Dynamic health tips injected here -->
+                            </div>
+                            <div id="ace-rc-object-dropin-box" style="margin-top:10px; font-size:12px; line-height:1.4;">
+                                <strong>Object Cache Drop-in:</strong>
+                                <span class="ace-rc-dropin-status">Checking status...</span>
+                                <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="object" style="display:none; margin-left:8px;">Update Drop-in</button>
+                                <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"></div>
                             </div>
                         </div>
                     </div>
@@ -727,4 +739,96 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
         });
     });
 })();
+</script>
+
+<script>
+(function($){
+    if (!$ || typeof ace_redis_admin === 'undefined') return;
+
+    function restGet(path) {
+        return $.ajax({
+            url: ace_redis_admin.rest_url + path,
+            type: 'GET',
+            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+        });
+    }
+
+    function restPost(path, data) {
+        return $.ajax({
+            url: ace_redis_admin.rest_url + path,
+            type: 'POST',
+            data: data,
+            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+        });
+    }
+
+    function describeStatus(d) {
+        if (!d) return { text: 'Unable to determine status.', meta: '' };
+        if (!d.target_exists) return { text: 'Not installed in wp-content.', meta: d.enabled_setting ? 'Enable and deploy this drop-in first.' : 'Feature currently disabled in settings.' };
+        if (!d.managed) return { text: 'Foreign drop-in detected.', meta: 'This plugin will not overwrite non-Ace drop-ins.' };
+        if (d.outdated && d.active) return { text: 'Active and outdated.', meta: 'Update recommended now.' };
+        if (d.outdated && !d.active) return { text: 'Outdated (inactive).', meta: 'It is stale but not active on this site.' };
+        if (d.active) return { text: 'Active and up to date.', meta: '' };
+        return { text: 'Installed and up to date (inactive).', meta: '' };
+    }
+
+    function renderDropinBox(type, d) {
+        var boxId = type === 'advanced' ? '#ace-rc-advanced-dropin-box' : '#ace-rc-object-dropin-box';
+        var $box = $(boxId);
+        if (!$box.length) return;
+
+        var status = describeStatus(d);
+        $box.find('.ace-rc-dropin-status').text(status.text);
+        $box.find('.ace-rc-dropin-meta').text(status.meta || '');
+
+        var $btn = $box.find('.ace-rc-dropin-update');
+        if (d && d.can_update) {
+            $btn.show().prop('disabled', false).text('Update Drop-in');
+        } else {
+            $btn.hide().prop('disabled', true);
+        }
+    }
+
+    function refreshDropinStatus() {
+        restGet('ace-redis-cache/v1/dropins-status').done(function(resp){
+            if (!resp || !resp.success || !resp.data) return;
+            renderDropinBox('advanced', resp.data.advanced || null);
+            renderDropinBox('object', resp.data.object || null);
+        });
+    }
+
+    $(document).on('click', '.ace-rc-dropin-update', function(){
+        var type = $(this).data('dropin');
+        var $btn = $(this);
+        if (!type) return;
+        if (!window.confirm('Update this active drop-in to the latest plugin version?')) return;
+
+        var original = $btn.text();
+        $btn.prop('disabled', true).text('Updating...');
+
+        restPost('ace-redis-cache/v1/dropins-update', {
+            nonce: ace_redis_admin.nonce,
+            type: type
+        }).done(function(resp){
+            if (resp && resp.success && resp.data) {
+                var msg = resp.data.message || 'Drop-in update completed.';
+                alert(msg);
+            } else {
+                alert('Drop-in update failed.');
+            }
+        }).fail(function(){
+            alert('Drop-in update request failed.');
+        }).always(function(){
+            $btn.prop('disabled', false).text(original);
+            refreshDropinStatus();
+        });
+    });
+
+    $(function(){
+        refreshDropinStatus();
+        $('#enable_page_cache, #enable_transient_cache').on('change', function(){
+            setTimeout(refreshDropinStatus, 400);
+        });
+    });
+})(window.jQuery);
 </script>

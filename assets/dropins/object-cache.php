@@ -153,6 +153,30 @@ if (!class_exists('WP_Object_Cache')) {
                 strpos($request_uri, '/wp-admin/admin-ajax.php') !== false ||
                 (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest')
             );
+            $request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+            $has_wc_session_cookie = false;
+            $wc_cookie_prefixes = ['woocommerce_cart_hash', 'woocommerce_items_in_cart', 'wp_woocommerce_session_'];
+            foreach ($_COOKIE as $ck => $val) {
+                foreach ($wc_cookie_prefixes as $prefix) {
+                    if (strpos((string) $ck, $prefix) === 0 && (string) $val !== '') {
+                        $has_wc_session_cookie = true;
+                        break 2;
+                    }
+                }
+            }
+
+            $is_wc_cart_endpoint = ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path) === 1);
+            $is_wc_cart_action = (
+                isset($_GET['wc-ajax']) ||
+                isset($_GET['add-to-cart']) ||
+                isset($_GET['remove_item']) ||
+                isset($_GET['undo_item']) ||
+                (isset($_GET['action']) && in_array((string) $_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
+                isset($_GET['password-reset']) ||
+                isset($_GET['key']) ||
+                preg_match('#[?&](wc-ajax|add-to-cart|remove_item|undo_item|password-reset|key)=#i', (string) $request_uri) === 1
+            );
+            $is_wc_customer_session_request = ($has_wc_session_cookie || $is_wc_cart_endpoint || $is_wc_cart_action);
             $request_method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
             $is_cron = (defined('DOING_CRON') && DOING_CRON);
             $is_cli  = (defined('WP_CLI') && WP_CLI);
@@ -179,6 +203,7 @@ if (!class_exists('WP_Object_Cache')) {
                 'is_cron'      => $is_cron,
                 'is_cli'       => $is_cli,
                 'is_rest'      => $is_rest,
+                'is_wc_customer_session_request' => $is_wc_customer_session_request,
                 'method'       => $request_method,
             ];
 
@@ -200,13 +225,14 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
-            $editor_bypass   = ($is_admin_by_url || $is_ajax || $is_admin_req || $is_logged_in_fn || $is_logged_in_cookie || $is_rest || $is_update_operation);
+            $editor_bypass   = ($is_admin_by_url || $is_ajax || $is_admin_req || $is_logged_in_fn || $is_logged_in_cookie || $is_rest || $is_update_operation || $is_wc_customer_session_request);
             $editor_bypass   = apply_filters('ace_rc_object_cache_bypass', $editor_bypass, [
                 'is_admin_url'  => $is_admin_by_url,
                 'is_ajax'       => $is_ajax,
                 'is_admin'      => $is_admin_req,
                 'is_logged_in'  => $is_logged_in_fn || $is_logged_in_cookie,
                 'is_rest'       => $is_rest,
+                'is_wc_customer_session_request' => $is_wc_customer_session_request,
             ]);
             if ($editor_bypass || $this->suspend_persistent_writes) { $this->bypass = true; }
 

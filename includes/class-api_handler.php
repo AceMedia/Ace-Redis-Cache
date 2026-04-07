@@ -243,6 +243,194 @@ class API_Handler {
             'callback' => [$this, 'health_route'],
             'permission_callback' => [$this, 'check_permissions']
         ]);
+
+        register_rest_route($this->namespace, '/dropins-status', [
+            'methods' => 'GET',
+            'callback' => [$this, 'dropins_status_route'],
+            'permission_callback' => [$this, 'check_permissions'],
+        ]);
+
+        register_rest_route($this->namespace, '/dropins-update', [
+            'methods' => 'POST',
+            'callback' => [$this, 'dropins_update_route'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => [
+                'nonce' => [
+                    'required' => true,
+                    'type' => 'string',
+                    'description' => 'Security nonce'
+                ],
+                'type' => [
+                    'required' => false,
+                    'type' => 'string',
+                    'default' => 'all',
+                    'enum' => ['all', 'object', 'advanced'],
+                    'description' => 'Drop-in type to update'
+                ]
+            ]
+        ]);
+    }
+
+    private function get_dropin_definitions() {
+        $plugin_root = dirname(__DIR__);
+        return [
+            'object' => [
+                'label' => 'Object Cache Drop-in',
+                'source' => trailingslashit($plugin_root) . 'assets/dropins/object-cache.php',
+                'target' => trailingslashit(WP_CONTENT_DIR) . 'object-cache.php',
+                'signature' => 'Ace Redis Cache Drop-In',
+            ],
+            'advanced' => [
+                'label' => 'Advanced Cache Drop-in',
+                'source' => trailingslashit($plugin_root) . 'assets/dropins/advanced-cache.php',
+                'target' => trailingslashit(WP_CONTENT_DIR) . 'advanced-cache.php',
+                'signature' => 'Ace Redis Cache advanced-cache drop-in',
+            ],
+        ];
+    }
+
+    private function get_dropin_status($type) {
+        $defs = $this->get_dropin_definitions();
+        if (!isset($defs[$type])) {
+            return null;
+        }
+
+        $def = $defs[$type];
+        $source_exists = file_exists($def['source']);
+        $target_exists = file_exists($def['target']);
+        $target_contents = $target_exists ? @file_get_contents($def['target']) : false;
+        $managed = is_string($target_contents) && strpos($target_contents, $def['signature']) !== false;
+
+        $source_hash = $source_exists ? @md5_file($def['source']) : null;
+        $target_hash = is_string($target_contents) ? md5($target_contents) : null;
+        $outdated = (bool) ($source_exists && $target_exists && $managed && $source_hash && $target_hash && $source_hash !== $target_hash);
+
+        $active = false;
+        if ($type === 'object') {
+            $active = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
+        } elseif ($type === 'advanced') {
+            $active = defined('WP_CACHE') && WP_CACHE && $target_exists;
+        }
+
+        $enabled_setting = false;
+        $settings_now = get_option('ace_redis_cache_settings', []);
+        if ($type === 'object') {
+            $enabled_setting = !empty($settings_now['enable_transient_cache']) || !empty($settings_now['enable_object_cache_dropin']);
+        } elseif ($type === 'advanced') {
+            $enabled_setting = !empty($settings_now['enable_page_cache']);
+        }
+
+        $can_update = $active && $outdated && $managed && $source_exists && (!$target_exists || is_writable($def['target']));
+
+        return [
+            'type' => $type,
+            'label' => $def['label'],
+            'source_exists' => (bool) $source_exists,
+            'target_exists' => (bool) $target_exists,
+            'managed' => (bool) $managed,
+            'outdated' => (bool) $outdated,
+            'active' => (bool) $active,
+            'enabled_setting' => (bool) $enabled_setting,
+            'can_update' => (bool) $can_update,
+            'target' => $def['target'],
+        ];
+    }
+
+    public function dropins_status_route($request) {
+        $object = $this->get_dropin_status('object');
+        $advanced = $this->get_dropin_status('advanced');
+
+        return new \WP_REST_Response([
+            'success' => true,
+            'data' => [
+                'object' => $object,
+                'advanced' => $advanced,
+            ]
+        ], 200);
+    }
+
+    public function dropins_update_route($request) {
+        $requested = sanitize_text_field((string) ($request->get_param('type') ?? 'all'));
+        $types = ($requested === 'all') ? ['object', 'advanced'] : [$requested];
+        $defs = $this->get_dropin_definitions();
+
+        $updated = [];
+        $skipped = [];
+        $errors = [];
+
+        foreach ($types as $type) {
+            if (!isset($defs[$type])) {
+                $errors[] = sprintf('Unknown drop-in type: %s', $type);
+                continue;
+            }
+
+            $status = $this->get_dropin_status($type);
+            if (!$status) {
+                $errors[] = sprintf('Unable to inspect %s drop-in.', $type);
+                continue;
+            }
+
+            if (empty($status['active'])) {
+                $skipped[] = sprintf('%s is not active on this site.', $status['label']);
+                continue;
+            }
+
+            if (empty($status['target_exists'])) {
+                $skipped[] = sprintf('%s is not installed in wp-content.', $status['label']);
+                continue;
+            }
+
+            if (empty($status['managed'])) {
+                $skipped[] = sprintf('%s is not managed by this plugin (foreign drop-in).', $status['label']);
+                continue;
+            }
+
+            if (empty($status['outdated'])) {
+                $skipped[] = sprintf('%s is already up to date.', $status['label']);
+                continue;
+            }
+
+            $target = $defs[$type]['target'];
+            $source = $defs[$type]['source'];
+            if (!file_exists($source)) {
+                $errors[] = sprintf('%s source file is missing.', $status['label']);
+                continue;
+            }
+
+            if (file_exists($target) && !is_writable($target)) {
+                $errors[] = sprintf('%s is not writable: %s', $status['label'], $target);
+                continue;
+            }
+
+            $backup = $target . '.bak.' . gmdate('YmdHis');
+            if (file_exists($target) && !@copy($target, $backup)) {
+                $errors[] = sprintf('Failed to create backup for %s.', $status['label']);
+                continue;
+            }
+
+            if (!@copy($source, $target)) {
+                $errors[] = sprintf('Failed to update %s.', $status['label']);
+                continue;
+            }
+
+            $updated[] = sprintf('%s updated successfully.', $status['label']);
+        }
+
+        if (!empty($updated) && function_exists('wp_cache_flush')) {
+            @wp_cache_flush();
+        }
+
+        $message = !empty($updated) ? implode(' ', $updated) : 'No drop-ins were updated.';
+
+        return new \WP_REST_Response([
+            'success' => true,
+            'data' => [
+                'message' => $message,
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'errors' => $errors,
+            ]
+        ], 200);
     }
 
     public function get_settings($request) {

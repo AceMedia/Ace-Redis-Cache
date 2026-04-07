@@ -40,7 +40,34 @@ if (isset($_COOKIE['woocommerce_cart_hash']) && $_COOKIE['woocommerce_cart_hash'
     return;
 }
 
-if (preg_match('#^/(cart|checkout|my-account)(/|$)#i', $request_uri)) {
+if (isset($_COOKIE['woocommerce_items_in_cart']) && $_COOKIE['woocommerce_items_in_cart'] !== '') {
+    return;
+}
+
+foreach (array_keys($_COOKIE) as $cookie_name) {
+    if (strpos((string) $cookie_name, 'wp_woocommerce_session_') === 0) {
+        return;
+    }
+}
+
+if (isset($_GET['wc-ajax']) || isset($_GET['add-to-cart']) || isset($_GET['remove_item']) || isset($_GET['undo_item'])) {
+    return;
+}
+
+if (
+    (isset($_GET['action']) && in_array((string) $_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
+    isset($_GET['password-reset']) ||
+    isset($_GET['key'])
+) {
+    return;
+}
+
+if ($request_uri !== '' && preg_match('#[?&](wc-ajax|add-to-cart|remove_item|undo_item|password-reset|key)=#i', $request_uri)) {
+    return;
+}
+
+$request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+if ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path)) {
     return;
 }
 
@@ -63,7 +90,7 @@ $mobile = preg_match('~Mobile|Android|Silk/|Kindle|BlackBerry|Opera Mini|Opera M
 $device = $mobile ? 'mobile' : 'desktop';
 
 $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
-$host = preg_replace('/:\\d+$/', '', $host);
+$host = preg_replace('/:\d+$/', '', $host);
 
 $redis_host = defined('ACE_REDIS_HOST') ? ACE_REDIS_HOST : (defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1');
 $redis_port = defined('ACE_REDIS_PORT') ? (int) ACE_REDIS_PORT : (defined('WP_REDIS_PORT') ? (int) WP_REDIS_PORT : 6379);
@@ -106,7 +133,7 @@ try {
         return;
     }
 
-    if (preg_match('/^s:\\d+:/', $payload) === 1) {
+    if (preg_match('/^s:\d+:/', $payload) === 1) {
         $decoded = @unserialize($payload);
         if (is_string($decoded)) {
             $payload = $decoded;
@@ -129,7 +156,7 @@ try {
         exit;
     };
 
-    if (preg_match('/^br\\d{0,2}:(.*)$/s', $payload, $m) === 1) {
+    if (preg_match('/^br\d{0,2}:(.*)$/s', $payload, $m) === 1) {
         $bytes = $m[1];
         if ($accepts_br) {
             $send($bytes, 'br', 'advcache-br');
@@ -143,7 +170,7 @@ try {
         return;
     }
 
-    if (preg_match('/^gz\\d{0,2}:(.*)$/s', $payload, $m) === 1) {
+    if (preg_match('/^gz\d{0,2}:(.*)$/s', $payload, $m) === 1) {
         $bytes = $m[1];
         $is_gzip_stream = strlen($bytes) >= 2 && substr($bytes, 0, 2) === "\x1f\x8b";
         if ($accepts_gzip && $is_gzip_stream) {
@@ -163,7 +190,6 @@ try {
         $send(substr($payload, 4), '', 'advcache-plain');
     }
 
-    // Unknown payload format: do not emit it directly.
     return;
 } catch (Throwable $e) {
     return;

@@ -236,6 +236,8 @@ if (!class_exists('WP_Object_Cache')) {
             ]);
             if ($editor_bypass || $this->suspend_persistent_writes) { $this->bypass = true; }
 
+            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest);
+
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
 
@@ -243,12 +245,8 @@ if (!class_exists('WP_Object_Cache')) {
                 $this->apply_woocommerce_profile();
             }
 
-            // Only initialize Redis connection if not bypassing
-            if (!$this->bypass && extension_loaded('redis')) { 
-                $this->init_redis(); 
-            } else if ($this->bypass && extension_loaded('redis')) {
-                // Even when bypassing, initialize Redis for site-transients only
-                // This allows WordPress update transients to work in admin
+            // Only initialize Redis connection for non-admin/system request paths.
+            if (extension_loaded('redis') && !$is_admin_system_request) {
                 $this->init_redis();
             }
 

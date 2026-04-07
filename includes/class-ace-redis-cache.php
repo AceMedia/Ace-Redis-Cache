@@ -663,6 +663,21 @@ class AceRedisCache {
 
         return (bool) preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri);
     }
+
+    /**
+     * Detect local/dev-only URLs in rendered HTML that should never be persisted in shared page cache.
+     */
+    private function contains_local_dev_asset_references($html) {
+        if (!is_string($html) || $html === '') {
+            return false;
+        }
+
+        // Local filesystem URLs and local dev-server assets can leak broken references to other visitors.
+        return (bool) preg_match(
+            '#(?:file://|ws://(?:localhost|127\.0\.0\.1)|wss://(?:localhost|127\.0\.0\.1)|(?:localhost|127\.0\.0\.1):\d{2,5}/|/refresh\.js(?:\?|["\'\s>]))#i',
+            $html
+        );
+    }
     
     /**
      * Attempt to serve compressed cache directly without decompression if no dynamic placeholders exist.
@@ -671,6 +686,9 @@ class AceRedisCache {
      * @return string|null Compressed bytes ready for output, or null to use the standard path
      */
     private function try_serve_compressed_directly($cache_key) {
+        if ($this->is_admin_auth_or_system_request()) {
+            return null;
+        }
         if (empty($this->settings['enable_compression'])) return null;
         if (!$this->dynamic_placeholders_enabled && !$this->enable_dynamic_block_placeholders) {
             $redis = null;
@@ -786,6 +804,9 @@ class AceRedisCache {
      * Start full page cache output buffering
      */
     public function start_full_page_cache() {
+        if ($this->is_admin_auth_or_system_request()) {
+            return;
+        }
         // Respect no-cache warm window transient
         if (get_transient('ace_rc_no_cache_window')) {
             if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -944,8 +965,10 @@ class AceRedisCache {
                     $cache_version = preg_replace($pattern, $placeholder, $cache_version);
                 }
             }
+            $has_local_dev_refs = $this->contains_local_dev_asset_references($cache_version);
+
             // Cache the content with intelligent minification handling
-            if (!$skip_cache && !$is_first_pass && !empty($content)) {
+            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && !empty($content)) {
                 $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification);
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
@@ -958,6 +981,8 @@ class AceRedisCache {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP host={$req_host} reason=" . ($skip_cache_reason ?: 'mismatch') . " -->";
             } elseif ($is_first_pass && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: first_pass_skip path_id={$path_id} -->";
+            } elseif ($has_local_dev_refs && defined('WP_DEBUG') && WP_DEBUG) {
+                $content .= "\n<!-- AceRedisCache: page_cache=SKIP reason=local_dev_asset_reference -->";
             }
             // For the live response, strip only the wrapper markers (leave real dynamic content rendered)
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -989,6 +1014,9 @@ class AceRedisCache {
      * We do NOT overwrite the stored cache (already stored compressed or raw earlier); this is a response-layer concern.
      */
     private function maybe_recompress_for_output($html) {
+        if ($this->is_admin_auth_or_system_request()) {
+            return $html;
+        }
         if (empty($this->settings['enable_compression']) || !is_string($html) || $html === '') {
             return $html;
         }

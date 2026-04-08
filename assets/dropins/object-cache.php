@@ -245,8 +245,9 @@ if (!class_exists('WP_Object_Cache')) {
                 $this->apply_woocommerce_profile();
             }
 
-            // Only initialize Redis connection for non-admin/system request paths.
-            if (extension_loaded('redis') && !$is_admin_system_request) {
+            // Only initialize Redis for cache-eligible requests.
+            // Logged-in/admin/system/bypass requests should not pay Redis bootstrap cost.
+            if (extension_loaded('redis') && !$is_admin_system_request && !$this->bypass) {
                 $this->init_redis();
             }
 
@@ -418,30 +419,37 @@ if (!class_exists('WP_Object_Cache')) {
                 return;
             }
 
-            // Get settings directly from database to avoid circular dependency with get_option()
+            // Get settings directly from database to avoid circular dependency with get_option().
+            // During early bootstrap, table prefix info can be incomplete; skip DB lookup if table is ambiguous.
             $plugin_settings = null;
-            if (function_exists('wpdb') || (isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'])) {
+            if (isset($GLOBALS['wpdb']) && $GLOBALS['wpdb']) {
                 global $wpdb;
                 if ($wpdb && method_exists($wpdb, 'get_var')) {
-                    $table_prefix = $wpdb->prefix ?? 'wp_';
+                    $options_table = '';
+                    if (!empty($wpdb->options) && is_string($wpdb->options) && $wpdb->options !== 'options') {
+                        $options_table = $wpdb->options;
+                    } elseif (!empty($wpdb->prefix) && is_string($wpdb->prefix)) {
+                        $options_table = $wpdb->prefix . 'options';
+                    }
+
                     $option_name = 'ace_redis_cache_settings';
-                    try {
-                        $option_value = $wpdb->get_var($wpdb->prepare(
-                            "SELECT option_value FROM {$table_prefix}options WHERE option_name = %s",
-                            $option_name
-                        ));
-                        if ($option_value) {
-                            if (is_string($option_value)) {
+                    if ($options_table !== '') {
+                        try {
+                            $option_value = $wpdb->get_var($wpdb->prepare(
+                                "SELECT option_value FROM {$options_table} WHERE option_name = %s",
+                                $option_name
+                            ));
+                            if ($option_value && is_string($option_value)) {
                                 $plugin_settings = json_decode($option_value, true);
                                 if (json_last_error() !== JSON_ERROR_NONE) {
                                     // Try unserialize for PHP serialized data
                                     $plugin_settings = @unserialize($option_value);
                                 }
                             }
+                        } catch (\Throwable $e) {
+                            // Fallback to constants if database query fails
+                            $plugin_settings = null;
                         }
-                    } catch (\Throwable $e) {
-                        // Fallback to constants if database query fails
-                        $plugin_settings = null;
                     }
                 }
             }

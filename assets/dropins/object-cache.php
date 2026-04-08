@@ -106,6 +106,7 @@ if (!class_exists('WP_Object_Cache')) {
         protected $connect_error = null;
         protected $suspend_persistent_writes = false;
         protected $request_context = [];
+        protected $runtime_only_mode = false;
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
         protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
         protected $persistent_groups = self::PERSISTENT_GROUPS_DEFAULT;
@@ -235,6 +236,12 @@ if (!class_exists('WP_Object_Cache')) {
                 'is_wc_customer_session_request' => $is_wc_customer_session_request,
             ]);
             if ($editor_bypass || $this->suspend_persistent_writes) { $this->bypass = true; }
+            if ($editor_bypass) {
+                $this->runtime_only_mode = true;
+                if (!defined('ACE_OC_RUNTIME_ONLY')) {
+                    define('ACE_OC_RUNTIME_ONLY', true);
+                }
+            }
 
             $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest);
 
@@ -573,6 +580,10 @@ if (!class_exists('WP_Object_Cache')) {
             $this->runtime[$group][$key] = $val;
         }
 
+        protected function use_runtime_only_mode() {
+            return (bool) $this->runtime_only_mode;
+        }
+
         protected function should_write_through($group, $key = null) {
             if ($this->suspend_persistent_writes) return false;
             if (!$this->redis || !$this->connected) return false;
@@ -672,6 +683,14 @@ if (!class_exists('WP_Object_Cache')) {
         public function add($key, $data, $group = 'default', $expire = 0) {
             $group = $group ?: 'default';
 
+            if ($this->use_runtime_only_mode()) {
+                if (!isset($this->runtime[$group]) || !array_key_exists($key, $this->runtime[$group])) {
+                    $this->runtime_set($group, $key, $data);
+                    return true;
+                }
+                return false;
+            }
+
             // For excluded groups: do a no-op but report success and keep runtime coherent
             if ($this->is_excluded_group($group)) {
                 $this->runtime_set($group, $key, $data);
@@ -709,6 +728,11 @@ if (!class_exists('WP_Object_Cache')) {
         public function set($key, $data, $group = 'default', $expire = 0) {
             $group = $group ?: 'default';
             $start_time = microtime(true);
+
+            if ($this->use_runtime_only_mode()) {
+                $this->runtime_set($group, $key, $data);
+                return true;
+            }
 
             // Check both group and key-level exclusions
             if ($this->is_excluded_group($group) || $this->is_excluded_key($group, $key)) {
@@ -766,6 +790,17 @@ if (!class_exists('WP_Object_Cache')) {
         public function get($key, $group = 'default', $force = false, &$found = null) {
             $group = $group ?: 'default';
             $start_time = microtime(true);
+
+            if ($this->use_runtime_only_mode()) {
+                $local = $this->runtime_get($group, $key, $local_found);
+                if ($local_found && !$force) {
+                    $found = true;
+                    $this->stat_inc('local_hits');
+                    return $local;
+                }
+                $found = false;
+                return false;
+            }
 
             // W3TC-style notoptions shim for WP 6.4-6.7 compatibility
             static $wp_version;
@@ -911,6 +946,11 @@ if (!class_exists('WP_Object_Cache')) {
 
         public function delete($key, $group = 'default', $time = 0) {
             $group = $group ?: 'default';
+
+            if ($this->use_runtime_only_mode()) {
+                unset($this->runtime[$group][$key]);
+                return true;
+            }
 
             // Excluded groups: no-op but return success
             if ($this->is_excluded_group($group)) {

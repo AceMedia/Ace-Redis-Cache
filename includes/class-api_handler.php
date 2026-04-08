@@ -300,6 +300,8 @@ class API_Handler {
         $target_exists = file_exists($def['target']);
         $target_contents = $target_exists ? @file_get_contents($def['target']) : false;
         $managed = is_string($target_contents) && strpos($target_contents, $def['signature']) !== false;
+        $target_dir = dirname($def['target']);
+        $target_writable = $target_exists ? is_writable($def['target']) : is_dir($target_dir) && is_writable($target_dir);
 
         $source_hash = $source_exists ? @md5_file($def['source']) : null;
         $target_hash = is_string($target_contents) ? md5($target_contents) : null;
@@ -320,7 +322,16 @@ class API_Handler {
             $enabled_setting = !empty($settings_now['enable_page_cache']);
         }
 
-        $can_update = $active && $outdated && $managed && $source_exists && (!$target_exists || is_writable($def['target']));
+        $needs_install = (bool) ($enabled_setting && !$target_exists);
+        $can_update = (bool) (
+            $source_exists &&
+            $target_writable &&
+            (
+                $needs_install ||
+                ($target_exists && $managed && $outdated)
+            )
+        );
+        $action = $needs_install ? 'install' : (($target_exists && $managed && $outdated) ? 'update' : '');
 
         return [
             'type' => $type,
@@ -332,7 +343,10 @@ class API_Handler {
             'active' => (bool) $active,
             'enabled_setting' => (bool) $enabled_setting,
             'can_update' => (bool) $can_update,
+            'needs_install' => (bool) $needs_install,
+            'action' => $action,
             'target' => $def['target'],
+            'target_writable' => (bool) $target_writable,
         ];
     }
 
@@ -370,22 +384,12 @@ class API_Handler {
                 continue;
             }
 
-            if (empty($status['active'])) {
-                $skipped[] = sprintf('%s is not active on this site.', $status['label']);
-                continue;
-            }
-
-            if (empty($status['target_exists'])) {
-                $skipped[] = sprintf('%s is not installed in wp-content.', $status['label']);
-                continue;
-            }
-
-            if (empty($status['managed'])) {
+            if (!empty($status['target_exists']) && empty($status['managed'])) {
                 $skipped[] = sprintf('%s is not managed by this plugin (foreign drop-in).', $status['label']);
                 continue;
             }
 
-            if (empty($status['outdated'])) {
+            if (empty($status['can_update'])) {
                 $skipped[] = sprintf('%s is already up to date.', $status['label']);
                 continue;
             }
@@ -401,6 +405,10 @@ class API_Handler {
                 $errors[] = sprintf('%s is not writable: %s', $status['label'], $target);
                 continue;
             }
+            if (!file_exists($target) && !is_writable(dirname($target))) {
+                $errors[] = sprintf('%s target directory is not writable: %s', $status['label'], dirname($target));
+                continue;
+            }
 
             $backup = $target . '.bak.' . gmdate('YmdHis');
             if (file_exists($target) && !@copy($target, $backup)) {
@@ -413,7 +421,7 @@ class API_Handler {
                 continue;
             }
 
-            $updated[] = sprintf('%s updated successfully.', $status['label']);
+            $updated[] = sprintf('%s %s successfully.', $status['label'], !empty($status['needs_install']) ? 'installed' : 'updated');
         }
 
         if (!empty($updated) && function_exists('wp_cache_flush')) {

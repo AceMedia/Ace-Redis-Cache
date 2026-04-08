@@ -139,6 +139,9 @@ if (!defined('ABSPATH')) exit;
             <!-- Caching Tab -->
             <div id="caching" class="tab-content">
                 <h2>Caching Options</h2>
+                <p class="description" style="margin-bottom:16px;">
+                    Scope guide: page/object/transient cache settings apply to guest frontend traffic. Logged-in, admin, AJAX, REST, and WooCommerce session requests now run in runtime-only mode with no Redis page/object/transient persistence. Minification, static asset headers, and OPcache helpers are not disabled by that runtime-only mode.
+                </p>
                 
                 <div class="settings-form">
                     <div class="setting-row">
@@ -151,11 +154,12 @@ if (!defined('ABSPATH')) exit;
                                 <div class="cache-type-toggle">
                                     <label class="ace-switch" style="margin-right:16px;">
                                         <input type="checkbox" name="ace_redis_cache_settings[enable_page_cache]" id="enable_page_cache" value="1" <?php checked($settings['enable_page_cache'] ?? (($settings['mode'] ?? 'full') === 'full')); ?> />
-                                        <span class="ace-slider"></span>
+                                    <span class="ace-slider"></span>
                                     </label>
                                     <span><strong>Enable Full Page Cache</strong></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
+                                    <p class="description" style="margin:0 0 8px 0;">Applies to: guests only. Logged-in/admin/session requests bypass page caching.</p>
                                     <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
@@ -173,11 +177,12 @@ if (!defined('ABSPATH')) exit;
                                 <div class="cache-type-toggle">
                                     <label class="ace-switch" style="margin-right:16px;">
                                         <input type="checkbox" name="ace_redis_cache_settings[enable_object_cache]" id="enable_object_cache" value="1" <?php checked($settings['enable_object_cache'] ?? (($settings['mode'] ?? 'full') === 'object')); ?> />
-                                        <span class="ace-slider"></span>
+                                    <span class="ace-slider"></span>
                                     </label>
                                     <span><strong>Enable Object Cache</strong> <span class="description">(transients, blocks)</span></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
+                                    <p class="description" style="margin:0 0 8px 0;">Applies to: guests only for Redis persistence. Logged-in/admin/session requests use runtime-only cache behavior for this layer.</p>
                                     <label for="ttl_object" style="width:140px; display:inline-block;">Object Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
@@ -196,6 +201,7 @@ if (!defined('ABSPATH')) exit;
                                 <span class="ace-slider"></span>
                             </label>
                             <p class="description">Persist WordPress transients (including site transients) in Redis. Respects your transient exclusions.<br/>
+                            Applies to: guests only for persistent Redis storage. Logged-in/admin/session requests bypass transient persistence and run runtime-only for this layer.<br/>
                             When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
                             <div id="ace-rc-transient-tips" class="ace-rc-tips" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                 <!-- Dynamic health tips injected here -->
@@ -222,7 +228,7 @@ if (!defined('ABSPATH')) exit;
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_minification]" id="enable_minification" value="1" <?php checked($settings['enable_minification'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Enable HTML, CSS, and JavaScript minification</p>
+                            <p class="description">Enable HTML, CSS, and JavaScript minification. Applies to: both guests and logged-in users where this plugin processes the response.</p>
                         </div>
                     </div>
 
@@ -235,7 +241,7 @@ if (!defined('ABSPATH')) exit;
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_compression]" id="enable_compression" value="1" <?php checked($settings['enable_compression'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Compress cached content to reduce size and bandwidth</p>
+                            <p class="description">Compress cached content to reduce size and bandwidth. Applies to: mainly guest cached responses; not a logged-in object/transient cache feature.</p>
                             <?php
                                 $brotli_available = function_exists('brotli_compress');
                                 $gzip_available = function_exists('gzencode') || function_exists('gzcompress');
@@ -296,7 +302,7 @@ php -m | grep -i zlib</pre>
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_browser_cache_headers]" id="enable_browser_cache_headers" value="1" <?php checked($settings['enable_browser_cache_headers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse.</p>
+                            <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse. Applies to: guest page-cache responses.</p>
                             <div style="margin-top:8px;">
                                 <label for="browser_cache_max_age" style="width:140px; display:inline-block;">Max-Age</label>
                                 <input type="number" name="ace_redis_cache_settings[browser_cache_max_age]" id="browser_cache_max_age" value="<?php echo esc_attr($settings['browser_cache_max_age'] ?? ($settings['ttl_page'] ?? 3600)); ?>" min="60" max="604800" class="small-text" /> seconds
@@ -317,7 +323,7 @@ php -m | grep -i zlib</pre>
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs.</p>
+                            <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs. Applies to: both guests and logged-in users.</p>
                             <div style="margin-top:8px;">
                                 <label for="static_asset_cache_ttl" style="width:140px; display:inline-block;">Static TTL</label>
                                 <input type="number" name="ace_redis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
@@ -455,7 +461,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_dynamic_microcache]" id="enable_dynamic_microcache" value="1" <?php checked($settings['enable_dynamic_microcache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic.</p>
+                            <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic. Applies to: guest page-cache flows.</p>
                             <div style="margin-top:8px;">
                                 <label for="dynamic_microcache_ttl" style="width:140px; display:inline-block;">Microcache TTL</label>
                                 <input type="number" name="ace_redis_cache_settings[dynamic_microcache_ttl]" id="dynamic_microcache_ttl" value="<?php echo esc_attr($settings['dynamic_microcache_ttl'] ?? 10); ?>" min="1" max="60" class="small-text" /> seconds
@@ -471,7 +477,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_opcache_helpers]" id="enable_opcache_helpers" value="1" <?php checked($settings['enable_opcache_helpers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Expose buttons to reset and (lightly) prime PHP OPcache for hot files after deploy/settings changes.</p>
+                            <p class="description">Expose buttons to reset and (lightly) prime PHP OPcache for hot files after deploy/settings changes. Applies to: server-wide PHP execution for both guests and logged-in users.</p>
                         </div>
                     </div>
                 </div>
@@ -764,10 +770,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
 
     function describeStatus(d) {
         if (!d) return { text: 'Unable to determine status.', meta: '' };
-        if (!d.target_exists) return { text: 'Not installed in wp-content.', meta: d.enabled_setting ? 'Enable and deploy this drop-in first.' : 'Feature currently disabled in settings.' };
+        if (!d.target_exists) return { text: 'Not installed in wp-content.', meta: d.enabled_setting ? 'Settings say this should be deployed. Use the button to install the latest copy.' : 'Feature currently disabled in settings.' };
         if (!d.managed) return { text: 'Foreign drop-in detected.', meta: 'This plugin will not overwrite non-Ace drop-ins.' };
-        if (d.outdated && d.active) return { text: 'Active and outdated.', meta: 'Update recommended now.' };
-        if (d.outdated && !d.active) return { text: 'Outdated (inactive).', meta: 'It is stale but not active on this site.' };
+        if (d.outdated && d.active) return { text: 'Active and outdated.', meta: 'The live drop-in is behind the plugin copy. Update recommended now.' };
+        if (d.outdated && !d.active) return { text: 'Outdated (inactive).', meta: 'It is behind the plugin copy. You can update it without toggling settings.' };
         if (d.active) return { text: 'Active and up to date.', meta: '' };
         return { text: 'Installed and up to date (inactive).', meta: '' };
     }
@@ -783,7 +789,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
 
         var $btn = $box.find('.ace-rc-dropin-update');
         if (d && d.can_update) {
-            $btn.show().prop('disabled', false).text('Update Drop-in');
+            $btn.show().prop('disabled', false).text(d.action === 'install' ? 'Install Latest Drop-in' : 'Update Drop-in');
         } else {
             $btn.hide().prop('disabled', true);
         }

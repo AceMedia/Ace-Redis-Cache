@@ -371,13 +371,15 @@ class AceRedisCache {
      * Setup caching hooks based on mode
      */
     private function setup_caching_hooks() {
+        $request_dev_mode = $this->is_request_cache_dev_mode();
+
         // Full page cache (if enabled)
-        if (!empty($this->settings['enable_page_cache'])) {
+        if (!$request_dev_mode && !empty($this->settings['enable_page_cache'])) {
             $this->setup_full_page_cache();
         }
 
         // Object-level caching (transients) if enabled
-        if (!empty($this->settings['enable_object_cache'])) {
+        if (!$request_dev_mode && !empty($this->settings['enable_object_cache'])) {
             $this->setup_object_cache();
         }
 
@@ -387,10 +389,12 @@ class AceRedisCache {
         }
 
         // Setup exclusion filters for transients and cache operations
-        $this->setup_exclusion_filters();
+        if (!$request_dev_mode) {
+            $this->setup_exclusion_filters();
+        }
 
         // Initialize dynamic placeholders runtime (after settings loaded) only if page cache enabled
-        if (!empty($this->settings['enable_page_cache'])) {
+        if (!$request_dev_mode && !empty($this->settings['enable_page_cache'])) {
             $this->init_dynamic_placeholder_runtime();
             // Register per-post page cache invalidation hooks
             add_action('save_post', [$this, 'maybe_invalidate_post_page_cache'], 50, 3);
@@ -459,6 +463,10 @@ class AceRedisCache {
     private function register_transient_filters() {
         // Require cache manager and setting enabled
         if (!$this->cache_manager || empty($this->settings['enable_transient_cache'])) {
+            return;
+        }
+
+        if ($this->is_request_cache_dev_mode()) {
             return;
         }
 
@@ -565,6 +573,25 @@ class AceRedisCache {
         }
         
         return true;
+    }
+
+    /**
+     * Runtime request mode for logged-in/admin/session traffic.
+     * In this mode the plugin should not add page/object/transient cache behavior.
+     */
+    private function is_request_cache_dev_mode() {
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        $path = (string) wp_parse_url($request_uri, PHP_URL_PATH);
+
+        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+            return true;
+        }
+
+        if (is_user_logged_in()) {
+            return true;
+        }
+
+        return $this->is_woocommerce_uncacheable_request($request_uri, $path);
     }
 
     /**
@@ -2514,6 +2541,14 @@ class AceRedisCache {
         }
 
         try {
+            $this->maybe_manage_advanced_dropin();
+        } catch (\Exception $e) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache advanced drop-in management error: ' . $e->getMessage());
+            }
+        }
+
+        try {
             $this->maybe_manage_static_cache_htaccess();
         } catch (\Exception $e) {
             if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -2718,6 +2753,51 @@ class AceRedisCache {
         // If a drop-in was installed or removed during this settings change request, flush object cache once.
         if ($did_install_or_remove && function_exists('wp_cache_flush')) {
             @wp_cache_flush();
+        }
+    }
+
+    /**
+     * Deploy or remove advanced-cache.php in WP_CONTENT_DIR based on page-cache setting.
+     */
+    private function maybe_manage_advanced_dropin() {
+        $enabled = !empty($this->settings['enable_page_cache']);
+        $content_dir = defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : WP_CONTENT_DIR;
+        $dropin_target = trailingslashit($content_dir) . 'advanced-cache.php';
+        $dropin_source = trailingslashit($this->plugin_path) . '/assets/dropins/advanced-cache.php';
+
+        if ($enabled) {
+            if (!file_exists($dropin_source)) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('Ace-Redis-Cache: advanced drop-in source not found: ' . $dropin_source);
+                }
+                return;
+            }
+
+            $need_copy = true;
+            if (file_exists($dropin_target)) {
+                $existing = @file_get_contents($dropin_target);
+                if (is_string($existing) && strpos($existing, 'Ace Redis Cache advanced-cache drop-in') !== false) {
+                    $src_hash = @md5_file($dropin_source);
+                    $tgt_hash = md5($existing);
+                    if ($src_hash && $tgt_hash && $src_hash === $tgt_hash) {
+                        $need_copy = false;
+                    }
+                }
+            }
+
+            if ($need_copy && !@copy($dropin_source, $dropin_target) && defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache: Failed to deploy advanced-cache.php');
+            }
+            return;
+        }
+
+        if (file_exists($dropin_target)) {
+            $contents = @file_get_contents($dropin_target);
+            if ($contents !== false && strpos($contents, 'Ace Redis Cache advanced-cache drop-in') !== false) {
+                if (!@unlink($dropin_target) && defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('Ace-Redis-Cache: Failed to remove advanced-cache.php');
+                }
+            }
         }
     }
 

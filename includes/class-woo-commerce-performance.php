@@ -113,6 +113,31 @@ class WooCommercePerformance {
                 // No reflection needed; set_object_context() is a public method.
                 $product->set_object_context('cart');
             }, 10, 2);
+
+            // Cache composite price HTML per product per request.
+            // get_price_html() still calls sync() unconditionally, so memoizing the rendered
+            // HTML prevents second+ sync() calls when multiple blocks render the same product.
+            add_filter('woocommerce_get_price_html', function ($html, $product) {
+                static $cache = [];
+
+                if (!class_exists('WC_Product_Composite') || !($product instanceof \WC_Product_Composite)) {
+                    return $html;
+                }
+
+                if (is_singular('product') || is_cart() || is_checkout() || is_admin()
+                    || wp_doing_ajax() || wp_doing_cron()
+                    || (defined('REST_REQUEST') && REST_REQUEST)) {
+                    return $html;
+                }
+
+                $product_id = $product->get_id();
+                if (isset($cache[$product_id])) {
+                    return $cache[$product_id];
+                }
+
+                $cache[$product_id] = $html;
+                return $html;
+            }, PHP_INT_MAX, 2);
         }
 
         if ($this->setting('wc_cache_url_exclusions', true)) {
@@ -130,11 +155,34 @@ class WooCommercePerformance {
         if ($this->setting('wc_gla_disable_notification_pill', true)) {
             add_filter('ace_perf_disable_gla_admin_notification_pill', '__return_true', 20);
 
-            add_action('admin_init', function () {
-                $class = 'Automattic\\WooCommerce\\GoogleListingsAndAds\\Menu\\NotificationManager';
-                $this->remove_object_method_hook('admin_menu', $class, 'display_aggregated_notification_pill');
-                $this->remove_object_method_hook('google_for_woocommerce_admin_menu_notification_count', $class, 'performance_max_ad_strength_count');
-                $this->remove_object_method_hook('google_for_woocommerce_admin_menu_notification_count', $class, 'raise_budget_recommendations_count');
+            add_action('admin_menu', function () {
+                global $wp_filter;
+
+                foreach (['admin_menu', 'google_for_woocommerce_admin_menu_notification_count'] as $hook_name) {
+                    if (empty($wp_filter[$hook_name]) || !($wp_filter[$hook_name] instanceof \WP_Hook)) {
+                        continue;
+                    }
+
+                    foreach ($wp_filter[$hook_name]->callbacks as $priority => $callbacks) {
+                        foreach ($callbacks as $callback) {
+                            $fn = $callback['function'] ?? null;
+                            if (!is_array($fn) || !is_object($fn[0])) {
+                                continue;
+                            }
+
+                            $method = $fn[1] ?? '';
+                            if (!in_array($method, [
+                                'display_aggregated_notification_pill',
+                                'performance_max_ad_strength_count',
+                                'raise_budget_recommendations_count',
+                            ], true)) {
+                                continue;
+                            }
+
+                            remove_filter($hook_name, $fn, $priority);
+                        }
+                    }
+                }
             }, 0);
         } else {
             add_filter('ace_perf_disable_gla_admin_notification_pill', '__return_false', 20);
@@ -161,8 +209,18 @@ class WooCommercePerformance {
 
         add_filter('ace_redis_cache_transient_exclusions', function ($exclusions) {
             $exclusions[] = 'customtaxorder_get_settings';
+            $exclusions[] = 'customtaxorder_settings';
             return $exclusions;
         }, 20);
+
+        add_filter('pre_option_customtaxorder_settings', function ($pre) {
+            $cached = wp_cache_get('customtaxorder_settings', 'options');
+            if (false !== $cached) {
+                return $cached;
+            }
+
+            return $pre;
+        }, 1);
 
         add_filter('customtaxorder_settings', function ($settings) {
             static $cached = null;

@@ -211,11 +211,11 @@ import SaveBar from './components/SaveBar.js';
                     return;
                 }
                 const d = resp.data;
+                const guestMode = d.guest_effective_mode || d.request_mode;
                 let state = 'ok'; let label = 'OK';
-                if (!d.using_dropin || d.request_mode === 'missing_dropin') { state='warn'; label='Missing'; }
-                else if (d.request_mode === 'runtime_only') { state='warn'; label='Guest only'; }
-                else if (d.request_mode === 'fail_open' || d.request_mode === 'forced_bypass') { state='warn'; label='Bypassed'; }
-                else if (!d.dropin_connected || d.request_mode === 'disconnected') { state='error'; label='Down'; }
+                if (!d.using_dropin || guestMode === 'missing_dropin') { state='warn'; label='Missing'; }
+                else if (guestMode === 'fail_open' || guestMode === 'forced_bypass') { state='warn'; label='Bypassed'; }
+                else if (guestMode === 'disconnected') { state='error'; label='Down'; }
                 else if (d.bypass) { state='warn'; label='Bypassed'; }
                 // Grace period: if recently enabled and not yet fully connected treat as initializing
                 const now = Date.now();
@@ -240,12 +240,14 @@ import SaveBar from './components/SaveBar.js';
                 if ($tips.length) {
                     const parts = [];
                     let dropinText;
-                    if (!d.using_dropin) dropinText = '<span style="color:#c00;">missing</span>';
-                    else if (d.request_mode === 'runtime_only') dropinText = '<span style="color:#dba617;">installed (guest active)</span>';
-                    else if (!d.dropin_connected) dropinText = '<span style="color:#c00;">not connected</span>';
-                    else if (d.active) dropinText = '<span style="color:green;">connected</span>';
+                    if (!d.using_dropin || guestMode === 'missing_dropin') dropinText = '<span style="color:#c00;">missing</span>';
+                    else if (guestMode === 'active') dropinText = '<span style="color:green;">guest-active</span>';
+                    else if (guestMode === 'disconnected') dropinText = '<span style="color:#c00;">not connected</span>';
                     else dropinText = '<span style="color:#dba617;">connected (bypassed)</span>';
                     parts.push('<strong>Drop-in:</strong> ' + dropinText);
+                    if (d.request_mode === 'runtime_only') {
+                        parts.push('<span style="color:#dba617;">admin request is runtime-only</span>');
+                    }
                     if (d.bypass) {
                         let br = d.bypass_reason || 'unknown';
                         let label = 'bypass';

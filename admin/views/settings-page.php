@@ -51,10 +51,148 @@ if (!function_exists('ace_rc_scope_traffic_light')) {
         return ob_get_clean();
     }
 }
+
+if (!function_exists('ace_rc_dropin_status_bootstrap')) {
+    function ace_rc_dropin_status_bootstrap($type, $settings = []) {
+        $plugin_root = dirname(dirname(__DIR__));
+        $defs = [
+            'object' => [
+                'label' => 'Object Cache Drop-in',
+                'source' => trailingslashit($plugin_root) . 'assets/dropins/object-cache.php',
+                'target' => trailingslashit(WP_CONTENT_DIR) . 'object-cache.php',
+                'signature' => 'Ace Redis Cache Drop-In',
+            ],
+            'advanced' => [
+                'label' => 'Advanced Cache Drop-in',
+                'source' => trailingslashit($plugin_root) . 'assets/dropins/advanced-cache.php',
+                'target' => trailingslashit(WP_CONTENT_DIR) . 'advanced-cache.php',
+                'signature' => 'Ace Redis Cache advanced-cache drop-in',
+            ],
+        ];
+
+        if (!isset($defs[$type])) {
+            return ['text' => 'Status unavailable', 'meta' => 'Unknown drop-in type.', 'button' => false, 'button_label' => ''];
+        }
+
+        $def = $defs[$type];
+        $source_exists = file_exists($def['source']);
+        $target_exists = file_exists($def['target']);
+        $target_contents = $target_exists ? @file_get_contents($def['target']) : false;
+        $managed = is_string($target_contents) && strpos($target_contents, $def['signature']) !== false;
+        $source_hash = $source_exists ? @md5_file($def['source']) : null;
+        $target_hash = is_string($target_contents) ? md5($target_contents) : null;
+        $outdated = (bool) ($source_exists && $target_exists && $managed && $source_hash && $target_hash && $source_hash !== $target_hash);
+        $enabled_setting = $type === 'object'
+            ? (!empty($settings['enable_transient_cache']) || !empty($settings['enable_object_cache_dropin']))
+            : !empty($settings['enable_page_cache']);
+        $active = $type === 'object'
+            ? (function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache())
+            : (defined('WP_CACHE') && WP_CACHE && $target_exists);
+        $target_dir = dirname($def['target']);
+        $target_writable = $target_exists ? is_writable($def['target']) : (is_dir($target_dir) && is_writable($target_dir));
+        $needs_install = $enabled_setting && !$target_exists;
+        $can_update = $source_exists && $target_writable && ($needs_install || ($target_exists && $managed && $outdated));
+
+        if (!$target_exists) {
+            return [
+                'text' => 'Not installed in wp-content.',
+                'meta' => $enabled_setting ? 'Settings say this should be deployed. Use the button to install the latest copy.' : 'Feature currently disabled in settings.',
+                'button' => $can_update,
+                'button_label' => 'Install Latest Drop-in',
+            ];
+        }
+
+        if (!$managed) {
+            return [
+                'text' => 'Foreign drop-in detected.',
+                'meta' => 'This plugin will not overwrite non-Ace drop-ins.',
+                'button' => false,
+                'button_label' => '',
+            ];
+        }
+
+        if ($outdated && $active) {
+            return [
+                'text' => 'Active and outdated.',
+                'meta' => 'The live drop-in is behind the plugin copy. Update recommended now.',
+                'button' => $can_update,
+                'button_label' => 'Update Drop-in',
+            ];
+        }
+
+        if ($outdated) {
+            return [
+                'text' => 'Outdated (inactive).',
+                'meta' => 'It is behind the plugin copy. You can update it without toggling settings.',
+                'button' => $can_update,
+                'button_label' => 'Update Drop-in',
+            ];
+        }
+
+        return [
+            'text' => $active ? 'Active and up to date.' : 'Installed and up to date (inactive).',
+            'meta' => '',
+            'button' => false,
+            'button_label' => '',
+        ];
+    }
+}
+
+$ace_rc_advanced_dropin_bootstrap = ace_rc_dropin_status_bootstrap('advanced', $settings);
+$ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $settings);
 ?>
 
 <div class="wrap ace-redis-settings">
     <style>
+        .ace-redis-container { display: flex; align-items: flex-start; gap: 24px; }
+        .ace-redis-sidebar { position: sticky; top: 48px; align-self: flex-start; max-height: calc(100vh - 64px); overflow: auto; }
+        .ace-redis-content { min-width: 0; flex: 1 1 auto; }
+        .ace-redis-settings h1,
+        .ace-redis-settings h2,
+        .ace-redis-settings h3,
+        .ace-redis-settings h4 { font-weight: 800; }
+        .ace-redis-settings .setting-label label,
+        .ace-redis-settings .cache-type-toggle strong,
+        .ace-redis-settings .setting-field > label:not(.ace-switch) { font-weight: 800; }
+        .ace-redis-sidebar .nav-tab { display: inline-flex; align-items: center; gap: 8px; }
+        .ace-redis-sidebar .nav-tab .ace-rc-tab-icon { display: none; }
+        .ace-redis-sidebar .nav-tab::before {
+            font-family: dashicons !important;
+            font-size: 16px;
+            line-height: 1;
+            font-weight: 400;
+            font-style: normal;
+            speak: never;
+            text-decoration: none;
+            text-transform: none;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            width: 16px;
+            height: 16px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.8;
+            background: none !important;
+            transform: none !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+        }
+        .ace-redis-sidebar .nav-tab[href="#connection"]::before { content: "\f319"; }
+        .ace-redis-sidebar .nav-tab[href="#caching"]::before { content: "\f226"; }
+        .ace-redis-sidebar .nav-tab[href="#exclusions"]::before { content: "\f536"; }
+        .ace-redis-sidebar .nav-tab[href="#diagnostics"]::before { content: "\f239"; }
+        .ace-redis-sidebar .nav-tab.nav-tab-active { font-weight: 900; }
+        .ace-redis-sidebar .nav-tab.nav-tab-active::before { opacity: 1; }
+        .ace-redis-sidebar .nav-tab::after,
+        .ace-redis-sidebar .nav-tab.nav-tab-active::after { display: none !important; content: none !important; }
+        .ace-redis-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 16px; text-align: center; }
+        .ace-redis-brand-logo { display: block; width: min(88px, 100%); height: auto; filter: brightness(0); }
+        .ace-redis-brand h1 { margin: 0; text-align: center; font-weight: 800; }
+        @media (max-width: 960px) {
+            .ace-redis-container { display: block; }
+            .ace-redis-sidebar { position: static; top: auto; max-height: none; overflow: visible; }
+        }
         .ace-rc-scope-panel,
         .ace-redis-settings .setting-field,
         .ace-redis-settings .cache-type-options { position: relative; }
@@ -89,6 +227,27 @@ if (!function_exists('ace_rc_scope_traffic_light')) {
         .ace-rc-scope-legend:hover .ace-rc-scope-tooltip,
         .ace-rc-scope-legend:focus .ace-rc-scope-tooltip,
         .ace-rc-scope-legend:focus-within .ace-rc-scope-tooltip { display: block; }
+        .ace-redis-settings .tab-content {
+            opacity: 0;
+            transform: translateY(8px);
+            transition: opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        .ace-redis-settings .tab-content.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .ace-redis-settings .tab-content.is-leaving {
+            opacity: 0;
+            transform: translateY(-6px);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .ace-redis-settings .tab-content,
+            .ace-redis-settings .tab-content.active,
+            .ace-redis-settings .tab-content.is-leaving {
+                transition: none;
+                transform: none;
+            }
+        }
     </style>
     
     
@@ -98,12 +257,19 @@ if (!function_exists('ace_rc_scope_traffic_light')) {
 
         <!-- Left Sidebar Navigation -->
         <div class="ace-redis-sidebar">
-    <h1>Ace Redis Cache Settings</h1>
+            <div class="ace-redis-brand">
+                <img
+                    src="<?php echo esc_url( plugins_url( 'assets/images/ace-media-logo-pure.png', dirname( dirname( __DIR__ ) ) . '/ace-redis-cache.php' ) ); ?>"
+                    alt="Ace Media"
+                    class="ace-redis-brand-logo"
+                />
+                <h1>Ace Redis Cache</h1>
+            </div>
             <nav class="nav-tab-wrapper">
-                <a href="#connection" class="nav-tab nav-tab-active">Connection</a>
-                <a href="#caching" class="nav-tab">Caching</a>
-                <a href="#exclusions" class="nav-tab">Exclusions</a>
-                <a href="#diagnostics" class="nav-tab">Diagnostics</a>
+                <a href="#connection" class="nav-tab nav-tab-active"><span class="ace-rc-tab-icon"></span><span>Connection</span></a>
+                <a href="#caching" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>Caching</span></a>
+                <a href="#exclusions" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>Exclusions</span></a>
+                <a href="#diagnostics" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>Diagnostics</span></a>
             </nav>
             
             <!-- Cache Action Buttons -->
@@ -283,9 +449,9 @@ if (!function_exists('ace_rc_scope_traffic_light')) {
                                     <span>seconds</span>
                                     <div id="ace-rc-advanced-dropin-box" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                         <strong>Advanced Cache Drop-in:</strong>
-                                        <span class="ace-rc-dropin-status">Checking status...</span>
-                                        <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="advanced" style="display:none; margin-left:8px;">Update Drop-in</button>
-                                        <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"></div>
+                                        <span class="ace-rc-dropin-status"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['text']); ?></span>
+                                        <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="advanced" style="<?php echo !empty($ace_rc_advanced_dropin_bootstrap['button']) ? 'margin-left:8px;' : 'display:none; margin-left:8px;'; ?>"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['button_label'] ?: 'Update Drop-in'); ?></button>
+                                        <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['meta']); ?></div>
                                     </div>
                                 </div>
                             </div>
@@ -325,9 +491,9 @@ if (!function_exists('ace_rc_scope_traffic_light')) {
                             </div>
                             <div id="ace-rc-object-dropin-box" style="margin-top:10px; font-size:12px; line-height:1.4;">
                                 <strong>Object Cache Drop-in:</strong>
-                                <span class="ace-rc-dropin-status">Checking status...</span>
-                                <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="object" style="display:none; margin-left:8px;">Update Drop-in</button>
-                                <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"></div>
+                                <span class="ace-rc-dropin-status"><?php echo esc_html($ace_rc_object_dropin_bootstrap['text']); ?></span>
+                                <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="object" style="<?php echo !empty($ace_rc_object_dropin_bootstrap['button']) ? 'margin-left:8px;' : 'display:none; margin-left:8px;'; ?>"><?php echo esc_html($ace_rc_object_dropin_bootstrap['button_label'] ?: 'Update Drop-in'); ?></button>
+                                <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"><?php echo esc_html($ace_rc_object_dropin_bootstrap['meta']); ?></div>
                             </div>
                         </div>
                     </div>
@@ -871,6 +1037,63 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
 </script>
 
 <script>
+(function(){
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.ace-redis-sidebar .nav-tab'));
+    var panels = Array.prototype.slice.call(document.querySelectorAll('.tab-content'));
+    if (!tabs.length || !panels.length) return;
+
+    var animating = false;
+
+    function setActiveTab(target) {
+        tabs.forEach(function(tab){
+            tab.classList.toggle('nav-tab-active', tab.getAttribute('href') === target);
+        });
+    }
+
+    function transitionTo(target, updateHash) {
+        var next = document.querySelector(target);
+        var current = document.querySelector('.tab-content.active');
+        if (!next || animating || current === next) {
+            if (next) setActiveTab(target);
+            return;
+        }
+
+        animating = true;
+        setActiveTab(target);
+
+        if (updateHash && history && history.replaceState) {
+            history.replaceState(null, '', target);
+        }
+
+        current.classList.add('is-leaving');
+
+        window.setTimeout(function(){
+            current.classList.remove('active', 'is-leaving');
+            next.classList.add('active');
+            animating = false;
+        }, 170);
+    }
+
+    tabs.forEach(function(tab){
+        tab.addEventListener('click', function(e){
+            var target = tab.getAttribute('href');
+            if (!target || target.charAt(0) !== '#') return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            transitionTo(target, true);
+        }, true);
+    });
+
+    window.addEventListener('hashchange', function(){
+        var hash = window.location.hash;
+        if (hash && document.querySelector(hash)) {
+            transitionTo(hash, false);
+        }
+    });
+})();
+</script>
+
+<script>
 (function($){
     if (!$ || typeof ace_redis_admin === 'undefined') return;
 
@@ -878,6 +1101,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
         return $.ajax({
             url: ace_redis_admin.rest_url + path,
             type: 'GET',
+            timeout: 5000,
             beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
         });
     }
@@ -887,6 +1111,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
             url: ace_redis_admin.rest_url + path,
             type: 'POST',
             data: data,
+            timeout: 8000,
             beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
         });
     }
@@ -923,6 +1148,21 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
             if (!resp || !resp.success || !resp.data) return;
             renderDropinBox('advanced', resp.data.advanced || null);
             renderDropinBox('object', resp.data.object || null);
+        }).fail(function(xhr, textStatus){
+            var meta = 'Drop-in status request failed.';
+            if (xhr && xhr.status === 401) {
+                meta = 'Permission or nonce error while checking drop-in status. Refresh the page and try again.';
+            } else if (textStatus === 'timeout') {
+                meta = 'Drop-in status check timed out. You can still save settings or retry.';
+            }
+
+            ['#ace-rc-advanced-dropin-box', '#ace-rc-object-dropin-box'].forEach(function(boxId){
+                var $box = $(boxId);
+                if (!$box.length) return;
+                $box.find('.ace-rc-dropin-status').text('Status unavailable');
+                $box.find('.ace-rc-dropin-meta').text(meta);
+                $box.find('.ace-rc-dropin-update').hide().prop('disabled', true);
+            });
         });
     }
 
@@ -957,6 +1197,15 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
         refreshDropinStatus();
         $('#enable_page_cache, #enable_transient_cache').on('change', function(){
             setTimeout(refreshDropinStatus, 400);
+        });
+        $(document).ajaxSuccess(function(_event, xhr, settings){
+            var url = settings && settings.url ? settings.url : '';
+            if (url.indexOf('/ace-redis-cache/v1/settings') === -1) return;
+            var resp = xhr && xhr.responseJSON ? xhr.responseJSON : null;
+            if (resp && resp.success && resp.data && resp.data.dropins) {
+                renderDropinBox('advanced', resp.data.dropins.advanced || null);
+                renderDropinBox('object', resp.data.dropins.object || null);
+            }
         });
     });
 })(window.jQuery);
@@ -1036,15 +1285,14 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
         }
 
         var mode = data && data.request_mode ? data.request_mode : '';
+        var guestMode = data && data.guest_effective_mode ? data.guest_effective_mode : mode;
         var badge = { label: 'OK', state: 'ok' };
 
-        if (!data || !data.using_dropin || mode === 'missing_dropin') {
+        if (!data || !data.using_dropin || guestMode === 'missing_dropin') {
             badge = { label: 'Missing', state: 'warn' };
-        } else if (mode === 'runtime_only') {
-            badge = { label: 'Guest only', state: 'warn' };
-        } else if (mode === 'fail_open' || mode === 'forced_bypass') {
+        } else if (guestMode === 'fail_open' || guestMode === 'forced_bypass') {
             badge = { label: 'Bypassed', state: 'warn' };
-        } else if (!data.dropin_connected || mode === 'disconnected') {
+        } else if (guestMode === 'disconnected') {
             badge = { label: 'Down', state: 'error' };
         }
 
@@ -1053,15 +1301,18 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
         if (!$tips.length || !data) return;
 
         var parts = [];
-        if (!data.using_dropin || mode === 'missing_dropin') {
+        if (!data.using_dropin || guestMode === 'missing_dropin') {
             parts.push('<strong>Drop-in:</strong> <span style="color:#c00;">missing</span>');
+        } else if (guestMode === 'active') {
+            parts.push('<strong>Drop-in:</strong> <span style="color:green;">guest-active</span>');
+            if (mode === 'runtime_only') {
+                parts.push('<span style="color:#dba617;">admin request is runtime-only</span>');
+            }
         } else if (mode === 'runtime_only') {
             parts.push('<strong>Drop-in:</strong> <span style="color:#dba617;">installed (guest active)</span>');
             parts.push('<span style="color:#dba617;">runtime-only on this admin request</span>');
-        } else if (!data.dropin_connected || mode === 'disconnected') {
+        } else if (guestMode === 'disconnected') {
             parts.push('<strong>Drop-in:</strong> <span style="color:#c00;">not connected</span>');
-        } else if (data.active) {
-            parts.push('<strong>Drop-in:</strong> <span style="color:green;">connected</span>');
         } else {
             parts.push('<strong>Drop-in:</strong> <span style="color:#dba617;">connected (bypassed)</span>');
         }

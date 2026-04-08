@@ -350,6 +350,13 @@ class API_Handler {
         ];
     }
 
+    private function get_all_dropin_statuses() {
+        return [
+            'object' => $this->get_dropin_status('object'),
+            'advanced' => $this->get_dropin_status('advanced'),
+        ];
+    }
+
     public function dropins_status_route($request) {
         $object = $this->get_dropin_status('object');
         $advanced = $this->get_dropin_status('advanced');
@@ -528,9 +535,9 @@ class API_Handler {
     public function health_route($request) {
         global $wp_object_cache, $wpdb;
         $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
-    $dropin_connected = false; // physical connection
-    $dropin_active = false;    // effective (not bypassed) guest perspective
-    $conn_details = null; $via = null; $error = null; $runtime_stats = []; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
+        $dropin_connected = false; // current-request physical connection
+        $dropin_active = false;    // current-request active flag from drop-in
+        $conn_details = null; $via = null; $error = null; $runtime_stats = []; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
         if ($using_dropin && isset($wp_object_cache) && is_object($wp_object_cache)) {
             if (method_exists($wp_object_cache,'is_connected')) { $dropin_connected = (bool)$wp_object_cache->is_connected(); }
             if (method_exists($wp_object_cache,'connection_details')) {
@@ -551,39 +558,71 @@ class API_Handler {
             }
         }
         $const_bypass = defined('ACE_OC_BYPASS') && ACE_OC_BYPASS; $bypass = $const_bypass || $runtime_bypass;
+        $probe_guest_context = is_admin()
+            || is_user_logged_in()
+            || wp_doing_ajax()
+            || (defined('REST_REQUEST') && REST_REQUEST);
+        $guest_probe_connected = null;
+        $guest_probe_error = null;
+        if ($using_dropin && $probe_guest_context && $this->cache_manager && method_exists($this->cache_manager, 'get_redis_connection')) {
+            try {
+                $probe_status = $this->cache_manager->get_redis_connection()->get_status();
+                if (is_array($probe_status)) {
+                    $guest_probe_connected = !empty($probe_status['connected']);
+                    $guest_probe_error = $probe_status['error'] ?? null;
+                }
+            } catch (\Throwable $t) {
+                $guest_probe_connected = false;
+                $guest_probe_error = $t->getMessage();
+            }
+        }
         // Determine bypass reason (admin/editor vs fail-open)
         $bypass_reason = null;
         if ($bypass) {
             if ($const_bypass) { $bypass_reason = 'constant'; }
+            elseif ($probe_guest_context) { $bypass_reason = 'editor_admin'; }
             elseif ($runtime_bypass && !$dropin_connected) { $bypass_reason = 'fail_open'; }
             else { $bypass_reason = 'editor_admin'; }
         }
         $request_mode = 'active';
         if (!$using_dropin) {
             $request_mode = 'missing_dropin';
-        } elseif ($bypass && $bypass_reason === 'editor_admin') {
-            $request_mode = 'runtime_only';
-        } elseif ($bypass && $bypass_reason === 'fail_open') {
-            $request_mode = 'fail_open';
-        } elseif ($bypass && $bypass_reason === 'constant') {
+        } elseif ($const_bypass) {
             $request_mode = 'forced_bypass';
-        } elseif (!$dropin_connected) {
+        } elseif ($bypass && $bypass_reason === 'fail_open' && !$probe_guest_context) {
+            $request_mode = 'fail_open';
+        } elseif (!$probe_guest_context && !$dropin_connected) {
             $request_mode = 'disconnected';
         }
+        $guest_effective_mode = 'active';
+        if (!$using_dropin) {
+            $guest_effective_mode = 'missing_dropin';
+        } elseif ($const_bypass) {
+            $guest_effective_mode = 'forced_bypass';
+        } elseif ($probe_guest_context && $guest_probe_connected === false) {
+            $guest_effective_mode = 'disconnected';
+        } elseif ($bypass && $bypass_reason === 'fail_open' && !$probe_guest_context) {
+            $guest_effective_mode = 'fail_open';
+        } elseif (!$probe_guest_context && !$dropin_connected) {
+            $guest_effective_mode = 'disconnected';
+        }
+        $display_dropin_connected = $dropin_connected || ($using_dropin && $guest_effective_mode === 'active');
+        $display_active = $dropin_active || ($using_dropin && $guest_effective_mode === 'active');
+        $display_bypass = !$probe_guest_context && $bypass && $bypass_reason !== 'editor_admin';
+        $display_bypass_reason = $display_bypass ? $bypass_reason : null;
         $slow_ops = get_transient('ace_rc_slow_op_count'); $slow_ops = $slow_ops!==false ? (int)$slow_ops : 0;
         $autoload_size = 0; if (isset($wpdb)) { $row = $wpdb->get_row("SELECT SUM(LENGTH(option_value)) AS sz FROM {$wpdb->options} WHERE autoload='yes'"); if ($row && isset($row->sz)) { $autoload_size = (int)$row->sz; } }
         $tips = [];
         if (!$using_dropin) {
             $tips[] = 'Object cache drop-in missing. Enable Transient Cache to deploy or manually copy assets/plugins/Ace-Redis-Cache/assets/dropins/object-cache.php to wp-content/object-cache.php';
-        } elseif ($request_mode === 'disconnected') {
-            $tips[] = 'Drop-in present but not physically connected. Check Redis host/port/TLS and credentials.';
+        } elseif ($guest_effective_mode === 'disconnected') {
+            $tips[] = $probe_guest_context
+                ? 'Guest/frontend Redis connection check failed. Check Redis host/port/TLS and credentials.'
+                : 'Drop-in present but not physically connected. Check Redis host/port/TLS and credentials.';
         } elseif ($bypass && $bypass_reason === 'fail_open') {
             $tips[] = 'Runtime fail-open bypass: a Redis operation failed and caching is suspended this request.';
         } elseif ($bypass && $bypass_reason === 'constant') {
             $tips[] = 'ACE_OC_BYPASS constant forces bypass.';
-        }
-        if ($bypass && $bypass_reason === 'editor_admin') {
-            $tips[] = 'This admin/logged-in request is intentionally runtime-only. Guest/frontend requests can still use Redis persistence.';
         }
         if ($profiling && $slow_ops>0) { $tips[] = 'Detected ' . $slow_ops . ' slow ops (>=100ms). Consider inspecting heavy queries or raising threshold.'; }
         if ($autoload_size > 50*1024*1024) { $tips[] = 'Autoloaded options exceed 50MB (' . size_format($autoload_size) . '). This can hurt performance.'; }
@@ -603,21 +642,22 @@ class API_Handler {
             );
         }
         // Provide WP_CACHE guidance
-        if ((!defined('WP_CACHE') || !WP_CACHE) && $request_mode !== 'runtime_only') { $tips[] = 'WP_CACHE is not enabled. Add define(\'WP_CACHE\', true); to wp-config.php for full object cache effectiveness.'; }
+        if ((!defined('WP_CACHE') || !WP_CACHE) && $guest_effective_mode !== 'missing_dropin') { $tips[] = 'WP_CACHE is not enabled. Add define(\'WP_CACHE\', true); to wp-config.php for full object cache effectiveness.'; }
         // Unique tips only
         $tips = array_values(array_unique($tips));
         return new \WP_REST_Response([
             'success' => true,
             'data' => [
                 'using_dropin' => $using_dropin,
-                'dropin_connected' => $dropin_connected,
+                'dropin_connected' => $display_dropin_connected,
                 'request_mode' => $request_mode,
-                'bypass' => $bypass,
-                'bypass_reason' => $bypass_reason,
+                'guest_effective_mode' => $guest_effective_mode,
+                'bypass' => $display_bypass,
+                'bypass_reason' => $display_bypass_reason,
                 'runtime_bypass' => $runtime_bypass,
-                'active' => $dropin_active,
+                'active' => $display_active,
                 'via' => $via,
-                'error' => $error,
+                'error' => $probe_guest_context && $guest_probe_error ? $guest_probe_error : $error,
                 'runtime_stats' => $runtime_stats,
                 'slow_ops' => $slow_ops,
                 'profiling' => $profiling,
@@ -751,6 +791,7 @@ class API_Handler {
                         'message' => $changed ? 'Network settings saved.' : 'No changes to save (or unchanged after write).',
                         'settings_changed' => $changed,
                         'settings' => $this->sanitize_settings_for_response($final_stored),
+                        'dropins' => $this->get_all_dropin_statuses(),
                         'update_result' => $result,
                     ],
                 ], 200);
@@ -804,6 +845,7 @@ class API_Handler {
                         'message' => 'Saved with warning: transient flag may appear off until next request.',
                         'settings_changed' => true,
                         'settings' => $this->sanitize_settings_for_response(array_merge($sanitized_settings, ['enable_transient_cache' => 1])),
+                        'dropins' => $this->get_all_dropin_statuses(),
                         'stored_flag' => $final_flag_check,
                         'raw_flag' => $raw2_flag,
                         'warning' => 'TRANSIENT_FLAG_STALE_READ'
@@ -834,6 +876,7 @@ class API_Handler {
                 'message' => $msg,
                 'settings_changed' => $changed,
                 'settings' => $this->sanitize_settings_for_response($final_stored),
+                'dropins' => $this->get_all_dropin_statuses(),
                 'transient_final' => $final_flag,
                 'update_result' => $result,
             ];

@@ -10,9 +10,86 @@ if (!defined('ABSPATH')) exit;
 
 // Variables are passed from AdminInterface::render_settings_page()
 // Available: $settings, $cache_manager
+if (!function_exists('ace_rc_scope_traffic_light')) {
+    function ace_rc_scope_traffic_light($guest_state, $logged_state, $note = '') {
+        $map = [
+            'green' => ['label' => 'Active', 'class' => 'is-green', 'icon' => 'dashicons-yes-alt'],
+            'amber' => ['label' => 'Limited', 'class' => 'is-amber', 'icon' => 'dashicons-warning'],
+            'red'   => ['label' => 'Bypassed', 'class' => 'is-red', 'icon' => 'dashicons-no-alt'],
+        ];
+
+        $guest = $map[$guest_state] ?? $map['amber'];
+        $logged = $map[$logged_state] ?? $map['amber'];
+        $tooltip = sprintf(
+            'Guest: %s. Logged-in/Admin: %s.%s',
+            $guest['label'],
+            $logged['label'],
+            $note !== '' ? ' ' . $note : ''
+        );
+
+        ob_start();
+        ?>
+        <div class="ace-rc-scope-legend" tabindex="0" aria-label="<?php echo esc_attr($tooltip); ?>">
+            <span class="ace-rc-scope-pill <?php echo esc_attr($guest['class']); ?>" aria-hidden="true">
+                <span class="dashicons dashicons-admin-home ace-rc-scope-user-icon"></span>
+                <span class="dashicons <?php echo esc_attr($guest['icon']); ?> ace-rc-scope-state-icon"></span>
+            </span>
+            <span class="ace-rc-scope-pill <?php echo esc_attr($logged['class']); ?>" aria-hidden="true">
+                <span class="dashicons dashicons-admin-users ace-rc-scope-user-icon"></span>
+                <span class="dashicons <?php echo esc_attr($logged['icon']); ?> ace-rc-scope-state-icon"></span>
+            </span>
+            <span class="ace-rc-scope-tooltip">
+                <strong>Scope</strong>
+                <span>Guest: <?php echo esc_html($guest['label']); ?></span>
+                <span>Logged-in/Admin: <?php echo esc_html($logged['label']); ?></span>
+                <?php if ($note !== '') : ?>
+                    <span><?php echo esc_html($note); ?></span>
+                <?php endif; ?>
+            </span>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+}
 ?>
 
 <div class="wrap ace-redis-settings">
+    <style>
+        .ace-rc-scope-panel,
+        .ace-redis-settings .setting-field,
+        .ace-redis-settings .cache-type-options { position: relative; }
+        .ace-rc-scope-panel { margin: 0 0 16px; padding: 14px 16px; border: 1px solid #dcdcde; border-radius: 8px; background: linear-gradient(180deg, #fff, #f6f7f7); }
+        .ace-rc-scope-panel .description { margin: 8px 0 0; }
+        .ace-rc-scope-panel-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+        .ace-rc-scope-panel-toggle h3 { margin: 0; font-size: 14px; }
+        .ace-rc-scope-panel-toggle button { display: inline-flex; align-items: center; gap: 6px; }
+        .ace-rc-scope-panel-body { margin-top: 12px; }
+        .ace-rc-scope-panel.is-collapsed .ace-rc-scope-panel-body { display: none; }
+        .ace-rc-scope-overview { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 10px; }
+        .ace-rc-scope-overview-item { display: inline-flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.8); border: 1px solid #dcdcde; font-size: 12px; }
+        .ace-rc-scope-explainer { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+        .ace-rc-scope-explainer-item { padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,0.9); border: 1px solid #dcdcde; font-size: 12px; line-height: 1.45; }
+        .ace-rc-scope-explainer-item strong { display: block; margin-bottom: 4px; font-size: 12px; }
+        .ace-rc-scope-inline-icon { width: 16px; height: 16px; font-size: 16px; line-height: 16px; vertical-align: text-bottom; }
+        .ace-rc-scope-legend { position: absolute; top: 0; right: 0; z-index: 3; display: inline-flex; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.96); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); cursor: help; }
+        .ace-rc-scope-legend:focus { outline: 2px solid #2271b1; outline-offset: 2px; }
+        .ace-rc-scope-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 999px; border: 1px solid transparent; font-size: 11px; line-height: 1; }
+        .ace-rc-scope-user-icon,
+        .ace-rc-scope-state-icon { width: 14px; height: 14px; font-size: 14px; line-height: 14px; }
+        .ace-rc-scope-user-icon { opacity: 0.9; }
+        .ace-rc-scope-pill.is-green { background: #edf7ed; border-color: #b7dfb9; color: #155724; }
+        .ace-rc-scope-pill.is-green .ace-rc-scope-state-icon { color: #2e7d32; }
+        .ace-rc-scope-pill.is-amber { background: #fff8e1; border-color: #f0d18a; color: #8a5a00; }
+        .ace-rc-scope-pill.is-amber .ace-rc-scope-state-icon { color: #d48a00; }
+        .ace-rc-scope-pill.is-red { background: #fdecea; border-color: #efb8b2; color: #8a1f17; }
+        .ace-rc-scope-pill.is-red .ace-rc-scope-state-icon { color: #c62828; }
+        .ace-rc-scope-tooltip { position: absolute; top: calc(100% + 8px); right: 0; min-width: 250px; max-width: 320px; display: none; padding: 10px 12px; border-radius: 8px; background: #1d2327; color: #f0f0f1; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2); font-size: 12px; line-height: 1.45; }
+        .ace-rc-scope-tooltip strong { display: block; margin-bottom: 4px; color: #fff; }
+        .ace-rc-scope-tooltip span { display: block; }
+        .ace-rc-scope-legend:hover .ace-rc-scope-tooltip,
+        .ace-rc-scope-legend:focus .ace-rc-scope-tooltip,
+        .ace-rc-scope-legend:focus-within .ace-rc-scope-tooltip { display: block; }
+    </style>
     
     
     <!-- Yoast-style Two-Column Layout -->
@@ -139,9 +216,50 @@ if (!defined('ABSPATH')) exit;
             <!-- Caching Tab -->
             <div id="caching" class="tab-content">
                 <h2>Caching Options</h2>
-                <p class="description" style="margin-bottom:16px;">
-                    Scope guide: page/object/transient cache settings apply to guest frontend traffic. Logged-in, admin, AJAX, REST, and WooCommerce session requests now run in runtime-only mode with no Redis page/object/transient persistence. Minification, static asset headers, and OPcache helpers are not disabled by that runtime-only mode.
-                </p>
+                <div class="ace-rc-scope-panel" id="ace-rc-scope-panel">
+                    <div class="ace-rc-scope-panel-toggle">
+                        <h3>Traffic Scope Guide</h3>
+                        <button type="button" class="button button-secondary" id="ace-rc-scope-panel-toggle-btn" aria-expanded="true">
+                            <span class="dashicons dashicons-visibility"></span>
+                            <span class="ace-rc-scope-panel-toggle-text">Hide guide</span>
+                        </button>
+                    </div>
+                    <div class="ace-rc-scope-panel-body">
+                        <p class="description">These icons show who each caching feature applies to. Guest traffic can use persistent page/object/transient cache. Logged-in, admin, AJAX, REST, and WooCommerce session requests use runtime-only behavior for those layers.</p>
+                        <div class="ace-rc-scope-overview">
+                            <span class="ace-rc-scope-overview-item">
+                                <span class="dashicons dashicons-admin-home ace-rc-scope-inline-icon"></span>
+                                <strong>Guest traffic</strong>
+                            </span>
+                            <span class="ace-rc-scope-overview-item">
+                                <span class="dashicons dashicons-admin-users ace-rc-scope-inline-icon"></span>
+                                <strong>Logged-in/Admin traffic</strong>
+                            </span>
+                            <span class="ace-rc-scope-overview-item">
+                                <span class="dashicons dashicons-yes-alt ace-rc-scope-inline-icon" style="color:#2e7d32;"></span>
+                                <span>Active</span>
+                            </span>
+                            <span class="ace-rc-scope-overview-item">
+                                <span class="dashicons dashicons-warning ace-rc-scope-inline-icon" style="color:#d48a00;"></span>
+                                <span>Limited / partial</span>
+                            </span>
+                            <span class="ace-rc-scope-overview-item">
+                                <span class="dashicons dashicons-no-alt ace-rc-scope-inline-icon" style="color:#c62828;"></span>
+                                <span>Bypassed</span>
+                            </span>
+                        </div>
+                        <div class="ace-rc-scope-explainer">
+                            <div class="ace-rc-scope-explainer-item">
+                                <strong>Page, object, and transient cache</strong>
+                                Guest requests can persist through Redis. Logged-in and admin-side requests are intentionally runtime-only.
+                            </div>
+                            <div class="ace-rc-scope-explainer-item">
+                                <strong>Minification, static assets, and OPcache helpers</strong>
+                                These are broader delivery/runtime features, so they can still apply beyond guest-only cache persistence.
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 
                 <div class="settings-form">
                     <div class="setting-row">
@@ -159,7 +277,7 @@ if (!defined('ABSPATH')) exit;
                                     <span><strong>Enable Full Page Cache</strong></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
-                                    <p class="description" style="margin:0 0 8px 0;">Applies to: guests only. Logged-in/admin/session requests bypass page caching.</p>
+                                    <?php echo ace_rc_scope_traffic_light('green', 'red', 'Full page cache is guest/frontend only.'); ?>
                                     <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
@@ -182,7 +300,7 @@ if (!defined('ABSPATH')) exit;
                                     <span><strong>Enable Object Cache</strong> <span class="description">(transients, blocks)</span></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
-                                    <p class="description" style="margin:0 0 8px 0;">Applies to: guests only for Redis persistence. Logged-in/admin/session requests use runtime-only cache behavior for this layer.</p>
+                                    <?php echo ace_rc_scope_traffic_light('green', 'amber', 'Logged-in/admin requests still use per-request runtime cache, but not Redis persistence.'); ?>
                                     <label for="ttl_object" style="width:140px; display:inline-block;">Object Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
@@ -200,9 +318,8 @@ if (!defined('ABSPATH')) exit;
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_transient_cache]" id="enable_transient_cache" value="1" <?php checked(!empty($settings['enable_transient_cache'])); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Persist WordPress transients (including site transients) in Redis. Respects your transient exclusions.<br/>
-                            Applies to: guests only for persistent Redis storage. Logged-in/admin/session requests bypass transient persistence and run runtime-only for this layer.<br/>
-                            When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Transient persistence is only for guest/frontend traffic.'); ?>
+                            <p class="description">Persist WordPress transients (including site transients) in Redis. Respects your transient exclusions. When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
                             <div id="ace-rc-transient-tips" class="ace-rc-tips" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                 <!-- Dynamic health tips injected here -->
                             </div>
@@ -228,7 +345,8 @@ if (!defined('ABSPATH')) exit;
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_minification]" id="enable_minification" value="1" <?php checked($settings['enable_minification'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Enable HTML, CSS, and JavaScript minification. Applies to: both guests and logged-in users where this plugin processes the response.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'green'); ?>
+                            <p class="description">Enable HTML, CSS, and JavaScript minification where this plugin processes the response.</p>
                         </div>
                     </div>
 
@@ -241,7 +359,8 @@ if (!defined('ABSPATH')) exit;
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_compression]" id="enable_compression" value="1" <?php checked($settings['enable_compression'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Compress cached content to reduce size and bandwidth. Applies to: mainly guest cached responses; not a logged-in object/transient cache feature.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'amber', 'Compression mainly affects cached guest responses and any shared output processing.'); ?>
+                            <p class="description">Compress cached content to reduce size and bandwidth.</p>
                             <?php
                                 $brotli_available = function_exists('brotli_compress');
                                 $gzip_available = function_exists('gzencode') || function_exists('gzcompress');
@@ -302,7 +421,8 @@ php -m | grep -i zlib</pre>
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_browser_cache_headers]" id="enable_browser_cache_headers" value="1" <?php checked($settings['enable_browser_cache_headers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse. Applies to: guest page-cache responses.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'This only applies on guest page-cache hits.'); ?>
+                            <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse.</p>
                             <div style="margin-top:8px;">
                                 <label for="browser_cache_max_age" style="width:140px; display:inline-block;">Max-Age</label>
                                 <input type="number" name="ace_redis_cache_settings[browser_cache_max_age]" id="browser_cache_max_age" value="<?php echo esc_attr($settings['browser_cache_max_age'] ?? ($settings['ttl_page'] ?? 3600)); ?>" min="60" max="604800" class="small-text" /> seconds
@@ -323,7 +443,8 @@ php -m | grep -i zlib</pre>
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs. Applies to: both guests and logged-in users.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'green'); ?>
+                            <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs.</p>
                             <div style="margin-top:8px;">
                                 <label for="static_asset_cache_ttl" style="width:140px; display:inline-block;">Static TTL</label>
                                 <input type="number" name="ace_redis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
@@ -461,7 +582,8 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_dynamic_microcache]" id="enable_dynamic_microcache" value="1" <?php checked($settings['enable_dynamic_microcache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic. Applies to: guest page-cache flows.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Dynamic microcache only applies inside guest page-cache flows.'); ?>
+                            <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic.</p>
                             <div style="margin-top:8px;">
                                 <label for="dynamic_microcache_ttl" style="width:140px; display:inline-block;">Microcache TTL</label>
                                 <input type="number" name="ace_redis_cache_settings[dynamic_microcache_ttl]" id="dynamic_microcache_ttl" value="<?php echo esc_attr($settings['dynamic_microcache_ttl'] ?? 10); ?>" min="1" max="60" class="small-text" /> seconds
@@ -477,7 +599,8 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_opcache_helpers]" id="enable_opcache_helpers" value="1" <?php checked($settings['enable_opcache_helpers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <p class="description">Expose buttons to reset and (lightly) prime PHP OPcache for hot files after deploy/settings changes. Applies to: server-wide PHP execution for both guests and logged-in users.</p>
+                            <?php echo ace_rc_scope_traffic_light('green', 'green', 'These helpers act on server-level PHP OPcache, not per-user page/object cache state.'); ?>
+                            <p class="description">Expose buttons to reset and lightly prime PHP OPcache for hot files after deploy or settings changes.</p>
                         </div>
                     </div>
                 </div>
@@ -834,6 +957,150 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
         refreshDropinStatus();
         $('#enable_page_cache, #enable_transient_cache').on('change', function(){
             setTimeout(refreshDropinStatus, 400);
+        });
+    });
+})(window.jQuery);
+</script>
+
+<script>
+(function(){
+    var panel = document.getElementById('ace-rc-scope-panel');
+    var btn = document.getElementById('ace-rc-scope-panel-toggle-btn');
+    if (!panel || !btn) return;
+
+    var key = 'ace_rc_scope_panel_collapsed';
+    var textEl = btn.querySelector('.ace-rc-scope-panel-toggle-text');
+    var iconEl = btn.querySelector('.dashicons');
+
+    function applyState(collapsed) {
+        panel.classList.toggle('is-collapsed', collapsed);
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        if (textEl) textEl.textContent = collapsed ? 'Show guide' : 'Hide guide';
+        if (iconEl) {
+            iconEl.classList.remove('dashicons-visibility', 'dashicons-hidden');
+            iconEl.classList.add(collapsed ? 'dashicons-hidden' : 'dashicons-visibility');
+        }
+    }
+
+    var collapsed = false;
+    try {
+        collapsed = window.localStorage.getItem(key) === '1';
+    } catch (e) {}
+    applyState(collapsed);
+
+    btn.addEventListener('click', function(){
+        collapsed = !panel.classList.contains('is-collapsed');
+        applyState(collapsed);
+        try {
+            window.localStorage.setItem(key, collapsed ? '1' : '0');
+        } catch (e) {}
+    });
+})();
+</script>
+
+<script>
+(function($){
+    if (!$ || typeof ace_redis_admin === 'undefined') return;
+
+    function setTransientBadge(label, state) {
+        var $badge = $('#ace-rc-transient-status');
+        if (!$badge.length) return;
+        var colors = {
+            ok: { bg: '#46b450', fg: '#fff' },
+            warn: { bg: '#dba617', fg: '#1d2327' },
+            error: { bg: '#d63638', fg: '#fff' },
+            pending: { bg: '#888', fg: '#fff' }
+        };
+        var c = colors[state] || colors.pending;
+        $badge.text(label).css({ background: c.bg, color: c.fg });
+    }
+
+    function humanApproxBytes(bytes) {
+        if (!bytes) return '0B';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = 0;
+        var value = bytes;
+        while (value >= 1024 && i < units.length - 1) {
+            value /= 1024;
+            i++;
+        }
+        return (value >= 10 ? Math.round(value) : value.toFixed(1)) + units[i];
+    }
+
+    function renderTransientHealth(data) {
+        var $tips = $('#ace-rc-transient-tips');
+        if (!$('#enable_transient_cache').is(':checked')) {
+            setTransientBadge('Off', 'pending');
+            if ($tips.length) $tips.html('<em>Transient cache disabled.</em>');
+            return;
+        }
+
+        var mode = data && data.request_mode ? data.request_mode : '';
+        var badge = { label: 'OK', state: 'ok' };
+
+        if (!data || !data.using_dropin || mode === 'missing_dropin') {
+            badge = { label: 'Missing', state: 'warn' };
+        } else if (mode === 'runtime_only') {
+            badge = { label: 'Guest only', state: 'warn' };
+        } else if (mode === 'fail_open' || mode === 'forced_bypass') {
+            badge = { label: 'Bypassed', state: 'warn' };
+        } else if (!data.dropin_connected || mode === 'disconnected') {
+            badge = { label: 'Down', state: 'error' };
+        }
+
+        setTransientBadge(badge.label, badge.state);
+
+        if (!$tips.length || !data) return;
+
+        var parts = [];
+        if (!data.using_dropin || mode === 'missing_dropin') {
+            parts.push('<strong>Drop-in:</strong> <span style="color:#c00;">missing</span>');
+        } else if (mode === 'runtime_only') {
+            parts.push('<strong>Drop-in:</strong> <span style="color:#dba617;">installed (guest active)</span>');
+            parts.push('<span style="color:#dba617;">runtime-only on this admin request</span>');
+        } else if (!data.dropin_connected || mode === 'disconnected') {
+            parts.push('<strong>Drop-in:</strong> <span style="color:#c00;">not connected</span>');
+        } else if (data.active) {
+            parts.push('<strong>Drop-in:</strong> <span style="color:green;">connected</span>');
+        } else {
+            parts.push('<strong>Drop-in:</strong> <span style="color:#dba617;">connected (bypassed)</span>');
+        }
+
+        parts.push('Autoload ' + humanApproxBytes(data.autoload_size));
+        if (data.slow_ops) parts.push(data.slow_ops + ' slow ops');
+        if (data.error && mode !== 'runtime_only') parts.push('Error: <code>' + $('<div>').text(data.error).html() + '</code>');
+
+        var html = parts.join(' | ');
+        if (Array.isArray(data.tips) && data.tips.length) {
+            html += '<ul style="margin:6px 0 0 18px; list-style:disc;">' + data.tips.map(function(tip){
+                return '<li>' + $('<div>').text(tip).html() + '</li>';
+            }).join('') + '</ul>';
+        }
+        $tips.html(html).data('populated', true);
+    }
+
+    function refreshTransientHealthOverride() {
+        $.ajax({
+            url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/health',
+            type: 'GET',
+            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+        }).done(function(resp){
+            if (resp && resp.success && resp.data) {
+                renderTransientHealth(resp.data);
+            }
+        });
+    }
+
+    $(function(){
+        setTimeout(refreshTransientHealthOverride, 900);
+        $(document).on('change', '#enable_transient_cache, #enable_object_cache', function(){
+            setTimeout(refreshTransientHealthOverride, 500);
+        });
+        $(document).ajaxComplete(function(_event, xhr, settings){
+            var url = settings && settings.url ? settings.url : '';
+            if (url.indexOf('/ace-redis-cache/v1/settings') !== -1 || url.indexOf('/ace-redis-cache/v1/health') !== -1) {
+                setTimeout(refreshTransientHealthOverride, 500);
+            }
         });
     });
 })(window.jQuery);

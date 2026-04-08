@@ -212,8 +212,10 @@ import SaveBar from './components/SaveBar.js';
                 }
                 const d = resp.data;
                 let state = 'ok'; let label = 'OK';
-                if (!d.using_dropin) { state='warn'; label='Missing'; }
-                else if (!d.dropin_connected) { state='error'; label='Down'; }
+                if (!d.using_dropin || d.request_mode === 'missing_dropin') { state='warn'; label='Missing'; }
+                else if (d.request_mode === 'runtime_only') { state='warn'; label='Guest only'; }
+                else if (d.request_mode === 'fail_open' || d.request_mode === 'forced_bypass') { state='warn'; label='Bypassed'; }
+                else if (!d.dropin_connected || d.request_mode === 'disconnected') { state='error'; label='Down'; }
                 else if (d.bypass) { state='warn'; label='Bypassed'; }
                 // Grace period: if recently enabled and not yet fully connected treat as initializing
                 const now = Date.now();
@@ -239,6 +241,7 @@ import SaveBar from './components/SaveBar.js';
                     const parts = [];
                     let dropinText;
                     if (!d.using_dropin) dropinText = '<span style="color:#c00;">missing</span>';
+                    else if (d.request_mode === 'runtime_only') dropinText = '<span style="color:#dba617;">installed (guest active)</span>';
                     else if (!d.dropin_connected) dropinText = '<span style="color:#c00;">not connected</span>';
                     else if (d.active) dropinText = '<span style="color:green;">connected</span>';
                     else dropinText = '<span style="color:#dba617;">connected (bypassed)</span>';
@@ -249,7 +252,7 @@ import SaveBar from './components/SaveBar.js';
                         if (br === 'editor_admin') label = 'bypass (admin/editor)';
                         else if (br === 'fail_open') label = 'bypass (fail-open)';
                         else if (br === 'constant') label = 'bypass (constant)';
-                        parts.push('<span style="color:#c00;">'+label+'</span>');
+                        parts.push('<span style="color:' + (br === 'editor_admin' ? '#dba617' : '#c00') + ';">'+label+'</span>');
                     }
                     parts.push('Autoload ' + this.humanApproxBytes(d.autoload_size));
                     if (d.slow_ops) parts.push(d.slow_ops + ' slow ops');

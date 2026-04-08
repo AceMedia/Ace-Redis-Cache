@@ -558,12 +558,24 @@ class API_Handler {
             elseif ($runtime_bypass && !$dropin_connected) { $bypass_reason = 'fail_open'; }
             else { $bypass_reason = 'editor_admin'; }
         }
+        $request_mode = 'active';
+        if (!$using_dropin) {
+            $request_mode = 'missing_dropin';
+        } elseif ($bypass && $bypass_reason === 'editor_admin') {
+            $request_mode = 'runtime_only';
+        } elseif ($bypass && $bypass_reason === 'fail_open') {
+            $request_mode = 'fail_open';
+        } elseif ($bypass && $bypass_reason === 'constant') {
+            $request_mode = 'forced_bypass';
+        } elseif (!$dropin_connected) {
+            $request_mode = 'disconnected';
+        }
         $slow_ops = get_transient('ace_rc_slow_op_count'); $slow_ops = $slow_ops!==false ? (int)$slow_ops : 0;
         $autoload_size = 0; if (isset($wpdb)) { $row = $wpdb->get_row("SELECT SUM(LENGTH(option_value)) AS sz FROM {$wpdb->options} WHERE autoload='yes'"); if ($row && isset($row->sz)) { $autoload_size = (int)$row->sz; } }
         $tips = [];
         if (!$using_dropin) {
             $tips[] = 'Object cache drop-in missing. Enable Transient Cache to deploy or manually copy assets/plugins/Ace-Redis-Cache/assets/dropins/object-cache.php to wp-content/object-cache.php';
-        } elseif (!$dropin_connected) {
+        } elseif ($request_mode === 'disconnected') {
             $tips[] = 'Drop-in present but not physically connected. Check Redis host/port/TLS and credentials.';
         } elseif ($bypass && $bypass_reason === 'fail_open') {
             $tips[] = 'Runtime fail-open bypass: a Redis operation failed and caching is suspended this request.';
@@ -571,7 +583,7 @@ class API_Handler {
             $tips[] = 'ACE_OC_BYPASS constant forces bypass.';
         }
         if ($bypass && $bypass_reason === 'editor_admin') {
-            $tips[] = 'Bypassed for admin/editor/REST safety (guest requests still cached).';
+            $tips[] = 'This admin/logged-in request is intentionally runtime-only. Guest/frontend requests can still use Redis persistence.';
         }
         if ($profiling && $slow_ops>0) { $tips[] = 'Detected ' . $slow_ops . ' slow ops (>=100ms). Consider inspecting heavy queries or raising threshold.'; }
         if ($autoload_size > 50*1024*1024) { $tips[] = 'Autoloaded options exceed 50MB (' . size_format($autoload_size) . '). This can hurt performance.'; }
@@ -591,7 +603,7 @@ class API_Handler {
             );
         }
         // Provide WP_CACHE guidance
-        if (!defined('WP_CACHE') || !WP_CACHE) { $tips[] = 'WP_CACHE is not enabled. Add define(\'WP_CACHE\', true); to wp-config.php for full object cache effectiveness.'; }
+        if ((!defined('WP_CACHE') || !WP_CACHE) && $request_mode !== 'runtime_only') { $tips[] = 'WP_CACHE is not enabled. Add define(\'WP_CACHE\', true); to wp-config.php for full object cache effectiveness.'; }
         // Unique tips only
         $tips = array_values(array_unique($tips));
         return new \WP_REST_Response([
@@ -599,6 +611,7 @@ class API_Handler {
             'data' => [
                 'using_dropin' => $using_dropin,
                 'dropin_connected' => $dropin_connected,
+                'request_mode' => $request_mode,
                 'bypass' => $bypass,
                 'bypass_reason' => $bypass_reason,
                 'runtime_bypass' => $runtime_bypass,

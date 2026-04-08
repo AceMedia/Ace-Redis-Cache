@@ -85,6 +85,29 @@ class WooCommercePerformance {
                     return $children;
                 }
 
+                // Only skip child lookup on true WooCommerce archive/listing contexts.
+                // A variable product shown inside blocks on regular pages still needs children.
+                $is_product_archive = false;
+                if (function_exists('is_shop') && is_shop()) {
+                    $is_product_archive = true;
+                }
+                if (function_exists('is_product_taxonomy') && is_product_taxonomy()) {
+                    $is_product_archive = true;
+                }
+                if (function_exists('is_product_category') && is_product_category()) {
+                    $is_product_archive = true;
+                }
+                if (function_exists('is_product_tag') && is_product_tag()) {
+                    $is_product_archive = true;
+                }
+                if (is_post_type_archive('product')) {
+                    $is_product_archive = true;
+                }
+
+                if (!$is_product_archive) {
+                    return $children;
+                }
+
                 return [];
             }, 20, 3);
         }

@@ -90,26 +90,29 @@ class WooCommercePerformance {
         }
 
         if ($this->setting('wc_skip_composite_sync_on_archives', true)) {
-            add_filter('woocommerce_get_product_from_factory', function ($product) {
-                if (is_singular('product') || is_admin() || wp_doing_ajax()
-                    || wp_doing_cron() || (defined('REST_REQUEST') && REST_REQUEST)) {
-                    return $product;
-                }
-
+            // WC_Product_Composite::is_on_sale() has a built-in fast path:
+            //   if 'cart' === $this->get_object_context() → parent::is_on_sale() (reads _sale_price meta)
+            //   else if contains('priced_individually') → sync() → loads ALL component products (SLOW)
+            // By setting object_context = 'cart' on archive/listing pages, is_on_sale() skips
+            // sync() entirely. This does NOT affect is_purchasable() or price calculation.
+            // The cart class (class-wc-cp-cart.php) also calls set_object_context('cart') for real
+            // cart products, so this is semantically consistent.
+            add_action('woocommerce_product_read', function ($product_id, $product) {
                 if (!class_exists('WC_Product_Composite') || !($product instanceof \WC_Product_Composite)) {
-                    return $product;
+                    return;
                 }
 
-                try {
-                    $ref = new \ReflectionProperty(\WC_Product_Composite::class, 'is_synced');
-                    $ref->setAccessible(true);
-                    $ref->setValue($product, true);
-                } catch (\ReflectionException $e) {
-                    // Reflection unavailable; fall back to plugin default behavior.
+                // Allow full sync on single product pages, admin, ajax, cron, REST, and cart/checkout.
+                if (is_singular('product') || is_cart() || is_checkout()
+                    || is_admin() || wp_doing_ajax() || wp_doing_cron()
+                    || (defined('REST_REQUEST') && REST_REQUEST)) {
+                    return;
                 }
 
-                return $product;
-            }, 10, 1);
+                // Setting context to 'cart' causes is_on_sale() to use the fast parent path.
+                // No reflection needed; set_object_context() is a public method.
+                $product->set_object_context('cart');
+            }, 10, 2);
         }
 
         if ($this->setting('wc_cache_url_exclusions', true)) {
@@ -140,6 +143,21 @@ class WooCommercePerformance {
         if ($this->setting('wc_disable_blocks_animation_translate', true)) {
             add_filter('blocks-animation_sdk_enable_translate', '__return_false');
         }
+
+        // Disable WooCommerce remote logging: it calls get_plugins() on every frontend
+        // page load to check the WC version, scanning all plugin headers via preg_match.
+        add_filter('pre_option_woocommerce_feature_remote_logging_enabled', function () {
+            return 'no';
+        });
+
+
+        // Microsoft Clarity makes a live wp_remote_get() to api.wordpress.org on every
+        // admin_init (including admin-ajax.php) to check for plugin updates. Remove it.
+        add_action('plugins_loaded', function () {
+            if (function_exists('check_if_installed_plugin_version_is_latest')) {
+                remove_action('admin_init', 'check_if_installed_plugin_version_is_latest');
+            }
+        }, 20);
 
         add_filter('ace_redis_cache_transient_exclusions', function ($exclusions) {
             $exclusions[] = 'customtaxorder_get_settings';

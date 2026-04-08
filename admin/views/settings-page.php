@@ -181,6 +181,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
         .ace-redis-sidebar .nav-tab[href="#connection"]::before { content: "\f319"; }
         .ace-redis-sidebar .nav-tab[href="#caching"]::before { content: "\f226"; }
         .ace-redis-sidebar .nav-tab[href="#exclusions"]::before { content: "\f536"; }
+        .ace-redis-sidebar .nav-tab[href="#woocommerce"]::before { content: "\f174"; }
         .ace-redis-sidebar .nav-tab[href="#diagnostics"]::before { content: "\f239"; }
         .ace-redis-sidebar .nav-tab.nav-tab-active { font-weight: 900; }
         .ace-redis-sidebar .nav-tab.nav-tab-active::before { opacity: 1; }
@@ -269,6 +270,9 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                 <a href="#connection" class="nav-tab nav-tab-active"><span class="ace-rc-tab-icon"></span><span>Connection</span></a>
                 <a href="#caching" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>Caching</span></a>
                 <a href="#exclusions" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>Exclusions</span></a>
+                <?php if (class_exists('WooCommerce')) : ?>
+                <a href="#woocommerce" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>WooCommerce</span></a>
+                <?php endif; ?>
                 <a href="#diagnostics" class="nav-tab"><span class="ace-rc-tab-icon"></span><span>Diagnostics</span></a>
             </nav>
             
@@ -861,6 +865,140 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                     </ul>
                 </div>
             </div>
+
+            <?php if (class_exists('WooCommerce')) : ?>
+            <div id="woocommerce" class="tab-content">
+                <h2>WooCommerce Performance</h2>
+                <p class="description">
+                    These settings apply WooCommerce-specific performance patches. They only appear because WooCommerce is active on this site.
+                    They complement the main caching toggles above; changes take effect immediately and do not require a deployment.
+                </p>
+
+                <div class="settings-form">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_skip_cart_cookies">Cart Cookie on Product Pages</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_skip_cart_cookies]" id="wc_skip_cart_cookies" value="1" <?php checked(1, $settings['wc_skip_cart_cookies'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'This only affects guest/cacheable storefront requests.'); ?>
+                            <p class="description">Suppress the WooCommerce cart cookie on product, shop, and category pages so full-page cache can treat guests as shared traffic.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_disable_persistent_cart">Persistent Cart</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_disable_persistent_cart]" id="wc_disable_persistent_cart" value="1" <?php checked(1, $settings['wc_disable_persistent_cart'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('red', 'green', 'This mainly affects logged-in customers with persistent carts.'); ?>
+                            <p class="description">Disable WooCommerce persistent cart writes. Session carts still work; they just do not survive a browser restart.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_variation_threshold">Variation AJAX Threshold</label>
+                        </div>
+                        <div class="setting-field">
+                            <input type="number" min="1" max="100" step="1" name="ace_redis_cache_settings[wc_variation_threshold]" id="wc_variation_threshold" value="<?php echo esc_attr($settings['wc_variation_threshold'] ?? 15); ?>" class="small-text" />
+                            <?php echo ace_rc_scope_traffic_light('green', 'amber', 'This reduces large variation payloads on storefront product pages.'); ?>
+                            <p class="description">WooCommerce defaults to 30. Lower values push large variation sets onto AJAX sooner and keep product pages lighter. Recommended: 15.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_action_scheduler_time_limit">Action Scheduler Limits</label>
+                        </div>
+                        <div class="setting-field">
+                            <label for="wc_action_scheduler_time_limit" style="display:inline-block; min-width:150px;">Time limit (seconds)</label>
+                            <input type="number" min="5" max="120" step="1" name="ace_redis_cache_settings[wc_action_scheduler_time_limit]" id="wc_action_scheduler_time_limit" value="<?php echo esc_attr($settings['wc_action_scheduler_time_limit'] ?? 15); ?>" class="small-text" />
+                            <label for="wc_action_scheduler_batch_size" style="display:inline-block; min-width:110px; margin-left:16px;">Batch size</label>
+                            <input type="number" min="1" max="100" step="1" name="ace_redis_cache_settings[wc_action_scheduler_batch_size]" id="wc_action_scheduler_batch_size" value="<?php echo esc_attr($settings['wc_action_scheduler_batch_size'] ?? 10); ?>" class="small-text" />
+                            <p class="description">Caps Action Scheduler batches to reduce long-running cron requests and lock contention from WooCommerce background jobs.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_skip_children_on_archives">Skip Variation Children on Archives</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_skip_children_on_archives]" id="wc_skip_children_on_archives" value="1" <?php checked(1, $settings['wc_skip_children_on_archives'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Archive and home pages benefit most from this.'); ?>
+                            <p class="description">Return empty variation-child lists on non-product pages so WooCommerce blocks and templates do not expand every variation just to render a product grid.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_skip_composite_sync_on_archives">Skip Composite Sync on Archives</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_skip_composite_sync_on_archives]" id="wc_skip_composite_sync_on_archives" value="1" <?php checked(1, $settings['wc_skip_composite_sync_on_archives'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Single product pages are left untouched.'); ?>
+                            <p class="description">Marks composite products as pre-synced on archive/shop pages so the Composite Products plugin does not recalculate and write prices for every grid item.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_cache_url_exclusions">WooCommerce URL Exclusions</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_cache_url_exclusions]" id="wc_cache_url_exclusions" value="1" <?php checked(1, $settings['wc_cache_url_exclusions'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('green', 'red'); ?>
+                            <p class="description">Automatically exclude standard WooCommerce endpoints from page caching: <code>/cart</code>, <code>/checkout</code>, <code>/my-account</code>, <code>?wc-ajax=</code>, and <code>?add-to-cart=</code>.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_gla_disable_notification_pill">Google Listings &amp; Ads Admin Pill</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_gla_disable_notification_pill]" id="wc_gla_disable_notification_pill" value="1" <?php checked(1, $settings['wc_gla_disable_notification_pill'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('red', 'green', 'This only affects wp-admin requests.'); ?>
+                            <p class="description">Disable the Google for WooCommerce admin notification badge that triggers synchronous Google Ads lookups on routine admin page loads.</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_disable_blocks_animation_translate">Blocks Animation Translation Prompt</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_disable_blocks_animation_translate]" id="wc_disable_blocks_animation_translate" value="1" <?php checked(1, $settings['wc_disable_blocks_animation_translate'] ?? 1); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('green', 'green', 'This removes a third-party translate.wordpress.org check on every page type.'); ?>
+                            <p class="description">Disable the ThemeIsle SDK translation prompt in <code>blocks-animation</code> so it stops making synchronous translation API checks on page loads.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
             
             <!-- Diagnostics Tab -->
             <div id="diagnostics" class="tab-content">

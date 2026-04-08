@@ -145,6 +145,17 @@ class AceRedisCache {
             'asset_proxy_cache_ttl' => 604800,
             'manage_static_cache_via_htaccess' => 0,
             'prefer_existing_static_cache_headers' => 1,
+            // WooCommerce performance module
+            'wc_skip_cart_cookies' => 1,
+            'wc_disable_persistent_cart' => 1,
+            'wc_variation_threshold' => 15,
+            'wc_action_scheduler_time_limit' => 15,
+            'wc_action_scheduler_batch_size' => 10,
+            'wc_skip_children_on_archives' => 1,
+            'wc_skip_composite_sync_on_archives' => 1,
+            'wc_cache_url_exclusions' => 1,
+            'wc_gla_disable_notification_pill' => 1,
+            'wc_disable_blocks_animation_translate' => 1,
         ]);
         // If settings were stored as a JSON string (e.g., via wp-cli), decode safely
         if (is_string($loaded)) {
@@ -203,6 +214,17 @@ class AceRedisCache {
             'asset_proxy_cache_ttl' => 604800,
             'manage_static_cache_via_htaccess' => 0,
             'prefer_existing_static_cache_headers' => 1,
+            // WooCommerce performance module
+            'wc_skip_cart_cookies' => 1,
+            'wc_disable_persistent_cart' => 1,
+            'wc_variation_threshold' => 15,
+            'wc_action_scheduler_time_limit' => 15,
+            'wc_action_scheduler_batch_size' => 10,
+            'wc_skip_children_on_archives' => 1,
+            'wc_skip_composite_sync_on_archives' => 1,
+            'wc_cache_url_exclusions' => 1,
+            'wc_gla_disable_notification_pill' => 1,
+            'wc_disable_blocks_animation_translate' => 1,
         ];
         $this->settings = array_merge($defaults, $loaded);
 
@@ -308,6 +330,13 @@ class AceRedisCache {
 
         // Register transient filters for all users when enabled and cache manager exists
         $this->register_transient_filters();
+
+        // Load WooCommerce performance module only when WooCommerce is active.
+        add_action('plugins_loaded', function () {
+            if (class_exists('WooCommerce')) {
+                new \AceMedia\RedisCache\WooCommercePerformance($this->settings);
+            }
+        }, 20);
     }
     
     /**

@@ -608,6 +608,17 @@ class AdminInterface {
         $sanitized['include_rendered_block_hash'] = !empty($input['include_rendered_block_hash']) ? 1 : 0;
         $sanitized['manage_static_cache_via_htaccess'] = !empty($input['manage_static_cache_via_htaccess']) ? 1 : 0;
         $sanitized['prefer_existing_static_cache_headers'] = !empty($input['prefer_existing_static_cache_headers']) ? 1 : 0;
+        // WooCommerce performance settings
+        $sanitized['wc_skip_cart_cookies'] = !empty($input['wc_skip_cart_cookies']) ? 1 : 0;
+        $sanitized['wc_disable_persistent_cart'] = !empty($input['wc_disable_persistent_cart']) ? 1 : 0;
+        $sanitized['wc_skip_children_on_archives'] = !empty($input['wc_skip_children_on_archives']) ? 1 : 0;
+        $sanitized['wc_skip_composite_sync_on_archives'] = !empty($input['wc_skip_composite_sync_on_archives']) ? 1 : 0;
+        $sanitized['wc_cache_url_exclusions'] = !empty($input['wc_cache_url_exclusions']) ? 1 : 0;
+        $sanitized['wc_gla_disable_notification_pill'] = !empty($input['wc_gla_disable_notification_pill']) ? 1 : 0;
+        $sanitized['wc_disable_blocks_animation_translate'] = !empty($input['wc_disable_blocks_animation_translate']) ? 1 : 0;
+        $sanitized['wc_variation_threshold'] = max(1, min(100, (int) ($input['wc_variation_threshold'] ?? 15)));
+        $sanitized['wc_action_scheduler_time_limit'] = max(5, min(120, (int) ($input['wc_action_scheduler_time_limit'] ?? 15)));
+        $sanitized['wc_action_scheduler_batch_size'] = max(1, min(100, (int) ($input['wc_action_scheduler_batch_size'] ?? 10)));
         
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log('Ace-Redis-Cache: admin sanitize outgoing enable_transient_cache=' . ($sanitized['enable_transient_cache'] ?? 'NA') . ' dropin=' . ($sanitized['enable_object_cache_dropin'] ?? 'NA'));

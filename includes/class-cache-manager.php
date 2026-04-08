@@ -113,8 +113,16 @@ class CacheManager {
                 }
             }
         }
-        
-        return $exclusions;
+
+        /**
+         * Filter transient exclusion patterns before they are applied.
+         *
+         * @param array $exclusions Current transient exclusion patterns.
+         * @param array $settings   Plugin settings.
+         */
+        $exclusions = apply_filters('ace_redis_cache_transient_exclusions', $exclusions, $this->settings);
+
+        return array_values(array_unique(array_filter((array) $exclusions)));
     }
     
     /**

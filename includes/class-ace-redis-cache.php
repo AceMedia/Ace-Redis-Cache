@@ -376,6 +376,7 @@ class AceRedisCache {
         }
         // Deferred invalidation runner
         add_action('ace_rc_run_deferred_invalidation', [$this, 'run_deferred_invalidation']);
+        add_action('ace_rc_run_sitemap_prime_batch', [$this, 'run_sitemap_prime_batch']);
         add_action('init', [$this, 'maybe_serve_asset_proxy_request'], 0);
         // Static asset headers (apply for all requests including admin media loads)
         if (!empty($this->settings['enable_static_asset_cache'])) {
@@ -957,23 +958,11 @@ class AceRedisCache {
             // render for a given path so late-emitted styles / block support attributes are stabilized by the
             // second view. This prevents capturing an incompletely styled DOM (observed when transient caching off).
             $warm_gate_enabled = apply_filters('ace_rc_enable_first_pass_skip', empty($this->settings['enable_transient_cache']), $cache_key, $this->settings);
-            $path = $_SERVER['REQUEST_URI'] ?? '/';
-            $path_id = md5(parse_url($path, PHP_URL_PATH) ?: '/');
-            $warmed_option_key = 'ace_rc_warmed_pages';
-            $warmed = ($warm_gate_enabled) ? get_option($warmed_option_key, []) : [];
             $is_first_pass = false;
-            if ($warm_gate_enabled && is_array($warmed)) {
-                if (empty($warmed[$path_id])) {
-                    // Mark warmed (so subsequent request can store) but skip storing this pass.
-                    $is_first_pass = true;
-                    $warmed[$path_id] = time();
-                    // Prune to last 300 entries to avoid unbounded growth
-                    if (count($warmed) > 300) {
-                        asort($warmed); // oldest first
-                        $warmed = array_slice($warmed, -300, null, true);
-                    }
-                    update_option($warmed_option_key, $warmed, false);
-                }
+            if ($warm_gate_enabled) {
+                $path = $_SERVER['REQUEST_URI'] ?? '/';
+                // Mark warmed (so subsequent request can store) but skip storing this pass.
+                $is_first_pass = $this->mark_path_requires_first_pass($path);
             }
             // If this request is for a single post that has a pending first-pass marker (post just updated), treat like first pass.
             if (!$is_first_pass && is_singular() && ($post_obj = get_post()) && $this->has_post_first_pass_flag($post_obj->ID)) {
@@ -984,14 +973,14 @@ class AceRedisCache {
             }
             // Global warm window skip: during short window after any post update avoid storing if style assets incomplete.
             if (!$is_first_pass) {
-                $global_until = (int) get_option('ace_rc_global_asset_warm_until', 0);
+                $global_until = $this->get_global_asset_warm_until();
                 if ($global_until && time() < $global_until) {
                     if (!$this->is_style_asset_complete($content)) {
                         $is_first_pass = true;
                         if (defined('WP_DEBUG') && WP_DEBUG) { $content .= "\n<!-- AceRedisCache: global_asset_warm_skip until={$global_until} -->"; }
                     } else {
                         // Assets look complete; end warm window early
-                        delete_option('ace_rc_global_asset_warm_until');
+                        $this->clear_global_asset_warm_until();
                     }
                 }
             }
@@ -1932,6 +1921,7 @@ class AceRedisCache {
         $force_immediate = apply_filters('ace_rc_force_immediate_invalidation_on_critical_change', ($critical_publish_transition || $slug_changed), $post_ID, $post_after, $post_before, $this->settings);
         if ($this->should_defer_post_invalidation() && !$force_immediate) {
             $this->enqueue_deferred_post($post_ID, ['page'=>true,'archives'=>true,'transients'=>true,'blocks_full'=>true]);
+            $this->enqueue_sitemap_prime_for_post($post_ID, $post_after);
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 error_log('Ace-Redis-Cache: deferred post update invalidation queued post_id=' . $post_ID . ' was_published=' . ($was_published?'1':'0') . ' is_published=' . ($is_published?'1':'0') . ' slug_changed=' . ($slug_changed?'1':'0'));
             }
@@ -1955,9 +1945,10 @@ class AceRedisCache {
         // Set global warm window so other pages also avoid premature capture if shared aggregated styles regenerate.
         $warm_window = (int) apply_filters('ace_rc_global_asset_warm_window', 30, $post_ID, $post_after, $post_before, $this->settings);
         if ($warm_window > 0) {
-            update_option('ace_rc_global_asset_warm_until', time() + $warm_window, false);
+            $this->set_global_asset_warm_until($warm_window);
             if (defined('WP_DEBUG') && WP_DEBUG) { error_log('Ace-Redis-Cache: global asset warm window +' . $warm_window . 's'); }
         }
+        $this->enqueue_sitemap_prime_for_post($post_ID, $post_after);
     }
 
     /**
@@ -2073,37 +2064,67 @@ class AceRedisCache {
     }
 
     /* ============================= Post First-Pass Warm Markers ============================= */
-    private $first_pass_marker_option = 'ace_rc_pending_first_pass_posts';
+    private $path_first_pass_marker_prefix = 'ace_rc:warm:path:';
+    private $first_pass_marker_prefix = 'ace_rc:warm:post:';
+    private $global_asset_warm_key = 'ace_rc:warm:global_assets';
 
     private function mark_post_requires_first_pass($post_id) {
-        $post_id = (int)$post_id; if ($post_id <= 0) return;
-        $list = get_option($this->first_pass_marker_option, []);
-        if (!is_array($list)) { $list = []; }
-        $list[$post_id] = time();
-        // prune if grows too large
-        if (count($list) > 200) {
-            asort($list); // oldest first
-            $list = array_slice($list, -150, null, true);
-        }
-        update_option($this->first_pass_marker_option, $list, false);
+        $post_id = (int)$post_id; if ($post_id <= 0 || !$this->cache_manager) return;
+        $ttl = max(60, (int) apply_filters('ace_rc_post_first_pass_marker_ttl', 600, $post_id, $this->settings));
+        $this->cache_manager->set($this->get_post_first_pass_marker_key($post_id), (string) time(), $ttl);
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log('Ace-Redis-Cache: mark post first-pass skip id=' . $post_id);
         }
     }
 
     private function consume_post_first_pass_flag($post_id) {
-        $post_id = (int)$post_id; if ($post_id <= 0) return false;
-        $list = get_option($this->first_pass_marker_option, []);
-        if (!is_array($list) || empty($list[$post_id])) return false;
-        unset($list[$post_id]);
-        update_option($this->first_pass_marker_option, $list, false);
+        $post_id = (int)$post_id; if ($post_id <= 0 || !$this->cache_manager) return false;
+        $key = $this->get_post_first_pass_marker_key($post_id);
+        if (!$this->cache_manager->exists($key)) return false;
+        $this->cache_manager->delete($key);
         return true;
     }
 
     private function has_post_first_pass_flag($post_id) {
-        $post_id = (int)$post_id; if ($post_id <= 0) return false;
-        $list = get_option($this->first_pass_marker_option, []);
-        return is_array($list) && isset($list[$post_id]);
+        $post_id = (int)$post_id; if ($post_id <= 0 || !$this->cache_manager) return false;
+        return $this->cache_manager->exists($this->get_post_first_pass_marker_key($post_id));
+    }
+
+    private function mark_path_requires_first_pass($path) {
+        if (!$this->cache_manager) return false;
+        $ttl = $this->get_path_first_pass_marker_ttl();
+        return $this->cache_manager->add($this->get_path_first_pass_marker_key($path), (string) time(), $ttl);
+    }
+
+    private function get_path_first_pass_marker_ttl() {
+        $default_ttl = (int) ($this->settings['ttl_page'] ?? ($this->settings['ttl'] ?? 3600));
+        return max(60, (int) apply_filters('ace_rc_path_first_pass_marker_ttl', $default_ttl, $this->settings));
+    }
+
+    private function get_path_first_pass_marker_key($path) {
+        $normalized_path = parse_url((string) $path, PHP_URL_PATH) ?: '/';
+        return $this->path_first_pass_marker_prefix . md5($normalized_path);
+    }
+
+    private function get_post_first_pass_marker_key($post_id) {
+        return $this->first_pass_marker_prefix . (int) $post_id;
+    }
+
+    private function get_global_asset_warm_until() {
+        if (!$this->cache_manager) return 0;
+        $until = $this->cache_manager->get($this->global_asset_warm_key);
+        return is_numeric($until) ? (int) $until : 0;
+    }
+
+    private function set_global_asset_warm_until($ttl) {
+        $ttl = (int) $ttl;
+        if ($ttl <= 0 || !$this->cache_manager) return;
+        $this->cache_manager->set($this->global_asset_warm_key, (string) (time() + $ttl), $ttl);
+    }
+
+    private function clear_global_asset_warm_until() {
+        if (!$this->cache_manager) return;
+        $this->cache_manager->delete($this->global_asset_warm_key);
     }
 
     /**
@@ -2174,38 +2195,15 @@ class AceRedisCache {
         if (!is_admin()) return; // only run from admin-originating saves
         // Set short no-cache window (60s) to avoid storing incomplete styles
         set_transient('ace_rc_no_cache_window', 1, 60);
-        // Defer priming until shutdown to ensure core finished updating options
-        add_action('shutdown', [$this, 'prime_critical_options_once']);
+        // Sitemaps are intentionally deferred to cron to keep editor requests light.
+        $this->enqueue_sitemap_prime_for_post($post_id, $post);
     }
 
     public function prime_critical_options_once() {
         static $ran = false; if ($ran) return; $ran = true;
-        // Flush page cache broadly only if warm window heuristics not already active
-        if (method_exists($this->cache_manager, 'scan_keys')) {
-            $keys = $this->cache_manager->scan_keys('page_cache:*');
-            if (!empty($keys)) { $this->cache_manager->delete_keys_chunked($keys, 1000); }
-            $min = $this->cache_manager->scan_keys('page_cache_min:*');
-            if (!empty($min)) { $this->cache_manager->delete_keys_chunked($min, 1000); }
-        }
-        // Load fresh coherent values
-        $rewrite_rules = get_option('rewrite_rules');
-        $permalink_structure = get_option('permalink_structure');
-        $alloptions = function_exists('wp_load_alloptions') ? wp_load_alloptions() : [];
-        // Push into object cache forcibly (prime_set is custom method on our drop-in)
-        if (function_exists('wp_cache_set')) {
-            global $wp_object_cache;
-            if ($wp_object_cache && method_exists($wp_object_cache, 'prime_set')) {
-                $wp_object_cache->prime_set('rewrite_rules', $rewrite_rules, 'options');
-                $wp_object_cache->prime_set('permalink_structure', $permalink_structure, 'options');
-                $wp_object_cache->prime_set('alloptions', $alloptions, 'options');
-            } else {
-                wp_cache_set('rewrite_rules', $rewrite_rules, 'options');
-                wp_cache_set('permalink_structure', $permalink_structure, 'options');
-                wp_cache_set('alloptions', $alloptions, 'options');
-            }
-        }
+        $this->prime_critical_options_now();
         if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log('AceRedisCache: primed critical options (rewrite_rules len=' . (is_string($rewrite_rules)? strlen($rewrite_rules):0) . ')');
+            error_log('AceRedisCache: primed critical options');
         }
     }
 
@@ -2213,18 +2211,48 @@ class AceRedisCache {
     private $deferred_queue_option = 'ace_rc_deferred_invalidation_queue';
     private $deferred_processing = false;
     private $deferred_shutdown_hooked = false;
+    private $sitemap_prime_queue_option = 'ace_rc_sitemap_prime_queue';
+    private $deferred_queue_ttl = 3600;
+    private $sitemap_prime_queue_ttl = 21600;
 
     private function should_defer_post_invalidation() {
         return apply_filters('ace_rc_defer_post_invalidation', true, $this->settings) && !$this->deferred_processing;
     }
 
+    private function get_runtime_queue($key, $fallback_option) {
+        if ($this->cache_manager) {
+            $queue = $this->cache_manager->get($key);
+            return is_array($queue) ? $queue : [];
+        }
+
+        $queue = get_option($fallback_option, []);
+        return is_array($queue) ? $queue : [];
+    }
+
+    private function set_runtime_queue($key, $fallback_option, array $queue, $ttl) {
+        if ($this->cache_manager) {
+            $this->cache_manager->set($key, $queue, max(60, (int) $ttl));
+            return;
+        }
+
+        update_option($fallback_option, $queue, false);
+    }
+
+    private function delete_runtime_queue($key, $fallback_option) {
+        if ($this->cache_manager) {
+            $this->cache_manager->delete($key);
+            return;
+        }
+
+        delete_option($fallback_option);
+    }
+
     private function enqueue_deferred_post($post_id, array $ops) {
         $post_id = (int)$post_id; if (!$post_id) return;
-        $queue = get_option($this->deferred_queue_option, []);
-        if (!is_array($queue)) { $queue = []; }
+        $queue = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
         if (empty($queue[$post_id])) { $queue[$post_id] = $ops; }
         else { $queue[$post_id] = array_merge($queue[$post_id], $ops); }
-        update_option($this->deferred_queue_option, $queue, false);
+        $this->set_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option, $queue, $this->deferred_queue_ttl);
         $this->schedule_deferred_runner();
         $this->maybe_hook_shutdown_fallback();
     }
@@ -2240,14 +2268,13 @@ class AceRedisCache {
      */
     private function maybe_hook_shutdown_fallback() {
         if ($this->deferred_shutdown_hooked) return;
-        $cron_disabled = (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON);
         $is_cli = (defined('WP_CLI') && WP_CLI);
-        // If cron disabled OR we're in admin and likely no subsequent hit soon, fallback.
-        if ($cron_disabled || is_admin() || $is_cli) {
+        // Keep editor requests light. Only CLI gets an inline fallback.
+        if ($is_cli) {
             add_action('shutdown', function() {
                 // Only run if queue still present and not already processing (avoid recursion)
                 if ($this->deferred_processing) return;
-                $queue = get_option($this->deferred_queue_option, []);
+                $queue = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
                 if (!empty($queue)) {
                     $this->deferred_processing = true;
                     $this->run_deferred_invalidation();
@@ -2257,18 +2284,116 @@ class AceRedisCache {
         }
     }
 
+    private function enqueue_sitemap_prime_for_post($post_id, $post = null) {
+        $post_id = (int) $post_id;
+        if ($post_id <= 0) return;
+
+        $urls = $this->get_sitemap_prime_urls_for_post($post_id, $post);
+        if (empty($urls)) return;
+
+        $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+
+        $now = time();
+        foreach ($urls as $url) {
+            $queue[$url] = $now;
+        }
+
+        $this->set_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option, $queue, $this->sitemap_prime_queue_ttl);
+        $this->schedule_sitemap_prime_runner();
+    }
+
+    private function get_sitemap_prime_urls_for_post($post_id, $post = null) {
+        $post_id = (int) $post_id;
+        if ($post && (!is_object($post) || empty($post->post_type))) {
+            $post = null;
+        }
+
+        $urls = [
+            home_url('/wp-sitemap.xml'),
+        ];
+
+        if (function_exists('ace_sitemap_powertools_custom_routes')) {
+            $urls[] = home_url('/sitemap.xml');
+        }
+
+        if ($post && !empty($post->post_type)) {
+            $urls[] = home_url('/wp-sitemap-posts-' . $post->post_type . '-1.xml');
+        }
+
+        $urls = apply_filters('ace_rc_sitemap_prime_urls', $urls, $post_id, $post, $this->settings);
+
+        $urls = array_values(array_unique(array_filter(array_map(function($url) {
+            return is_string($url) ? trim($url) : '';
+        }, (array) $urls))));
+
+        return $urls;
+    }
+
+    private function get_sitemap_prime_delay() {
+        return max(60, (int) apply_filters('ace_rc_sitemap_prime_delay', 300, $this->settings));
+    }
+
+    private function get_sitemap_prime_batch_size() {
+        return max(1, (int) apply_filters('ace_rc_sitemap_prime_batch_size', 2, $this->settings));
+    }
+
+    private function schedule_sitemap_prime_runner() {
+        if (!wp_next_scheduled('ace_rc_run_sitemap_prime_batch')) {
+            @wp_schedule_single_event(time() + $this->get_sitemap_prime_delay(), 'ace_rc_run_sitemap_prime_batch');
+        }
+    }
+
+    public function run_sitemap_prime_batch() {
+        $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+        if (empty($queue)) return;
+
+        $batch_size = $this->get_sitemap_prime_batch_size();
+        $urls = array_keys($queue);
+        $batch = array_slice($urls, 0, $batch_size);
+
+        $args = [
+            'timeout' => 5,
+            'redirection' => 2,
+            'user-agent' => 'AceRedisCache-SitemapPrimer/1.0',
+            'headers' => [ 'X-AceRedis-Sitemap-Prime' => '1' ],
+            'cookies' => [],
+            'sslverify' => apply_filters('https_local_ssl_verify', false),
+        ];
+
+        foreach ($batch as $url) {
+            try {
+                $resp = wp_remote_get($url, $args);
+                if (is_wp_error($resp) && defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('AceRedisCache sitemap prime failed: ' . $url . ' error=' . $resp->get_error_message());
+                }
+            } catch (\Throwable $t) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('AceRedisCache sitemap prime exception: ' . $url . ' error=' . $t->getMessage());
+                }
+            }
+            unset($queue[$url]);
+        }
+
+        if (!empty($queue)) {
+            $this->set_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option, $queue, $this->sitemap_prime_queue_ttl);
+            $this->schedule_sitemap_prime_runner();
+        } else {
+            $this->delete_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+        }
+    }
+
     /**
      * Opportunistically process deferred queue early on any request if it lingers (e.g., cron did not fire yet).
      */
     private function maybe_process_lingering_deferred_queue() {
         if ($this->deferred_processing) return;
-        $queue = get_option($this->deferred_queue_option, []);
-        if (empty($queue) || !is_array($queue)) return;
+        $queue = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
+        if (empty($queue)) return;
         // Check age by storing timestamp inside queue pseudo-key __ts
         $ts = isset($queue['__ts']) ? (int)$queue['__ts'] : 0;
         if (!$ts) {
             $queue['__ts'] = time();
-            update_option($this->deferred_queue_option, $queue, false);
+            $this->set_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option, $queue, $this->deferred_queue_ttl);
             return;
         }
         if (time() - $ts > 10) { // more than 10s waiting -> process now
@@ -2277,8 +2402,8 @@ class AceRedisCache {
     }
 
     public function run_deferred_invalidation() {
-        $queue = get_option($this->deferred_queue_option, []);
-        if (empty($queue) || !is_array($queue)) return;
+        $queue = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
+        if (empty($queue)) return;
         // Remove timestamp marker if present
         if (isset($queue['__ts'])) { unset($queue['__ts']); }
         $this->deferred_processing = true;
@@ -2301,7 +2426,7 @@ class AceRedisCache {
                 }
             }
         }
-        delete_option($this->deferred_queue_option);
+        $this->delete_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
         $this->deferred_processing = false;
     }
     

@@ -528,6 +528,32 @@ class CacheManager {
             return $redis->setex($key, $ttl, $store);
         }) ?: false;
     }
+
+    /**
+     * Atomically add a cache value only when the key does not already exist.
+     *
+     * Uses Redis SET with NX + EX semantics so hot request paths can mark work
+     * without a separate existence check or any wp_options fallback.
+     *
+     * @param string $key Cache key
+     * @param mixed $value Value to store
+     * @param int $ttl Time to live in seconds
+     * @return bool True when the key was created, false otherwise
+     */
+    public function add($key, $value, $ttl) {
+        if ($this->should_exclude_cache_key($key)) {
+            return false;
+        }
+
+        $ttl = max(1, (int) $ttl);
+
+        return $this->redis_connection->retry_operation(function($redis) use ($key, $value, $ttl) {
+            $payload = is_string($value) ? $value : serialize($value);
+            $store = $this->maybe_compress($payload, 'object');
+
+            return (bool) $redis->set($key, $store, ['nx', 'ex' => $ttl]);
+        }) ?: false;
+    }
     
     /**
      * Get cache value with exclusion checking

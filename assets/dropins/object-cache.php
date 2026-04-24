@@ -155,6 +155,7 @@ if (!class_exists('WP_Object_Cache')) {
                 (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest')
             );
             $request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+            $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
             $has_wc_session_cookie = false;
             $wc_cookie_prefixes = ['woocommerce_cart_hash', 'woocommerce_items_in_cart', 'wp_woocommerce_session_'];
             foreach ($_COOKIE as $ck => $val) {
@@ -167,6 +168,11 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             $is_wc_cart_endpoint = ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path) === 1);
+            $is_wc_store_api_request = (
+                ($request_path !== '' && preg_match('#/(?:wp-json/)?wc/store/v1/(cart|checkout)(?:/|$)#i', $request_path) === 1) ||
+                ($rest_route !== '' && preg_match('#^/wc/store/v1/(cart|checkout)(?:/|$)#i', $rest_route) === 1) ||
+                preg_match('#[?&]rest_route=(?:%2F|/)?wc(?:%2F|/)store(?:%2F|/)v1(?:%2F|/)(cart|checkout)(?:%2F|/|[&#]|$)#i', (string) $request_uri) === 1
+            );
             $is_wc_cart_action = (
                 isset($_GET['wc-ajax']) ||
                 isset($_GET['add-to-cart']) ||
@@ -177,7 +183,7 @@ if (!class_exists('WP_Object_Cache')) {
                 isset($_GET['key']) ||
                 preg_match('#[?&](wc-ajax|add-to-cart|remove_item|undo_item|password-reset|key)=#i', (string) $request_uri) === 1
             );
-            $is_wc_customer_session_request = ($has_wc_session_cookie || $is_wc_cart_endpoint || $is_wc_cart_action);
+            $is_wc_customer_session_request = ($has_wc_session_cookie || $is_wc_cart_endpoint || $is_wc_store_api_request || $is_wc_cart_action);
             $request_method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
             $is_cron = (defined('DOING_CRON') && DOING_CRON);
             $is_cli  = (defined('WP_CLI') && WP_CLI);

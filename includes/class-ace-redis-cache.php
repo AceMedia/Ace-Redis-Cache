@@ -628,6 +628,8 @@ class AceRedisCache {
      * Detect WooCommerce request patterns that must never be page-cached.
      */
     private function is_woocommerce_uncacheable_request($request_uri, $path) {
+        $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
+
         $session_cookies = [
             'woocommerce_cart_hash',
             'woocommerce_items_in_cart',
@@ -643,6 +645,14 @@ class AceRedisCache {
         }
 
         if ($path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $path)) {
+            return true;
+        }
+
+        if (
+            ($path !== '' && preg_match('#/(?:wp-json/)?wc/store/v1/(cart|checkout)(?:/|$)#i', $path)) ||
+            ($rest_route !== '' && preg_match('#^/wc/store/v1/(cart|checkout)(?:/|$)#i', $rest_route)) ||
+            ($request_uri !== '' && preg_match('#[?&]rest_route=(?:%2F|/)?wc(?:%2F|/)store(?:%2F|/)v1(?:%2F|/)(cart|checkout)(?:%2F|/|[&#]|$)#i', $request_uri))
+        ) {
             return true;
         }
 

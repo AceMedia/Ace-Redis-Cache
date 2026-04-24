@@ -67,7 +67,16 @@ if ($request_uri !== '' && preg_match('#[?&](wc-ajax|add-to-cart|remove_item|und
 }
 
 $request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+$rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
 if ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path)) {
+    return;
+}
+
+if (
+    ($request_path !== '' && preg_match('#/(?:wp-json/)?wc/store/v1/(cart|checkout)(?:/|$)#i', $request_path)) ||
+    ($rest_route !== '' && preg_match('#^/wc/store/v1/(cart|checkout)(?:/|$)#i', $rest_route)) ||
+    ($request_uri !== '' && preg_match('#[?&]rest_route=(?:%2F|/)?wc(?:%2F|/)store(?:%2F|/)v1(?:%2F|/)(cart|checkout)(?:%2F|/|[&#]|$)#i', $request_uri))
+) {
     return;
 }
 

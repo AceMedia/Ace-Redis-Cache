@@ -129,6 +129,9 @@ class RedisConnection {
                 $this->record_redis_issue();
                 return null;
             }
+
+            // Populate global so other RedisConnection instances skip reconnect this request.
+            $ace_redis_shared_connection = $this->redis;
         }
         
         return $this->redis;

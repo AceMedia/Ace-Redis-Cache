@@ -3206,7 +3206,11 @@ class AceRedisCache {
             return null;
         }
 
-        $home_host = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        static $home_host_cache = null;
+        if ($home_host_cache === null) {
+            $home_host_cache = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        }
+        $home_host = $home_host_cache;
         $path = (string) parse_url($asset, PHP_URL_PATH);
         if ($path === '') {
             return null;
@@ -3234,20 +3238,36 @@ class AceRedisCache {
             return null;
         }
 
-        $home_host = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        // Per-request cache: realpath/is_file/filemtime are expensive; same URL is often queried multiple times.
+        static $resolve_cache = [];
+        if (array_key_exists($asset, $resolve_cache)) {
+            return $resolve_cache[$asset];
+        }
+
+        static $home_host_cache = null;
+        if ($home_host_cache === null) {
+            $home_host_cache = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        }
+        $home_host = $home_host_cache;
+
         if (preg_match('#^https?://#i', $asset)) {
             $asset_host = (string) parse_url($asset, PHP_URL_HOST);
             if ($asset_host === '' || strcasecmp($asset_host, $home_host) !== 0) {
-                return null;
+                return $resolve_cache[$asset] = null;
             }
         }
 
         if (!preg_match('/\.(?:png|jpe?g|gif|webp|avif|svg|woff2?|ttf|eot|otf|ico)$/i', $path)) {
-            return null;
+            return $resolve_cache[$asset] = null;
         }
 
-        $root = rtrim(dirname(ABSPATH), '/');
-        $core = rtrim(ABSPATH, '/');
+        static $root_cache = null, $core_cache = null;
+        if ($root_cache === null) {
+            $root_cache = rtrim(dirname(ABSPATH), '/');
+            $core_cache = rtrim(ABSPATH, '/');
+        }
+        $root = $root_cache;
+        $core = $core_cache;
         $candidates = [];
 
         if (str_starts_with($path, '/assets/') || str_starts_with($path, '/core/')) {
@@ -3262,14 +3282,14 @@ class AceRedisCache {
             $real = realpath($candidate);
             if ($real && is_file($real) && (str_starts_with($real, $root . '/') || $real === $root)) {
                 $mime = $this->get_asset_proxy_mime_type($real);
-                return [
+                return $resolve_cache[$asset] = [
                     'file' => $real,
                     'mime' => $mime,
                 ];
             }
         }
 
-        return null;
+        return $resolve_cache[$asset] = null;
     }
 
     private function get_asset_proxy_mime_type($file) {
@@ -3429,18 +3449,24 @@ class AceRedisCache {
             return $url;
         }
 
+        // Per-request cache: the same asset URL is versioned many times per page (src, srcset, thumbnails, etc.)
+        static $version_cache = [];
+        if (isset($version_cache[$url])) {
+            return $version_cache[$url];
+        }
+
         $resolved = $this->resolve_asset_proxy_file($url);
         if (!$resolved || empty($resolved['file']) || !is_file($resolved['file'])) {
-            return $url;
+            return $version_cache[$url] = $url;
         }
 
         $mtime = @filemtime($resolved['file']);
         if (!$mtime) {
-            return $url;
+            return $version_cache[$url] = $url;
         }
 
         $base = remove_query_arg('acev', $url);
-        return add_query_arg('acev', (string) $mtime, $base);
+        return $version_cache[$url] = add_query_arg('acev', (string) $mtime, $base);
     }
 
     /**

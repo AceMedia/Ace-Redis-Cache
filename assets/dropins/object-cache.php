@@ -40,7 +40,18 @@ if (!function_exists('ace_object_cache_is_woocommerce')) {
             return $result;
         }
 
-        $result = file_exists(WP_PLUGIN_DIR . '/woocommerce/woocommerce.php');
+        // The object-cache drop-in loads in wp-settings.php BEFORE WP_PLUGIN_DIR is
+        // defined; referencing it directly is a fatal on PHP 8. Fall back to the
+        // conventional plugin path derived from WP_CONTENT_DIR (or ABSPATH).
+        if (defined('WP_PLUGIN_DIR')) {
+            $plugin_dir = WP_PLUGIN_DIR;
+        } elseif (defined('WP_CONTENT_DIR')) {
+            $plugin_dir = WP_CONTENT_DIR . '/plugins';
+        } else {
+            $plugin_dir = ABSPATH . 'wp-content/plugins';
+        }
+
+        $result = file_exists($plugin_dir . '/woocommerce/woocommerce.php');
 
         return $result;
     }
@@ -50,6 +61,12 @@ if (!class_exists('WP_Object_Cache')) {
     class WP_Object_Cache {
         private const MAX_VALUE_BYTES_DEFAULT = 65536;
         private const MAX_VALUE_BYTES_WC = 32768;
+
+        // On-wire format version. Every value we persist is wrapped as
+        // ['__aceoc'=>WIRE_VERSION,'d'=>data] so reads can reject anything we did
+        // not write (foreign serializer/compression, stale-format keys from a prior
+        // deploy, corruption) as a cache MISS instead of returning a corrupt type.
+        private const WIRE_VERSION = 2;
 
         private const BYPASS_GROUPS_DEFAULT = [
             'woocommerce_sessions',
@@ -171,7 +188,7 @@ if (!class_exists('WP_Object_Cache')) {
             $is_wc_store_api_request = (
                 ($request_path !== '' && preg_match('#/(?:wp-json/)?wc/store/v1/(cart|checkout)(?:/|$)#i', $request_path) === 1) ||
                 ($rest_route !== '' && preg_match('#^/wc/store/v1/(cart|checkout)(?:/|$)#i', $rest_route) === 1) ||
-                preg_match('#[?&]rest_route=(?:%2F|/)?wc(?:%2F|/)store(?:%2F|/)v1(?:%2F|/)(cart|checkout)(?:%2F|/|[&#]|$)#i', (string) $request_uri) === 1
+                preg_match('#[?&]rest_route=(?:%2F|/)?wc(?:%2F|/)store(?:%2F|/)v1(?:%2F|/)(cart|checkout)(?:%2F|/|[&\#]|$)#i', (string) $request_uri) === 1
             );
             $is_wc_cart_action = (
                 isset($_GET['wc-ajax']) ||
@@ -719,7 +736,7 @@ if (!class_exists('WP_Object_Cache')) {
                 return false;
             }
             $k = $this->k($key, $group);
-            $payload = $this->serializer_active ? $data : (is_scalar($data) ? $data : serialize($data));
+            $payload = $this->encode_for_store($data);
             try {
                 $ok = $expire > 0 ? (bool)$this->redis->set($k, $payload, ['nx','ex'=>(int)$expire])
                                   : (bool)$this->redis->set($k, $payload, ['nx']);
@@ -772,7 +789,7 @@ if (!class_exists('WP_Object_Cache')) {
                 return true; 
             }
             $k = $this->k($key, $group);
-            $payload = $this->serializer_active ? $data : (is_scalar($data) ? $data : serialize($data));
+            $payload = $this->encode_for_store($data);
             try {
                 $redis_start = microtime(true);
                 $result = ($expire > 0) ? (bool)$this->redis->setex($k, (int)$expire, $payload)
@@ -901,7 +918,18 @@ if (!class_exists('WP_Object_Cache')) {
                     return false; 
                 }
                 
-                $out = $this->decode_value($val);
+                $out = $this->decode_from_store($val);
+
+                // Value was not written by this drop-in (foreign serializer/compression,
+                // stale wire version, or corruption). Treat as a miss so WordPress
+                // regenerates from the DB instead of receiving a corrupt type
+                // (e.g. a string where a WP_Term/WP_Post object is expected).
+                if ($out === $this->decode_miss_token()) {
+                    $found = false;
+                    $this->stat_inc('foreign_format_misses');
+                    $this->prof_log('FOREIGN_FORMAT_MISS', $group . ':' . $key, (microtime(true) - $start_time) * 1000, sprintf(' redis=%.1fms', $redis_time));
+                    return false;
+                }
 
                 if ($this->should_block_post_object_persistence($group, $out)) {
                     $found = false;
@@ -928,6 +956,33 @@ if (!class_exists('WP_Object_Cache')) {
                 $this->prof_log('REDIS_ERROR', $group . ':' . $key, (microtime(true) - $start_time) * 1000, ' err=' . $e->getMessage());
                 return false; 
             }
+        }
+
+        // Unique sentinel returned by decode_from_store() when a stored value is not
+        // one we wrote (and therefore must be treated as a miss). Compared by identity.
+        protected function decode_miss_token() {
+            static $t = null;
+            if ($t === null) { $t = new \stdClass(); }
+            return $t;
+        }
+
+        // Wrap a value for storage so reads can positively identify our own format.
+        protected function encode_for_store($data) {
+            return ['__aceoc' => self::WIRE_VERSION, 'd' => $data];
+        }
+
+        // Unwrap a stored value. Returns the original data for values we wrote,
+        // or the miss sentinel for anything unrecognized (foreign format, stale
+        // wire version, corruption) — phpredis hands back raw strings/false for
+        // bytes it cannot unserialize, which we reject here rather than pass to WP.
+        protected function decode_from_store($val) {
+            if (is_array($val)
+                && array_key_exists('__aceoc', $val)
+                && $val['__aceoc'] === self::WIRE_VERSION
+                && array_key_exists('d', $val)) {
+                return $val['d'];
+            }
+            return $this->decode_miss_token();
         }
 
         protected function looks_serialized($value) {

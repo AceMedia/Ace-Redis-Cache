@@ -364,7 +364,11 @@ class AceRedisCache {
         
         // Guard against canonical redirects to draft URLs
         add_filter('redirect_canonical', [$this, 'guard_canonical_redirect'], 10, 2);
-        
+
+        // Surface a persistent admin notice if a drop-in deploy/remove failed (e.g. wp-content
+        // not writable). Without this the object cache silently never activates.
+        add_action('admin_notices', [$this, 'show_dropin_error_notice']);
+
         // Setup component hooks (only if components are initialized)
         if (is_admin()) {
             if ($this->admin_interface) {
@@ -2917,7 +2921,15 @@ class AceRedisCache {
                     $msg = 'Ace-Redis-Cache: Failed to deploy object-cache.php. Try manually: '
                         . 'cp ' . escapeshellarg($dropin_source) . ' ' . escapeshellarg($dropin_target);
                     if (defined('WP_DEBUG') && WP_DEBUG) { error_log($msg); }
-                } else { $did_install_or_remove = true; }
+                    // Persist so the admin sees why the object cache never activated.
+                    set_transient('ace_redis_dropin_error', $msg, DAY_IN_SECONDS);
+                } else {
+                    $did_install_or_remove = true;
+                    delete_transient('ace_redis_dropin_error');
+                }
+            } else {
+                // Already correctly deployed — clear any stale failure flag.
+                delete_transient('ace_redis_dropin_error');
             }
         } else {
             // Remove drop-in if we own it (basic heuristic: look for our signature header)
@@ -2936,6 +2948,23 @@ class AceRedisCache {
         if ($did_install_or_remove && function_exists('wp_cache_flush')) {
             @wp_cache_flush();
         }
+    }
+
+    /**
+     * Show an admin notice when object-cache.php deployment failed, so a non-writable
+     * wp-content (the object cache silently never activating) is visible to admins.
+     */
+    public function show_dropin_error_notice() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $msg = get_transient('ace_redis_dropin_error');
+        if (!$msg) {
+            return;
+        }
+        echo '<div class="notice notice-error"><p><strong>Ace Redis Cache:</strong> '
+            . esc_html($msg)
+            . ' Until this is resolved the persistent object cache is inactive and caches fall back to the database.</p></div>';
     }
 
     /**

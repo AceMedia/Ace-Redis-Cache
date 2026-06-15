@@ -64,10 +64,16 @@ class RedisConnection {
                 // Prepare connection parameters
                 $host = $this->settings['host'];
                 $port = (int)$this->settings['port'];
-                $timeout = 2.0; // 2 second timeout
+                // Keep timeouts short so a slow/unreachable Redis can't hang a PHP-FPM
+                // worker. read_timeout = 0 (unbounded) previously let ping()/reads stall
+                // for seconds; bound it. Defaults (0.5s) match the drop-ins
+                // (advanced-cache.php uses ACE_REDIS_TIMEOUT=0.5; object-cache.php uses
+                // 0.5s connect / 0.3s read). Override per-site via the same ACE_REDIS_*
+                // constants the drop-ins honor.
+                $timeout = defined('ACE_REDIS_TIMEOUT') ? (float) ACE_REDIS_TIMEOUT : 0.5;
                 $reserved = null;
                 $retry_interval = 0;
-                $read_timeout = 0;
+                $read_timeout = defined('ACE_REDIS_READ_TIMEOUT') ? (float) ACE_REDIS_READ_TIMEOUT : 0.5;
                 
                 // Configure TLS context options if TLS is enabled
                 $context_options = [];
@@ -102,7 +108,15 @@ class RedisConnection {
                     $this->record_redis_issue();
                     return null;
                 }
-                
+
+                // Enforce a read timeout explicitly — the positional connect() arg is not
+                // honored consistently across phpredis versions, so set it on the option too.
+                try {
+                    $this->redis->setOption(\Redis::OPT_READ_TIMEOUT, $read_timeout);
+                } catch (\Throwable $t) {
+                    // Non-fatal if the option is unsupported.
+                }
+
                 // Authenticate if password is provided
                 if (!empty($this->settings['password'])) {
                     if (!$this->redis->auth($this->settings['password'])) {
@@ -164,7 +178,13 @@ class RedisConnection {
             $bypass_circuit_breaker = $this->should_bypass_circuit_breaker();
         }
         
-        $max_retries = 3;
+        // Bound the worst case. Previously 3 retries x 1.0s timeout (+ backoff) could reach
+        // ~3.1s for a single cache op — enough on its own to trip the 3s PHP-FPM slow-log
+        // threshold when Redis is flaky. 2 retries x 0.5s caps it near ~1s before failing
+        // open to the DB. Override per-site via ACE_REDIS_* constants (same convention as
+        // the connection timeouts and the drop-ins).
+        $max_retries = defined('ACE_REDIS_MAX_RETRIES') ? max(1, (int) ACE_REDIS_MAX_RETRIES) : 2;
+        $op_timeout  = defined('ACE_REDIS_OP_TIMEOUT') ? (float) ACE_REDIS_OP_TIMEOUT : 0.5;
         $attempt = 0;
         
         while ($attempt < $max_retries) {
@@ -174,7 +194,7 @@ class RedisConnection {
                     return null;
                 }
                 
-                $result = $this->execute_with_timeout($fn, $redis, 1.0);
+                $result = $this->execute_with_timeout($fn, $redis, $op_timeout);
                 
                 // If we get here, operation succeeded
                 return $result;

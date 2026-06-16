@@ -68,6 +68,14 @@ if (!class_exists('WP_Object_Cache')) {
         // deploy, corruption) as a cache MISS instead of returning a corrupt type.
         private const WIRE_VERSION = 2;
 
+        // Backstop TTL (seconds) for writes that pass no explicit expiry. WP's object
+        // cache normally stores with no TTL, so keys live forever in Redis/ElastiCache
+        // and accumulate across deploys (the stale-key build-up behind the foreign-format
+        // corruption above). Invalidation is still event-driven (namespace flush on save);
+        // this only bounds how long an untouched key can linger. Persistent-group values
+        // are all DB-derived, so expiry just forces a cheap regeneration on the next miss.
+        private const DEFAULT_TTL = 604800; // 7 days
+
         private const BYPASS_GROUPS_DEFAULT = [
             'woocommerce_sessions',
             'wc_session_id',
@@ -738,8 +746,7 @@ if (!class_exists('WP_Object_Cache')) {
             $k = $this->k($key, $group);
             $payload = $this->encode_for_store($data);
             try {
-                $ok = $expire > 0 ? (bool)$this->redis->set($k, $payload, ['nx','ex'=>(int)$expire])
-                                  : (bool)$this->redis->set($k, $payload, ['nx']);
+                $ok = (bool)$this->redis->set($k, $payload, ['nx','ex'=>$this->effective_ttl($expire)]);
                 if ($ok) {
                     $this->runtime_set($group, $key, $data);
                     $this->stat_inc('persist_writes');
@@ -792,8 +799,7 @@ if (!class_exists('WP_Object_Cache')) {
             $payload = $this->encode_for_store($data);
             try {
                 $redis_start = microtime(true);
-                $result = ($expire > 0) ? (bool)$this->redis->setex($k, (int)$expire, $payload)
-                                        : (bool)$this->redis->set($k, $payload);
+                $result = (bool)$this->redis->setex($k, $this->effective_ttl($expire), $payload);
                 $redis_time = (microtime(true) - $redis_start) * 1000;
                 $total_time = (microtime(true) - $start_time) * 1000;
                 if ($result) {
@@ -969,6 +975,13 @@ if (!class_exists('WP_Object_Cache')) {
         // Wrap a value for storage so reads can positively identify our own format.
         protected function encode_for_store($data) {
             return ['__aceoc' => self::WIRE_VERSION, 'd' => $data];
+        }
+
+        // Normalise an expiry: callers passing 0 / no expiry get the bounded DEFAULT_TTL
+        // backstop rather than an immortal key.
+        protected function effective_ttl($expire) {
+            $expire = (int) $expire;
+            return $expire > 0 ? $expire : self::DEFAULT_TTL;
         }
 
         // Unwrap a stored value. Returns the original data for values we wrote,

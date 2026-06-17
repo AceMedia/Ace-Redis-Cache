@@ -372,31 +372,20 @@ if (!class_exists('WP_Object_Cache')) {
             return false;
         }
 
-        /** 
-         * Comprehensive cache flush for post changes.
-         * This flushes ALL caches to ensure frontend reflects the changes immediately.
-         * Uses complete Redis flush for maximum compatibility with block caching.
+        /**
+         * Cache flush for post changes — object-cache namespace only.
+         * Invalidates our cached objects so the frontend reflects the change, WITHOUT
+         * touching keys we don't own.
          */
         protected function flush_everything_for_post($post_id) {
-            // Force complete cache flush (same as admin "Clear All Cache" button)
-            // This ensures all cached content is refreshed when posts are published/updated
             $this->runtime = [];
-            
-            // Complete Redis flush for post updates to ensure block caching compatibility
-            if ($this->redis !== null) {
-                try {
-                    // Always do complete flush for post updates to avoid any stale cache issues
-                    $this->redis->flushDB();
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        error_log('AceRedisCache: Complete Redis flush after post update ID=' . $post_id);
-                    }
-                } catch (\Throwable $e) {
-                    // If Redis fails, at least clear runtime cache
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        error_log('AceRedisCache: Redis flush failed: ' . $e->getMessage());
-                    }
-                }
-            }
+
+            // Do NOT flushDB(): ElastiCache Serverless is a single shared DB that also
+            // holds the page-cache plugin keys (page_cache:/page_cache_min:/page_cache_meta:/
+            // dyn_block:/ace_rc:). flushDB() here wipes the page cache on every publish →
+            // stampede. Clear only our object-cache namespace; the page-cache plugin runs
+            // its own save_post invalidation.
+            $this->flush(true); // forced, namespace-only (scans/dels our namespace — see flush())
         }
 
         /**

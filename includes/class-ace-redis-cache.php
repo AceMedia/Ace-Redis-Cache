@@ -583,8 +583,9 @@ class AceRedisCache {
             return false;
         }
         
-        // Don't cache POST requests
-        if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+        // Don't cache POST requests. Guard the superglobal: under CLI (the flock'd wp-cron.php) there is no
+        // REQUEST_METHOD, and the unguarded access threw a PHP Warning every run — enough to bloat error_log.
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
             return false;
         }
 

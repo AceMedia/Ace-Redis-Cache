@@ -122,12 +122,20 @@ class RedisConnection {
                     // Non-fatal if the option is unsupported.
                 }
 
-                // Pin the page-cache connection to NO serializer. cache-manager serializes its own values
-                // (self-describing gz6:/br:/raw: strings, line ~526), so any phpredis serializer here would
-                // wrap those markers and other readers (advanced-cache.php reads raw) would get garbled
-                // binary. Keep this separate from the object cache's igbinary connection.
+                // INTERIM (2026-06-19) — mirrors the live emergency fix. Page-cache values *should* be
+                // stored raw (cache-manager self-serialises self-describing gz6:/br:/raw: strings, line
+                // ~526), and the long-term fix is to pin this to SERIALIZER_NONE. BUT the existing entries
+                // were written igbinary-wrapped (a writer still routes page values through the object-cache
+                // igbinary path), so a NONE reader served them as gz6:/binary blobs to guests. Until the
+                // page cache is verified all-raw end-to-end (every page write through THIS connection, then
+                // a one-time flush of page_cache*), match the serializer the entries were written with so
+                // reads/writes stay self-consistent: igbinary where present (FPM), else PHP.
                 try {
-                    $this->redis->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_NONE);
+                    if (defined('\Redis::SERIALIZER_IGBINARY') && function_exists('igbinary_serialize')) {
+                        $this->redis->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_IGBINARY);
+                    } else {
+                        $this->redis->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_PHP);
+                    }
                 } catch (\Throwable $t) {
                     // Non-fatal if the option is unsupported.
                 }

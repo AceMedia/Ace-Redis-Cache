@@ -643,30 +643,30 @@ if (!class_exists('WP_Object_Cache')) {
                 return true;
             }
             
-            // For regular transients: cache important ones, exclude others
+            // Transients: persist by DEFAULT (denylist, not allowlist).
+            //
+            // The previous allowlist only kept feed/seo/term/paypal transients and dropped everything
+            // else to runtime-only. That had two bad effects: (1) WP's 'doing_cron' lock was never
+            // persisted, so wp-cron couldn't hold its mutex across runs (cron broke/stacked), and (2) the
+            // vast majority of get_transient() calls became permanent misses that hammered the DB on every
+            // page. Transients carry their own TTL, so persisting them is safe — exclude only specific
+            // high-cardinality / per-request bloat.
             if ($g === 'transient') {
-                // Cache feed-related transients (important for performance)
-                if (strpos($key, 'feed_') === 0 || strpos($key, '_feed_') !== false || 
-                    strpos($key, 'rss_') === 0 || strpos($key, '_rss_') !== false ||
-                    strpos($key, 'themeisle_sdk_feed') !== false) {
-                    return false; // Don't exclude - cache these
-                }
-                // Cache sitemap and SEO transients (performance critical)
-                if (strpos($key, 'wpseo_') === 0 || strpos($key, 'sitemap_') !== false ||
-                    strpos($key, '_sitemap') !== false || strpos($key, 'yoast_') === 0) {
+                // Infra locks/flags that MUST persist across requests (belt-and-braces; covered by the
+                // default-persist below, but explicit so a future allowlist can't silently drop them).
+                if ($key === 'doing_cron' || strpos($key, 'doing_cron') !== false) {
                     return false;
                 }
-                // Cache taxonomy and term-related transients
-                if (strpos($key, 'get_terms') !== false || strpos($key, 'taxonomy_') !== false ||
-                    strpos($key, '_terms') !== false || strpos($key, 'term_') !== false) {
-                    return false;
+
+                // Optional denylist of known per-request / high-cardinality bloat (extend after auditing).
+                static $transient_excludes = array();
+                foreach ($transient_excludes as $needle) {
+                    if ($needle !== '' && strpos($key, $needle) !== false) {
+                        return true; // runtime-only
+                    }
                 }
-                // Cache PPCP/PayPal transients (prevent blocking API calls on every page)
-                if (strpos($key, "ppcp") !== false || strpos($key, "paypal") !== false) {
-                    return false;
-                }
-                // Exclude other transients to prevent cache pollution
-                return true;
+
+                return false; // persist
             }
             
             return false;

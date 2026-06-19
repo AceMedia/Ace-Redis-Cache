@@ -43,10 +43,17 @@ class RedisConnection {
      * @return \Redis|null Redis instance or null if connection fails
      */
     public function get_connection($force_reconnect = false, $bypass_circuit_breaker = false) {
-        global $ace_redis_shared_connection;
+        // Use a DEDICATED page-cache connection — NOT the object cache's shared connection. The object
+        // cache drop-in sets its connection to the igbinary serializer and publishes it to
+        // $ace_redis_shared_connection; reusing it made the page cache write igbinary-wrapped values while
+        // advanced-cache.php reads them raw, so binary blobs reached the browser. Page-cache values are
+        // self-describing strings (gz6:/br:/raw:) that this plugin serializes itself, so this connection is
+        // pinned to SERIALIZER_NONE below. The global is shared only among this plugin's RedisConnection
+        // instances.
+        global $ace_redis_page_connection;
 
-        if (!$force_reconnect && $ace_redis_shared_connection instanceof \Redis) {
-            $this->redis = $ace_redis_shared_connection;
+        if (!$force_reconnect && $ace_redis_page_connection instanceof \Redis) {
+            $this->redis = $ace_redis_page_connection;
             return $this->redis;
         }
 
@@ -87,8 +94,6 @@ class RedisConnection {
                 }
                 
                 // Use regular connect() — pconnect() causes SIGSEGV on PHP 8.4 with phpredis 6.x.
-                // The shared connection from object-cache.php is reused above, so this path
-                // is only hit when the object cache drop-in is not active.
                 $connect_method = 'connect';
                 $connect_params = [
                     $host,
@@ -113,6 +118,16 @@ class RedisConnection {
                 // honored consistently across phpredis versions, so set it on the option too.
                 try {
                     $this->redis->setOption(\Redis::OPT_READ_TIMEOUT, $read_timeout);
+                } catch (\Throwable $t) {
+                    // Non-fatal if the option is unsupported.
+                }
+
+                // Pin the page-cache connection to NO serializer. cache-manager serializes its own values
+                // (self-describing gz6:/br:/raw: strings, line ~526), so any phpredis serializer here would
+                // wrap those markers and other readers (advanced-cache.php reads raw) would get garbled
+                // binary. Keep this separate from the object cache's igbinary connection.
+                try {
+                    $this->redis->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_NONE);
                 } catch (\Throwable $t) {
                     // Non-fatal if the option is unsupported.
                 }
@@ -144,8 +159,9 @@ class RedisConnection {
                 return null;
             }
 
-            // Populate global so other RedisConnection instances skip reconnect this request.
-            $ace_redis_shared_connection = $this->redis;
+            // Populate the page-cache global so other RedisConnection instances skip reconnect this request.
+            // Deliberately a different global from the object cache's $ace_redis_shared_connection.
+            $ace_redis_page_connection = $this->redis;
         }
         
         return $this->redis;

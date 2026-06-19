@@ -100,6 +100,10 @@ if (!class_exists('WP_Object_Cache')) {
             'wc_cache',
             'transient',
             'site-transient',
+            // First-party context caches. These MUST live in the default const, not the
+            // ace_oc_persistent_groups filter: that filter is applied in __construct()
+            // (wp_start_object_cache, before plugins load), so a plugin add_filter() is too late.
+            'ace_te', // ace-teams-events per-post event context (build_post_event_context)
         ];
 
         protected $redis;

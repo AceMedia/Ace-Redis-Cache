@@ -558,13 +558,15 @@ if (!class_exists('WP_Object_Cache')) {
                 try { $this->redis->setOption(Redis::OPT_READ_TIMEOUT, 0.3); } catch (\Throwable $t) {}
                 try { $this->redis->setOption(Redis::OPT_TIMEOUT, 0.3); } catch (\Throwable $t) {}
 
-                if (defined('Redis::SERIALIZER_IGBINARY') && function_exists('igbinary_serialize')) {
-                    $this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_IGBINARY);
-                    $this->igbinary = true; $this->serializer_active = true;
-                } else {
-                    $this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
-                    $this->serializer_active = true;
-                }
+                // Pin to SERIALIZER_PHP unconditionally. Choosing igbinary-when-available split the
+                // object cache by context: FPM (igbinary) vs any plain/8.2 WP-CLI entrypoint (PHP) wrote
+                // formats the other couldn't read, so cross-context entries became foreign-format misses
+                // → extra DB load. PHP serializer is available in every SAPI, so one format everywhere.
+                // Cutover is safe without a perfectly-timed flush: existing igbinary entries simply read
+                // as foreign-format misses and regenerate (a one-time ace:* flush off-peak just avoids the
+                // gradual self-heal DB ramp). igbinary's compactness isn't worth the cross-context misses.
+                $this->redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
+                $this->serializer_active = true;
 
                 if (!empty($pass)) { @ $this->redis->auth($pass); }
                 try { $this->redis->client('SETNAME', 'ace-object-cache'); } catch (\Throwable $t) {}

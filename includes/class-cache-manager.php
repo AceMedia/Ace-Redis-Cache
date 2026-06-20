@@ -941,8 +941,16 @@ class CacheManager {
         if (str_starts_with($stored, 'raw:')) {
             return substr($stored, 4);
         }
-        // Unknown format: return as-is
-        return $stored;
+        // Foreign format: a value cache-manager wrote ALWAYS carries a br:/gz:/raw: marker (or the
+        // s:N:"..." serializer wrapper unwrapped above). Anything else here was written by a different
+        // serializer (e.g. a phpredis igbinary blob, header 00 00 00 02) and is NOT servable HTML.
+        // Return null so the caller treats it as a miss and regenerates — exactly like the object
+        // cache's foreign-format-miss guard — instead of leaking raw binary to the browser. This is what
+        // previously broke production (a NONE read of igbinary entries served gz6:/binary blobs), and it
+        // is what makes flipping the page connection to SERIALIZER_NONE safe: stale igbinary entries
+        // self-heal as misses and get rewritten raw, no perfectly-timed flush required.
+        if (!$logged_once && (defined('WP_DEBUG') && WP_DEBUG)) { $logged_once = true; error_log('Ace-Redis-Cache: foreign page-cache value (no marker); treating as miss.'); }
+        return null;
     }
 
     /**

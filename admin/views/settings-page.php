@@ -1317,14 +1317,18 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
             nonce: ace_redis_admin.nonce,
             type: type
         }).done(function(resp){
-            if (resp && resp.success && resp.data) {
-                var msg = resp.data.message || 'Drop-in update completed.';
-                alert(msg);
+            if (resp && resp.success) {
+                alert((resp.data && resp.data.message) || 'Drop-in update completed.');
             } else {
-                alert('Drop-in update failed.');
+                // Show the specific reason (e.g. "... is not writable: /path") instead of a generic failure.
+                alert((resp && resp.data && resp.data.message) || 'Drop-in update failed.');
             }
-        }).fail(function(){
-            alert('Drop-in update request failed.');
+        }).fail(function(xhr){
+            var msg = 'Drop-in update request failed.';
+            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                msg = xhr.responseJSON.data.message;
+            }
+            alert(msg);
         }).always(function(){
             $btn.prop('disabled', false).text(original);
             refreshDropinStatus();

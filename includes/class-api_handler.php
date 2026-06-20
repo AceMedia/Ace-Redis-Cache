@@ -435,17 +435,26 @@ class API_Handler {
             @wp_cache_flush();
         }
 
-        $message = !empty($updated) ? implode(' ', $updated) : 'No drop-ins were updated.';
+        // Surface failures: previously this always returned success=true, so a copy/permission failure
+        // (the common case — the web user can't write the active drop-in path) showed as a silent no-op.
+        // Report success only when nothing errored, and fold the errors/skips into the message so the UI
+        // shows WHY (e.g. "... is not writable: /path"). The perms themselves are a server-side fix
+        // (make WP_CONTENT_DIR's drop-in targets writable by the web user, or deploy them out of band).
+        $message_parts = [];
+        if (!empty($updated)) { $message_parts[] = implode(' ', $updated); }
+        if (!empty($skipped)) { $message_parts[] = implode(' ', $skipped); }
+        if (!empty($errors))  { $message_parts[] = implode(' ', $errors); }
+        $message = !empty($message_parts) ? implode(' ', $message_parts) : 'No drop-ins were updated.';
 
         return new \WP_REST_Response([
-            'success' => true,
+            'success' => empty($errors),
             'data' => [
                 'message' => $message,
                 'updated' => $updated,
                 'skipped' => $skipped,
                 'errors' => $errors,
             ]
-        ], 200);
+        ], empty($errors) ? 200 : 500);
     }
 
     public function get_settings($request) {

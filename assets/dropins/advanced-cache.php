@@ -111,6 +111,17 @@ if (!class_exists('Redis')) {
     return;
 }
 
+// Early-serve is DARK-LAUNCHED by default: advanced-cache reconstructs the key, looks it up, and emits an
+// X-Ace-Early: HIT/MISS diagnostic header — but only short-circuits WordPress when ACE_REDIS_EARLY_SERVE is
+// defined and true. This lets the key-match rate be validated on live (and requires the page entries to be
+// raw, i.e. the SERIALIZER_NONE end-state) before any request is actually served pre-boot.
+$early_serve = defined('ACE_REDIS_EARLY_SERVE') && ACE_REDIS_EARLY_SERVE;
+$emit = function($label) use ($early_serve) {
+    if (!headers_sent()) {
+        header('X-Ace-Early: ' . $label . ($early_serve ? '' : '; dark-launch'));
+    }
+};
+
 try {
     $redis = new Redis();
     $redis->connect($redis_host, $redis_port, $redis_timeout);
@@ -122,8 +133,19 @@ try {
         $redis->select($redis_db);
     }
 
-    $site_version = (int) $redis->get('ace:1:version:site_version');
-    $core_key = 'page_cache:' . $request_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . $site_version;
+    // Inputs published raw by the plugin (rawCommand SET, no serializer) so they read as plain strings.
+    // The suffix carries the global ace-te-*/ace-pc-hl-* key parts the writer appends via filter.
+    $site_version = $redis->get('ace:1:pagekey:site_version');
+    $suffix = $redis->get('ace:1:pagekey:suffix');
+    if (!is_string($site_version) || !is_string($suffix)) {
+        $emit('MISS no-tokens');
+        return;
+    }
+
+    $core_key = 'page_cache:' . $request_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version;
+    if ($suffix !== '') {
+        $core_key .= ':' . $suffix;
+    }
 
     $candidates = [
         'page_cache_min:' . $core_key,
@@ -138,7 +160,8 @@ try {
         }
     }
 
-    if ($payload === false || !is_string($payload) || $payload === '') {
+    if (!is_string($payload) || $payload === '') {
+        $emit('MISS no-key');
         return;
     }
 
@@ -149,57 +172,65 @@ try {
         }
     }
 
-    $send = function($body, $encoding, $hit_label) {
-        if (!headers_sent()) {
-            if ($encoding !== '') {
-                header('Content-Encoding: ' . $encoding);
-                header('Vary: Accept-Encoding');
-            }
-            header('X-AceRedisCache: HIT (' . $hit_label . ')');
-            if (function_exists('header_remove')) {
-                header_remove('Content-Length');
-            }
-            header('Content-Length: ' . strlen($body));
-        }
-        echo $body;
-        exit;
-    };
-
+    // Decode the self-describing marker into [body, encoding]; foreign/undecodable (e.g. an igbinary-wrapped
+    // value before the NONE cutover) leaves $body null -> treated as a miss, never served.
+    $body = null;
+    $encoding = '';
     if (preg_match('/^br\d{0,2}:(.*)$/s', $payload, $m) === 1) {
         $bytes = $m[1];
         if ($accepts_br) {
-            $send($bytes, 'br', 'advcache-br');
-        }
-        if (function_exists('brotli_uncompress')) {
+            $body = $bytes;
+            $encoding = 'br';
+        } elseif (function_exists('brotli_uncompress')) {
             $plain = @brotli_uncompress($bytes);
             if (is_string($plain)) {
-                $send($plain, '', 'advcache-plain');
+                $body = $plain;
             }
         }
-        return;
-    }
-
-    if (preg_match('/^gz\d{0,2}:(.*)$/s', $payload, $m) === 1) {
+    } elseif (preg_match('/^gz\d{0,2}:(.*)$/s', $payload, $m) === 1) {
         $bytes = $m[1];
-        $is_gzip_stream = strlen($bytes) >= 2 && substr($bytes, 0, 2) === "\x1f\x8b";
-        if ($accepts_gzip && $is_gzip_stream) {
-            $send($bytes, 'gzip', 'advcache-gz');
+        if ($accepts_gzip && strlen($bytes) >= 2 && substr($bytes, 0, 2) === "\x1f\x8b") {
+            $body = $bytes;
+            $encoding = 'gzip';
+        } else {
+            $plain = @gzdecode($bytes);
+            if (!is_string($plain) && function_exists('gzuncompress')) {
+                $plain = @gzuncompress($bytes);
+            }
+            if (is_string($plain)) {
+                $body = $plain;
+            }
         }
-        $plain = @gzdecode($bytes);
-        if (!is_string($plain) && function_exists('gzuncompress')) {
-            $plain = @gzuncompress($bytes);
-        }
-        if (is_string($plain)) {
-            $send($plain, '', 'advcache-plain');
-        }
+    } elseif (str_starts_with($payload, 'raw:')) {
+        $body = substr($payload, 4);
+    }
+
+    if ($body === null) {
+        $emit('MISS undecodable');
         return;
     }
 
-    if (str_starts_with($payload, 'raw:')) {
-        $send(substr($payload, 4), '', 'advcache-plain');
+    if (!$early_serve) {
+        // Dark-launch: a real early-serve hit was confirmed — record it and let WordPress serve normally.
+        $emit('HIT');
+        return;
     }
 
-    return;
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=UTF-8');
+        if ($encoding !== '') {
+            header('Content-Encoding: ' . $encoding);
+            header('Vary: Accept-Encoding');
+        }
+        header('X-Ace-Early: HIT');
+        header('X-AceRedisCache: HIT (advcache)');
+        if (function_exists('header_remove')) {
+            header_remove('Content-Length');
+        }
+        header('Content-Length: ' . strlen($body));
+    }
+    echo $body;
+    exit;
 } catch (Throwable $e) {
     return;
 }

@@ -1483,6 +1483,7 @@ class AceRedisCache {
             'v' . $version,
         ];
 
+        $base_count = count($key_parts);
         $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
             'request_uri' => $request_path,
             'scheme' => \is_ssl() ? 'https' : 'http',
@@ -1490,8 +1491,39 @@ class AceRedisCache {
             'host' => $host,
             'version' => (int) $version,
         ]);
+        $key_parts = array_map('strval', (array) $key_parts);
 
-        return implode(':', array_map('strval', (array) $key_parts));
+        // Publish the inputs advanced-cache.php needs to reconstruct this key BEFORE WordPress boots:
+        // the site_version and the global key suffix (the filter-appended ace-te-*/ace-pc-hl-* parts,
+        // which are version-based and identical for every URL at a given moment). advanced-cache runs
+        // pre-plugins so it can't run the filter itself. (#4 early-serve groundwork.)
+        $this->maybe_publish_page_key_inputs((int) $version, array_slice($key_parts, $base_count));
+
+        return implode(':', $key_parts);
+    }
+
+    /**
+     * Publish the page-cache key inputs (site_version + global suffix) to fixed Redis keys for
+     * advanced-cache.php. Written via rawCommand so they bypass the connection's serializer and land as
+     * plain strings (advanced-cache reads with no serializer, pre-WP). Once per request — the suffix is
+     * global, so storing it on the request that (re)builds a key keeps it current across version bumps.
+     */
+    private function maybe_publish_page_key_inputs($version, array $suffix_parts) {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $done = true;
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            if (!$redis) {
+                return;
+            }
+            $redis->rawCommand('SET', 'ace:1:pagekey:site_version', (string) $version);
+            $redis->rawCommand('SET', 'ace:1:pagekey:suffix', implode(':', $suffix_parts));
+        } catch (\Throwable $t) {
+            // Non-fatal: advanced-cache just stays in dark-launch MISS until the keys exist.
+        }
     }
 
     private function get_site_cache_version() {

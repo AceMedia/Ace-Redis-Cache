@@ -106,6 +106,7 @@ $redis_port = defined('ACE_REDIS_PORT') ? (int) ACE_REDIS_PORT : (defined('WP_RE
 $redis_pass = defined('ACE_REDIS_PASSWORD') ? ACE_REDIS_PASSWORD : (defined('WP_REDIS_PASSWORD') ? WP_REDIS_PASSWORD : '');
 $redis_timeout = defined('ACE_REDIS_TIMEOUT') ? (float) ACE_REDIS_TIMEOUT : 0.5;
 $redis_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : 0;
+$redis_socket = defined('ACE_REDIS_SOCKET') ? ACE_REDIS_SOCKET : '/var/run/redis/redis.sock';
 
 if (!class_exists('Redis')) {
     return;
@@ -124,20 +125,35 @@ $emit = function($label) use ($early_serve) {
 
 try {
     $redis = new Redis();
-    $redis->connect($redis_host, $redis_port, $redis_timeout);
+    // Mirror the object cache's connect order: unix socket first, then TCP. A TCP-only connect can land
+    // on a different/empty endpoint than where the plugin writes (the object cache prefers the socket),
+    // which is why every reconstructed key missed. ($redis_socket defaults to /var/run/redis/redis.sock.)
+    $connected = false;
+    if ($redis_socket !== '' && @is_readable($redis_socket)) {
+        $connected = @$redis->connect($redis_socket, 0, $redis_timeout);
+    }
+    if (!$connected) {
+        $connected = @$redis->connect($redis_host, $redis_port, $redis_timeout);
+    }
+    if (!$connected) {
+        $emit('MISS no-connection');
+        return;
+    }
 
     if ($redis_pass !== '') {
-        $redis->auth($redis_pass);
+        @$redis->auth($redis_pass);
     }
     if ($redis_db > 0) {
-        $redis->select($redis_db);
+        @$redis->select($redis_db);
     }
 
     // Inputs published raw by the plugin (rawCommand SET, no serializer) so they read as plain strings.
     // The suffix carries the global ace-te-*/ace-pc-hl-* key parts the writer appends via filter.
+    // Use === false (key absent), NOT a falsy/!is_string check: site_version is legitimately "0" on
+    // this site, and the suffix can be an empty string — both are valid published values.
     $site_version = $redis->get('ace:1:pagekey:site_version');
     $suffix = $redis->get('ace:1:pagekey:suffix');
-    if (!is_string($site_version) || !is_string($suffix)) {
+    if ($site_version === false || $suffix === false) {
         $emit('MISS no-tokens');
         return;
     }

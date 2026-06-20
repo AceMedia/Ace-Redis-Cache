@@ -1515,7 +1515,13 @@ class AceRedisCache {
         }
         $done = true;
         try {
-            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            // Publish into the OBJECT CACHE's keyspace (the shared connection), which is where ace:1:*
+            // lives and what advanced-cache reads — not necessarily the same endpoint as the page
+            // connection. rawCommand bypasses the serializer so the values land as plain strings.
+            global $ace_redis_shared_connection;
+            $redis = ($ace_redis_shared_connection instanceof \Redis)
+                ? $ace_redis_shared_connection
+                : $this->cache_manager->get_redis_connection()->get_connection();
             if (!$redis) {
                 return;
             }

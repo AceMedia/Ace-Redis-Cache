@@ -283,6 +283,18 @@ if (!class_exists('WP_Object_Cache')) {
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
 
+            // Per-site salt: multiple single-site installs can share one Redis DB,
+            // so isolate this site's keys (and its `namespace.*` flush pattern) from
+            // the others. Honour WP_CACHE_KEY_SALT, else derive from DB_NAME/prefix.
+            if ($this->namespace === 'ace:') {
+                $salt_src = (defined('WP_CACHE_KEY_SALT') ? WP_CACHE_KEY_SALT : '')
+                    . '|' . (defined('DB_NAME') ? DB_NAME : '')
+                    . '|' . (isset($GLOBALS['table_prefix']) ? $GLOBALS['table_prefix'] : '');
+                if (trim($salt_src, '|') !== '') {
+                    $this->namespace = 'ace:' . substr(md5($salt_src), 0, 10) . ':';
+                }
+            }
+
             if (function_exists('ace_object_cache_is_woocommerce') && ace_object_cache_is_woocommerce()) {
                 $this->apply_woocommerce_profile();
             }

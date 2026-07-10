@@ -133,6 +133,10 @@ class AceRedisCache {
             'enable_object_cache' => 0,
             'ttl_page' => 3600,
             'ttl_object' => 3600,
+            // Smart WooCommerce caching (auto-active only when WooCommerce is present).
+            'wc_smart_cache' => 1,      // master toggle for warm-on-flush + stale-while-revalidate
+            'wc_warm_count' => 20,      // how many best-selling products to background-warm
+            'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
             'send_cache_meta_headers' => 0,
@@ -201,6 +205,10 @@ class AceRedisCache {
             'enable_object_cache' => 0,
             'ttl_page' => 3600,
             'ttl_object' => 3600,
+            // Smart WooCommerce caching (auto-active only when WooCommerce is present).
+            'wc_smart_cache' => 1,      // master toggle for warm-on-flush + stale-while-revalidate
+            'wc_warm_count' => 20,      // how many best-selling products to background-warm
+            'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
             'dynamic_excluded_blocks' => 1,
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
@@ -381,6 +389,9 @@ class AceRedisCache {
         // Deferred invalidation runner
         add_action('ace_rc_run_deferred_invalidation', [$this, 'run_deferred_invalidation']);
         add_action('ace_rc_run_sitemap_prime_batch', [$this, 'run_sitemap_prime_batch']);
+        // Smart WooCommerce caching: warm key commerce URLs after any full cache clear.
+        add_action('ace_rc_cache_cleared', [$this, 'schedule_woocommerce_warm'], 10, 1);
+        add_action('ace_rc_warm_woocommerce', [$this, 'run_woocommerce_warm'], 10, 1);
         add_action('init', [$this, 'maybe_serve_asset_proxy_request'], 0);
         // Static asset headers (apply for all requests including admin media loads)
         if (!empty($this->settings['enable_static_asset_cache'])) {
@@ -893,8 +904,16 @@ class AceRedisCache {
         }
         $cache_key = $this->generate_page_cache_key();
 
+        // Cache primers / stale-while-revalidate refreshers must REGENERATE and re-store, not be
+        // served the existing (possibly stale) copy. When the request carries a primer header we
+        // skip the serve and fall through to the store path, overwriting the entry in place while
+        // other visitors keep being served the old copy until it is replaced.
+        $is_prime_refresh = !empty($_SERVER['HTTP_X_ACEREDIS_PRIME'])
+            || !empty($_SERVER['HTTP_X_ACEREDIS_SITEMAP_PRIME'])
+            || !empty($_SERVER['HTTP_X_ACEREDIS_REFRESH']);
+
         $direct_compressed = null;
-        if (empty($this->settings['enable_static_asset_cache'])) {
+        if (!$is_prime_refresh && empty($this->settings['enable_static_asset_cache'])) {
             $direct_compressed = $this->try_serve_compressed_directly($cache_key);
         }
         if ($direct_compressed !== null) {
@@ -902,13 +921,14 @@ class AceRedisCache {
                 header('X-AceRedisCache: HIT-COMPRESSED');
                 $this->emit_browser_cache_headers('hit', $cache_key);
             }
+            $this->maybe_trigger_swr_refresh($cache_key);
             echo $direct_compressed;
             if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
             return;
         }
-        
+
         // Standard path: fetch raw (decompressed) so we can safely perform placeholder expansion when needed
-        $cached_content = $this->cache_manager->get_with_minification($cache_key, false);
+        $cached_content = $is_prime_refresh ? null : $this->cache_manager->get_with_minification($cache_key, false);
         if ($cached_content !== null) {
             // Prevent serving cached page for now non-published singular content
             if (is_singular()) {
@@ -939,6 +959,7 @@ class AceRedisCache {
             }
             // Re-apply compression for delivery if enabled and client accepts it
             $cached_content = $this->maybe_recompress_for_output($cached_content);
+            $this->maybe_trigger_swr_refresh($cache_key);
             echo $cached_content;
             if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
             return;
@@ -1034,7 +1055,7 @@ class AceRedisCache {
                 try {
                     if ($this->cache_manager && method_exists($this->cache_manager, 'set')) {
                         $meta_key = $this->page_cache_meta_prefix . $cache_key;
-                        $this->cache_manager->set($meta_key, [ 'stored_at' => time() ], $this->settings['ttl_page'] ?? 3600);
+                        $this->cache_manager->set($meta_key, [ 'stored_at' => time() ], $this->page_cache_physical_ttl());
                     }
                 } catch (\Throwable $t) {}
             } elseif ($skip_cache && defined('WP_DEBUG') && WP_DEBUG) {
@@ -2432,6 +2453,188 @@ class AceRedisCache {
             $this->schedule_sitemap_prime_runner();
         } else {
             $this->delete_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+        }
+    }
+
+    /* ============================= Smart WooCommerce warming ============================= */
+
+    /**
+     * Queue arbitrary URLs for background priming, reusing the sitemap prime batch runner.
+     *
+     * @param array $urls Absolute URLs to warm.
+     */
+    private function enqueue_prime_urls(array $urls) {
+        $urls = array_values(array_unique(array_filter(array_map('strval', $urls))));
+        if (empty($urls)) {
+            return;
+        }
+        $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+        $now = time();
+        foreach ($urls as $url) {
+            $queue[$url] = $now;
+        }
+        $this->set_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option, $queue, $this->sitemap_prime_queue_ttl);
+        $this->schedule_sitemap_prime_runner();
+    }
+
+    /**
+     * After a full cache clear, schedule a background warm of the key WooCommerce URLs so the
+     * storefront never faces a cold-cache stampede (e.g. right after a deploy). Auto-active when
+     * WooCommerce is present; disable via the wc_smart_cache setting. Fired by ace_rc_cache_cleared.
+     *
+     * @param string $context Origin label for diagnostics.
+     */
+    public function schedule_woocommerce_warm($context = '') {
+        if (!class_exists('WooCommerce') || empty($this->settings['wc_smart_cache'])) {
+            return;
+        }
+        // Debounce: only one warm scheduled per short window even if several clears fire together.
+        if ($this->cache_manager && method_exists($this->cache_manager, 'add') && !$this->cache_manager->add('ace_rc:wc_warm_lock', 1, 60)) {
+            return;
+        }
+        if (!wp_next_scheduled('ace_rc_warm_woocommerce', [(string) $context])) {
+            wp_schedule_single_event(time() + 5, 'ace_rc_warm_woocommerce', [(string) $context]);
+        }
+    }
+
+    /**
+     * Background handler: enqueue the WooCommerce warm URLs into the prime queue.
+     *
+     * @param string $context Origin label for diagnostics.
+     */
+    public function run_woocommerce_warm($context = '') {
+        if (!class_exists('WooCommerce') || empty($this->settings['wc_smart_cache'])) {
+            return;
+        }
+        $urls = apply_filters('ace_rc_woocommerce_warm_urls', $this->get_woocommerce_warm_urls(), $context, $this->settings);
+        $this->enqueue_prime_urls((array) $urls);
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Ace-Redis-Cache: WooCommerce warm queued ' . count((array) $urls) . ' urls (context=' . $context . ')');
+        }
+    }
+
+    /**
+     * Build the list of high-value WooCommerce URLs to keep warm: home, shop, the busiest
+     * product categories, and the best-selling products (WooCommerce popularity = total_sales).
+     *
+     * @return array Absolute URLs.
+     */
+    private function get_woocommerce_warm_urls() {
+        $urls = [ home_url('/') ];
+
+        if (function_exists('wc_get_page_permalink')) {
+            $shop = wc_get_page_permalink('shop');
+            if ($shop) {
+                $urls[] = $shop;
+            }
+        }
+
+        $count = max(1, (int) ($this->settings['wc_warm_count'] ?? 20));
+
+        $terms = get_terms([
+            'taxonomy'   => 'product_cat',
+            'orderby'    => 'count',
+            'order'      => 'DESC',
+            'number'     => min(10, $count),
+            'hide_empty' => true,
+        ]);
+        if (is_array($terms)) {
+            foreach ($terms as $term) {
+                $link = get_term_link($term);
+                if (!is_wp_error($link)) {
+                    $urls[] = $link;
+                }
+            }
+        }
+
+        if (function_exists('wc_get_products')) {
+            $product_ids = wc_get_products([
+                'status'  => 'publish',
+                'limit'   => $count,
+                'orderby' => 'popularity',
+                'order'   => 'DESC',
+                'return'  => 'ids',
+            ]);
+            foreach ((array) $product_ids as $pid) {
+                $link = get_permalink($pid);
+                if ($link) {
+                    $urls[] = $link;
+                }
+            }
+        }
+
+        return array_values(array_unique(array_filter($urls)));
+    }
+
+    /**
+     * Physical Redis TTL for a page-cache entry: ttl_page plus the SWR grace window (when smart
+     * WooCommerce caching is active), so a soft-expired page survives long enough to be served
+     * stale while it refreshes in the background. Freshness is judged separately via stored_at.
+     */
+    private function page_cache_physical_ttl() {
+        $ttl = (int) ($this->settings['ttl_page'] ?? 3600);
+        if (!empty($this->settings['wc_smart_cache']) && class_exists('WooCommerce')) {
+            $ttl += (int) ($this->settings['page_cache_grace'] ?? 0);
+        }
+        return max(1, $ttl);
+    }
+
+    /**
+     * Reconstruct the absolute URL of the current request (for background re-warming).
+     */
+    private function current_request_url() {
+        $host = $_SERVER['HTTP_HOST'] ?? parse_url(home_url(), PHP_URL_HOST);
+        if (!$host) {
+            return '';
+        }
+        $uri = $_SERVER['REQUEST_URI'] ?? '/';
+        return (is_ssl() ? 'https' : 'http') . '://' . $host . $uri;
+    }
+
+    /**
+     * Stale-while-revalidate: on a page-cache HIT, if the entry is older than ttl_page (soft-expired)
+     * but still within the grace window, trigger a single background refresh of this URL so the next
+     * visitor gets a fresh copy — while the current visitor is still served the stale hit instantly.
+     * A short SETNX lock on the cache key prevents a refresh stampede. WooCommerce-gated, and a no-op
+     * unless smart caching + a grace window are configured.
+     *
+     * @param string $cache_key The page cache key being served.
+     */
+    private function maybe_trigger_swr_refresh($cache_key) {
+        if (empty($this->settings['wc_smart_cache']) || !class_exists('WooCommerce') || !$this->cache_manager) {
+            return;
+        }
+        $grace = (int) ($this->settings['page_cache_grace'] ?? 0);
+        if ($grace <= 0) {
+            return;
+        }
+
+        $stored_at = 0;
+        try {
+            $meta = $this->cache_manager->get($this->page_cache_meta_prefix . $cache_key);
+            if (is_array($meta) && isset($meta['stored_at'])) {
+                $stored_at = (int) $meta['stored_at'];
+            }
+        } catch (\Throwable $t) {}
+        if ($stored_at <= 0) {
+            return; // no freshness info — leave the hit untouched
+        }
+
+        $age = time() - $stored_at;
+        if ($age < (int) ($this->settings['ttl_page'] ?? 3600)) {
+            return; // still fresh
+        }
+
+        // Soft-expired within grace: first requester to win the lock enqueues a background refresh.
+        if (!method_exists($this->cache_manager, 'add') || !$this->cache_manager->add('ace_rc:swr:' . $cache_key, 1, 45)) {
+            return;
+        }
+        $url = $this->current_request_url();
+        if ($url) {
+            $this->enqueue_prime_urls([$url]);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache: SWR background refresh queued age=' . $age . 's url=' . $url);
+            }
         }
     }
 

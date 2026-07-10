@@ -335,6 +335,9 @@ class CacheManager {
         $all_keys = array_unique($all_keys);
         $deleted_count = $this->delete_keys_chunked($all_keys);
 
+        // Let listeners (e.g. smart WooCommerce warming) react to a full cache clear.
+        do_action('ace_rc_cache_cleared', 'clear_all_cache', $deleted_count);
+
         return [
             'success' => true,
             'cleared' => $deleted_count,
@@ -775,6 +778,16 @@ class CacheManager {
 
         if (isset($_GET['sitemap']) || strpos($_SERVER['REQUEST_URI'] ?? '', 'sitemap') !== false) {
             $ttl = 300;
+        }
+
+        // Stale-while-revalidate: keep entries physically alive through the grace window so a
+        // soft-expired page can still be served (stale) while it is refreshed in the background.
+        // Freshness is judged separately from the stored_at meta against ttl_page.
+        if (!empty($this->settings['wc_smart_cache']) && class_exists('WooCommerce')) {
+            $grace = (int) ($this->settings['page_cache_grace'] ?? 0);
+            if ($grace > 0) {
+                $ttl += $grace;
+            }
         }
 
         return (int) apply_filters('ace_redis_cache_ttl', $ttl, $this->settings);

@@ -166,6 +166,7 @@ try {
     $candidates = [
         'page_cache_min:' . $core_key,
         'page_cache:' . $core_key,
+        $core_key, // minification-off sites store under the bare core key
     ];
 
     $payload = false;

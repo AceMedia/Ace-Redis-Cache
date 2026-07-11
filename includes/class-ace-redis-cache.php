@@ -1827,34 +1827,16 @@ class AceRedisCache {
         // Allow broad purge override
         $broad = apply_filters('ace_rc_broad_page_cache_purge_on_post_update', false, $post_id, $post, $this->settings);
         if ($broad) {
-            // Complete Redis flush for maximum compatibility with block caching
-            if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
-                try {
-                    $redis = $this->cache_manager->get_raw_client();
-                    if ($redis && method_exists($redis, 'flushDB')) {
-                        $redis->flushDB();
-                        if (defined('WP_DEBUG') && WP_DEBUG) {
-                            error_log('AceRedisCache: Complete Redis flush after post update ID=' . $post_id);
-                        }
-                        return;
-                    }
-                } catch (\Throwable $e) {
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        error_log('AceRedisCache: Redis flush failed: ' . $e->getMessage());
-                    }
-                }
+            // Broad = wipe THIS SITE's caches only. (This used to flushDB / scan bare
+            // page_cache:*/ace:* prefixes, which nuked every site sharing the Redis DB.)
+            if (function_exists('wp_cache_flush')) {
+                wp_cache_flush(); // drop-in flush is namespace-scoped to this site
             }
-            
-            // Fallback to clearing all cache namespaces if flushDB not available
-            $prefixes = ['page_cache:', 'page_cache_min:', 'page_cache_meta:', 'block_cache:', 'ace:'];
-            foreach ($prefixes as $prefix) {
-                $keys = $this->cache_manager->scan_keys($prefix . '*');
-                if (!empty($keys)) {
-                    $this->cache_manager->delete_keys_chunked($keys, 1000);
-                }
+            if ($this->cache_manager && method_exists($this->cache_manager, 'clear_all_cache')) {
+                $this->cache_manager->clear_all_cache(); // host-scoped page patterns
             }
             if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('AceRedisCache: Complete cache purge after post update ID=' . $post_id);
+                error_log('AceRedisCache: broad (site-scoped) cache purge after post update ID=' . $post_id);
             }
             return;
         }

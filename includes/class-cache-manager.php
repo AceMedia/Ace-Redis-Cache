@@ -38,10 +38,31 @@ class CacheManager {
      *
      * @return array Associative array label => prefix (without wildcard)
      */
+    /**
+     * This site's normalized host (as embedded in every page-cache key). Mirrors
+     * AceRedisCache::normalize_cache_host(): lowercase, port stripped.
+     */
+    private function site_page_host() {
+        $host = strtolower(trim((string) (parse_url(home_url('/'), PHP_URL_HOST) ?: '')));
+        return $host === '' ? '' : (preg_replace('/:\d+$/', '', $host) ?: '');
+    }
+
+    /**
+     * Scope a page-key prefix to THIS site. Page keys embed the host
+     * (prefix + path:scheme:device:HOST:vN), but broad purges/stats used bare
+     * "prefix*" patterns — on a shared Redis DB that reads AND DELETES every
+     * site's pages. Callers append '*', so return "prefix*:host:v".
+     */
+    private function scoped_page_prefix($prefix) {
+        $host = $this->site_page_host();
+        return $host === '' ? $prefix : $prefix . '*:' . $host . ':v';
+    }
+
     private function get_reporting_prefixes() {
         $prefixes = [
-            'page' => $this->cache_prefix,
-            'minified' => $this->minified_cache_prefix,
+            'page' => $this->scoped_page_prefix($this->cache_prefix),
+            'minified' => $this->scoped_page_prefix($this->minified_cache_prefix),
+            'meta' => $this->scoped_page_prefix('page_cache_meta:' . $this->cache_prefix),
             'blocks' => 'block_cache:',
         ];
         
@@ -428,8 +449,9 @@ class CacheManager {
      */
     public function get_memory_usage_breakdown() {
         $prefixes = [
-            'page' => $this->cache_prefix,
-            'minified' => $this->minified_cache_prefix,
+            'page' => $this->scoped_page_prefix($this->cache_prefix),
+            'minified' => $this->scoped_page_prefix($this->minified_cache_prefix),
+            'meta' => $this->scoped_page_prefix('page_cache_meta:' . $this->cache_prefix),
             'blocks' => 'block_cache:',
         ];
         // Only consider transients if this feature is enabled in settings
@@ -1034,8 +1056,8 @@ class CacheManager {
         }
         
         // Get all cache keys (both regular and minified)
-        $regular_keys = $redis->keys($this->cache_prefix . '*');
-        $minified_keys = $redis->keys($this->minified_cache_prefix . '*');
+        $regular_keys = $redis->keys($this->scoped_page_prefix($this->cache_prefix) . '*');
+        $minified_keys = $redis->keys($this->scoped_page_prefix($this->minified_cache_prefix) . '*');
         
         $all_keys = array_merge($regular_keys ?: [], $minified_keys ?: []);
         

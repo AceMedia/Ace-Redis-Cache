@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Ace Redis Cache
  * Description: Smart Redis-powered caching with WordPress Block API support and configurable exclusions for any plugins.
- * Version: 0.7.0
+ * Version: 0.7.1
  * Author: Ace Media
  * Requires at least: 5.0
  * Tested up to: 6.4
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ACE_REDIS_CACHE_VERSION', '0.7.0');
+define('ACE_REDIS_CACHE_VERSION', '0.7.1');
 define('ACE_REDIS_CACHE_PLUGIN_FILE', __FILE__);
 define('ACE_REDIS_CACHE_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('ACE_REDIS_CACHE_PLUGIN_URL', plugin_dir_url(__FILE__));

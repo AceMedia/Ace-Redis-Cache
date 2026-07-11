@@ -3431,11 +3431,21 @@ class AceRedisCache {
             return $content;
         }
         $skip = (int) apply_filters('ace_rc_lazy_skip_first', 3);
+        // Never lazy a product's primary visuals: WooCommerce single/gallery images and
+        // cover backgrounds sit above the fold, and lazying them bypasses the browser's
+        // preload scanner — they visibly pop in late (worst on high-latency connections).
+        $exclude = (string) apply_filters(
+            'ace_rc_lazy_exclude_pattern',
+            'woocommerce_single|woocommerce-product-gallery|wp-post-image|wp-block-cover__image|custom-logo|attachment-shop_single'
+        );
         $seen = 0;
-        return (string) preg_replace_callback('/<img\b[^>]*>/i', function ($m) use (&$seen, $skip) {
+        return (string) preg_replace_callback('/<img\b[^>]*>/i', function ($m) use (&$seen, $skip, $exclude) {
             $tag = $m[0];
             $seen++;
             if ($seen <= $skip || false !== stripos($tag, 'loading=')) {
+                return $tag;
+            }
+            if ('' !== $exclude && preg_match('/class="[^"]*(?:' . $exclude . ')/i', $tag)) {
                 return $tag;
             }
             $add = ' loading="lazy"' . (false === stripos($tag, 'decoding=') ? ' decoding="async"' : '');

@@ -419,8 +419,31 @@ class AdminInterface {
                             </label>
                         </td>
                     </tr>
+
+                    <tr>
+                        <th scope="row">Smart WooCommerce Caching</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_smart_cache]" value="1" <?php checked($this->settings['wc_smart_cache'] ?? 0); ?> />
+                                Warm the storefront &amp; serve stale-while-revalidate
+                            </label>
+                            <p class="description">Auto-active when WooCommerce is present. After any full cache clear, background-warm home, shop, the busiest product categories and best-selling products; and serve a soft-expired page instantly while it refreshes in the background.</p>
+                            <fieldset style="margin-top:8px;padding:8px 10px;border:1px solid #ccd0d4;background:#f9f9f9;max-width:640px;">
+                                <legend style="padding:0 6px;font-weight:600;">Advanced</legend>
+                                <label style="display:block;margin-bottom:6px;">
+                                    Best-selling products to warm:
+                                    <input type="number" name="ace_redis_cache_settings[wc_warm_count]" value="<?php echo esc_attr($this->settings['wc_warm_count'] ?? 20); ?>" min="0" max="100" style="width:80px;" />
+                                </label>
+                                <label style="display:block;">
+                                    Stale-while-revalidate grace (seconds past TTL):
+                                    <input type="number" name="ace_redis_cache_settings[page_cache_grace]" value="<?php echo esc_attr($this->settings['page_cache_grace'] ?? 3600); ?>" min="0" max="86400" style="width:100px;" />
+                                </label>
+                                <p class="description" style="margin:6px 0 0;">Grace 0 disables stale-while-revalidate (pages expire hard at TTL). Warm count 0 disables product warming.</p>
+                            </fieldset>
+                        </td>
+                    </tr>
                 </table>
-                
+
                 <h2>Connection Test</h2>
                 <table class="form-table">
                     <tr>
@@ -616,6 +639,10 @@ class AdminInterface {
         $sanitized['wc_cache_url_exclusions'] = !empty($input['wc_cache_url_exclusions']) ? 1 : 0;
         $sanitized['wc_gla_disable_notification_pill'] = !empty($input['wc_gla_disable_notification_pill']) ? 1 : 0;
         $sanitized['wc_disable_blocks_animation_translate'] = !empty($input['wc_disable_blocks_animation_translate']) ? 1 : 0;
+        // Smart WooCommerce caching (warm-on-flush + stale-while-revalidate).
+        $sanitized['wc_smart_cache'] = !empty($input['wc_smart_cache']) ? 1 : 0;
+        $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
+        $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
         $sanitized['wc_variation_threshold'] = max(1, min(100, (int) ($input['wc_variation_threshold'] ?? 15)));
         $sanitized['wc_action_scheduler_time_limit'] = max(5, min(120, (int) ($input['wc_action_scheduler_time_limit'] ?? 15)));
         $sanitized['wc_action_scheduler_batch_size'] = max(1, min(100, (int) ($input['wc_action_scheduler_batch_size'] ?? 10)));

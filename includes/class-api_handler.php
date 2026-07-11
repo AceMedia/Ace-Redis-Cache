@@ -1704,6 +1704,10 @@ class API_Handler {
     $sanitized['wc_variation_threshold'] = max(1, min(100, (int) ($input['wc_variation_threshold'] ?? 15)));
     $sanitized['wc_action_scheduler_time_limit'] = max(5, min(120, (int) ($input['wc_action_scheduler_time_limit'] ?? 15)));
     $sanitized['wc_action_scheduler_batch_size'] = max(1, min(100, (int) ($input['wc_action_scheduler_batch_size'] ?? 10)));
+    // Smart WooCommerce caching (warm-on-flush + stale-while-revalidate).
+    $sanitized['wc_smart_cache'] = !empty($input['wc_smart_cache']) ? 1 : 0;
+    $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
+    $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
 
         // Optional compression level overrides
         if (isset($input['brotli_level_object'])) $sanitized['brotli_level_object'] = intval($input['brotli_level_object']);

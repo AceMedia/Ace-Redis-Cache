@@ -28,9 +28,13 @@ if (preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $
     return;
 }
 
-if (!empty($_COOKIE) && defined('LOGGED_IN_COOKIE')) {
+// LOGGED_IN_COOKIE is NOT defined this early (wp-settings defines cookie constants
+// after advanced-cache loads), so a constant-gated check is dead code — which served
+// cached guest pages to logged-in users the moment early-serve went live. Match the
+// literal WP auth-cookie prefixes instead; they are stable across WP versions.
+if (!empty($_COOKIE)) {
     foreach (array_keys($_COOKIE) as $cookie_name) {
-        if (strpos($cookie_name, LOGGED_IN_COOKIE) === 0) {
+        if (preg_match('/^(wordpress_logged_in_|wordpress_sec_|wordpressuser_|wp-postpass_|comment_author_)/', (string) $cookie_name)) {
             return;
         }
     }

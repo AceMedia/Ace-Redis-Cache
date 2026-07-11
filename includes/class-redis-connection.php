@@ -147,7 +147,16 @@ class RedisConnection {
                         return null;
                     }
                 }
-                
+
+                // Select the per-site logical DB. ACE_REDIS_DB (a wp-config constant, read pre-boot)
+                // is canonical so this page-cache connection, the object-cache drop-in, and
+                // advanced-cache all land in the SAME database for this site; the settings value is a
+                // fallback for admin/CLI contexts. DB 0 = shared default (no SELECT needed).
+                $ace_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : (int) ($this->settings['database'] ?? 0);
+                if ($ace_db > 0) {
+                    try { $this->redis->select($ace_db); } catch (\Throwable $t) { /* stays on db0 */ }
+                }
+
                 // Test the connection
                 if (!$this->redis->ping()) {
                     $this->record_redis_issue();

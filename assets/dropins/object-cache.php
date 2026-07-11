@@ -583,6 +583,13 @@ if (!class_exists('WP_Object_Cache')) {
                 if (!empty($pass)) { @ $this->redis->auth($pass); }
                 try { $this->redis->client('SETNAME', 'ace-object-cache'); } catch (\Throwable $t) {}
 
+                // Per-site logical DB. ACE_REDIS_DB (wp-config constant) keeps this object-cache
+                // connection, the page-cache connection, and advanced-cache in the SAME database for
+                // this site. This IS the shared connection advanced-cache and the token-publish reuse,
+                // so selecting here means the pre-boot early-serve reads hit the right DB too.
+                $ace_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : 0;
+                if ($ace_db > 0) { try { $this->redis->select($ace_db); } catch (\Throwable $t) {} }
+
                 $this->connected = true;
                 $ace_redis_shared_connection = $this->redis;
             } catch (\Throwable $e) {

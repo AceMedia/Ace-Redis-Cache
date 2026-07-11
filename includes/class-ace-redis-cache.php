@@ -1521,7 +1521,7 @@ class AceRedisCache {
         // the site_version and the global key suffix (the filter-appended ace-te-*/ace-pc-hl-* parts,
         // which are version-based and identical for every URL at a given moment). advanced-cache runs
         // pre-plugins so it can't run the filter itself. (#4 early-serve groundwork.)
-        $this->maybe_publish_page_key_inputs((int) $version, array_slice($key_parts, $base_count));
+        $this->maybe_publish_page_key_inputs((int) $version, $host, array_slice($key_parts, $base_count));
 
         return implode(':', $key_parts);
     }
@@ -1532,7 +1532,7 @@ class AceRedisCache {
      * plain strings (advanced-cache reads with no serializer, pre-WP). Once per request — the suffix is
      * global, so storing it on the request that (re)builds a key keeps it current across version bumps.
      */
-    private function maybe_publish_page_key_inputs($version, array $suffix_parts) {
+    private function maybe_publish_page_key_inputs($version, $host, array $suffix_parts) {
         static $done = false;
         if ($done) {
             return;
@@ -1549,8 +1549,15 @@ class AceRedisCache {
             if (!$redis) {
                 return;
             }
-            $redis->rawCommand('SET', 'ace:1:pagekey:site_version', (string) $version);
-            $redis->rawCommand('SET', 'ace:1:pagekey:suffix', implode(':', $suffix_parts));
+            // Namespace the published tokens per host. These land in the SHARED object-cache
+            // keyspace (ace:1:*) that EVERY site on this Redis writes to, so an un-namespaced key
+            // let the last site to (re)build a page clobber every other site's suffix — silently
+            // breaking their early-serve the moment any site appended a non-empty filter suffix.
+            // The host segment (same normalisation as the drop-in reader) keeps each site's inputs
+            // independent. Legacy un-namespaced keys are left to expire naturally.
+            $ns = 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '');
+            $redis->rawCommand('SET', $ns . 'site_version', (string) $version);
+            $redis->rawCommand('SET', $ns . 'suffix', implode(':', $suffix_parts));
         } catch (\Throwable $t) {
             // Non-fatal: advanced-cache just stays in dark-launch MISS until the keys exist.
         }
@@ -1560,6 +1567,15 @@ class AceRedisCache {
         if ($this->site_cache_version !== null) {
             return (int) $this->site_cache_version;
         }
+        // NOTE: the 'version' group is NOT in the object-cache drop-in's persistent-group
+        // whitelist, so site_version is request-local and effectively pinned at 0. That is
+        // deliberate here: every page key embeds ':v<version>', so a live-incrementing version
+        // would invalidate the WHOLE page cache by orphaning (old-version keys linger until TTL) —
+        // identical cache-cold effect to the host-scoped broad purge we already run on save, but
+        // trading active deletion for lingering memory on a shared, memory-bound Redis. Full
+        // invalidation is handled by clear_all_cache()/maybe_invalidate_related_archive_page_cache,
+        // NOT by this counter. Do not make 'version' persistent without also making only aggregate
+        // (listing/archive) keys version-scoped — otherwise it becomes a memory leak.
         $version = 0;
         try { $version = (int) wp_cache_get('site_version', 'version'); } catch (\Throwable $t) { $version = 0; }
         $this->site_cache_version = $version;

@@ -155,8 +155,12 @@ try {
     // The suffix carries the global ace-te-*/ace-pc-hl-* key parts the writer appends via filter.
     // Use === false (key absent), NOT a falsy/!is_string check: site_version is legitimately "0" on
     // this site, and the suffix can be an empty string — both are valid published values.
-    $site_version = $redis->get('ace:1:pagekey:site_version');
-    $suffix = $redis->get('ace:1:pagekey:suffix');
+    // Tokens are namespaced per host (the plugin writes ace:1:pagekey:{host}:*) so sites sharing
+    // this Redis can't clobber each other's suffix. $host here is the same normalised HTTP_HOST the
+    // plugin derives via normalize_cache_host, so the segments match.
+    $token_ns = 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '');
+    $site_version = $redis->get($token_ns . 'site_version');
+    $suffix = $redis->get($token_ns . 'suffix');
     if ($site_version === false || $suffix === false) {
         $emit('MISS no-tokens');
         return;

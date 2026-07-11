@@ -442,6 +442,17 @@ class AdminInterface {
                             </fieldset>
                         </td>
                     </tr>
+
+                    <tr>
+                        <th scope="row">Lazy-load Images</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="ace_redis_cache_settings[optimize_lazy_images]" value="1" <?php checked($this->settings['optimize_lazy_images'] ?? 0); ?> />
+                                Add <code>loading="lazy"</code> to images at page-cache store time
+                            </label>
+                            <p class="description">Applies to cached pages only, skips the first few (above-fold) images and any image that already sets <code>loading</code>. Zero per-request cost.</p>
+                        </td>
+                    </tr>
                 </table>
 
                 <h2>Connection Test</h2>
@@ -643,6 +654,7 @@ class AdminInterface {
         $sanitized['wc_smart_cache'] = !empty($input['wc_smart_cache']) ? 1 : 0;
         $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
         $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
+        $sanitized['optimize_lazy_images'] = !empty($input['optimize_lazy_images']) ? 1 : 0;
         $sanitized['wc_variation_threshold'] = max(1, min(100, (int) ($input['wc_variation_threshold'] ?? 15)));
         $sanitized['wc_action_scheduler_time_limit'] = max(5, min(120, (int) ($input['wc_action_scheduler_time_limit'] ?? 15)));
         $sanitized['wc_action_scheduler_batch_size'] = max(1, min(100, (int) ($input['wc_action_scheduler_batch_size'] ?? 10)));

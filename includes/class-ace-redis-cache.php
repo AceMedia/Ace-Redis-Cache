@@ -137,6 +137,7 @@ class AceRedisCache {
             'wc_smart_cache' => 1,      // master toggle for warm-on-flush + stale-while-revalidate
             'wc_warm_count' => 20,      // how many best-selling products to background-warm
             'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
+            'optimize_lazy_images' => 1, // add loading="lazy" to <img> at page-cache store time
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
             'send_cache_meta_headers' => 0,
@@ -209,6 +210,7 @@ class AceRedisCache {
             'wc_smart_cache' => 1,      // master toggle for warm-on-flush + stale-while-revalidate
             'wc_warm_count' => 20,      // how many best-selling products to background-warm
             'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
+            'optimize_lazy_images' => 1, // add loading="lazy" to <img> at page-cache store time
             'dynamic_excluded_blocks' => 1,
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
@@ -1028,6 +1030,7 @@ class AceRedisCache {
                 }
             }
             $content = $this->rewrite_image_urls_for_cache_busting($content);
+            $content = $this->inject_lazy_loading($content);
             // Build cache version separate from user output if we have placeholders
             $cache_version = $content;
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -3414,6 +3417,30 @@ class AceRedisCache {
 
         wp_safe_redirect($redirect_target, 302);
         exit;
+    }
+
+    /**
+     * Add loading="lazy" + decoding="async" to <img> tags that declare neither, skipping
+     * the first few images (likely above the fold — a lazy hero hurts LCP). Runs once at
+     * page-cache STORE time, so the cached copy carries the attributes at zero per-request
+     * cost. Images that already set loading= (e.g. eager heroes) are left untouched.
+     * Toggle: optimize_lazy_images (default on).
+     */
+    private function inject_lazy_loading($content) {
+        if (empty($this->settings['optimize_lazy_images']) || !is_string($content) || $content === '') {
+            return $content;
+        }
+        $skip = (int) apply_filters('ace_rc_lazy_skip_first', 3);
+        $seen = 0;
+        return (string) preg_replace_callback('/<img\b[^>]*>/i', function ($m) use (&$seen, $skip) {
+            $tag = $m[0];
+            $seen++;
+            if ($seen <= $skip || false !== stripos($tag, 'loading=')) {
+                return $tag;
+            }
+            $add = ' loading="lazy"' . (false === stripos($tag, 'decoding=') ? ' decoding="async"' : '');
+            return preg_replace('/<img\b/i', '<img' . $add, $tag, 1);
+        }, $content);
     }
 
     private function rewrite_image_urls_for_cache_busting($content) {

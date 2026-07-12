@@ -297,7 +297,11 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
-            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest);
+            // Anonymous public AJAX is cache-eligible (see $is_anon_public_ajax above): it must be
+            // allowed to initialise Redis, otherwise init_redis() is skipped and every wp_cache write
+            // in the request silently falls back to runtime-only — the same no-op the editor_bypass
+            // override above was meant to prevent. Keep genuine admin/REST/logged-in ajax excluded.
+            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !$is_anon_public_ajax;
 
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');

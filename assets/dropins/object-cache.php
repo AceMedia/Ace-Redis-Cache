@@ -10,6 +10,47 @@
 
 if (!defined('ABSPATH')) { exit; }
 
+if (!function_exists('ace_oc_is_public_ajax')) {
+    /**
+     * True for anonymous, non-mutating requests to admin-ajax.php / admin-post.php — the two
+     * wp-admin endpoints that serve PUBLIC (wp_ajax_nopriv / admin_post_nopriv) traffic.
+     *
+     * Such requests are cacheable exactly like an anonymous front-end GET, but their /wp-admin/
+     * URL otherwise makes every layer of this drop-in treat them as editorial and skip Redis, so
+     * any wp_cache write in a nopriv handler (e.g. Ace-Community-Events' event feed + venue/event
+     * detail) silently never persisted. This ONE predicate is the authoritative classifier shared
+     * by the top-of-file bypass and the constructor's request classification so they can't drift.
+     * It uses only super-globals (available before WP boots).
+     *
+     * Escape hatch: define ACE_OC_NO_PUBLIC_AJAX truthy in wp-config to force the old behaviour.
+     */
+    function ace_oc_is_public_ajax() {
+        if (defined('ACE_OC_NO_PUBLIC_AJAX') && ACE_OC_NO_PUBLIC_AJAX) { return false; }
+
+        $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        if ($method !== 'GET' && $method !== 'HEAD') { return false; } // POST ajax = mutation
+
+        $uri    = $_SERVER['REQUEST_URI'] ?? '';
+        $script = $_SERVER['SCRIPT_NAME'] ?? '';
+        $is_ep  = (strpos($uri, 'admin-ajax.php') !== false || strpos($script, 'admin-ajax.php') !== false
+                || strpos($uri, 'admin-post.php') !== false || strpos($script, 'admin-post.php') !== false);
+        if (!$is_ep) { return false; }
+
+        // Anonymous only: no WP auth cookie, no WooCommerce customer session (cart-bearing guests
+        // render dynamic markup). Cookie-name prefixes are stable across WP/Woo versions.
+        $dynamic_prefixes = [
+            'wordpress_logged_in_', 'wordpress_sec_', 'wordpressuser_', 'wp-postpass_',
+            'wp_woocommerce_session_', 'woocommerce_items_in_cart', 'woocommerce_cart_hash',
+        ];
+        foreach (array_keys($_COOKIE) as $ck) {
+            foreach ($dynamic_prefixes as $p) {
+                if (strpos((string) $ck, $p) === 0) { return false; }
+            }
+        }
+        return true;
+    }
+}
+
 $uri    = $_SERVER['REQUEST_URI']  ?? '';
 $script = $_SERVER['SCRIPT_NAME']  ?? '';
 $php    = $_SERVER['PHP_SELF']     ?? '';
@@ -24,8 +65,9 @@ $is_admin_req = (
 // If you truly want to stop the entire request for admin pages (not recommended), uncomment:
 // if ($is_admin_req) { exit; }
 
-// Safer: just force cache bypass for admin/login requests.
-if ($is_admin_req && !defined('ACE_OC_BYPASS')) {
+// Safer: just force cache bypass for admin/login requests — EXCEPT anonymous public AJAX, which is
+// real guest traffic served through admin-ajax.php and must stay cache-eligible (see helper above).
+if ($is_admin_req && !ace_oc_is_public_ajax() && !defined('ACE_OC_BYPASS')) {
     define('ACE_OC_BYPASS', true);
 }
 
@@ -263,6 +305,10 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             $editor_bypass   = ($is_admin_by_url || $is_ajax || $is_admin_req || $is_logged_in_fn || $is_logged_in_cookie || $is_rest || $is_update_operation || $is_wc_customer_session_request);
+            // Anonymous public AJAX (admin-ajax.php nopriv, GET, no auth/wc cookie) is guest traffic,
+            // not editorial — keep it cache-eligible. Shared classifier so gate 1 (top-of-file),
+            // this, and the init gate below never disagree. The filter still has final say.
+            if (ace_oc_is_public_ajax()) { $editor_bypass = false; }
             $editor_bypass   = apply_filters('ace_rc_object_cache_bypass', $editor_bypass, [
                 'is_admin_url'  => $is_admin_by_url,
                 'is_ajax'       => $is_ajax,
@@ -279,7 +325,9 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
-            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest);
+            // Anonymous public AJAX stays cache-eligible so init_redis() actually runs for it
+            // (same shared classifier as the two bypass gates above).
+            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax();
 
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');

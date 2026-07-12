@@ -179,6 +179,7 @@ if (!class_exists('WP_Object_Cache')) {
         protected $suspend_persistent_writes = false;
         protected $request_context = [];
         protected $runtime_only_mode = false;
+        protected $wc_read_mode = false; // cart/checkout: read shared groups from Redis, never persist
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
         protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
         protected $persistent_groups = self::PERSISTENT_GROUPS_DEFAULT;
@@ -318,7 +319,20 @@ if (!class_exists('WP_Object_Cache')) {
                 'is_wc_customer_session_request' => $is_wc_customer_session_request,
             ]);
             if ($editor_bypass || $this->suspend_persistent_writes) { $this->bypass = true; }
-            if ($editor_bypass) {
+
+            // WC shared-read mode (opt-in via ACE_OC_WC_READ). Cart/checkout/Store-API requests are
+            // session-bearing, so they bypass PERSISTENCE (bypass stays true — nothing cart-specific is
+            // ever written to Redis, and sessions stay DB-backed via the woocommerce_sessions bypass
+            // group). But without help they also skip Redis ENTIRELY and re-run ~150 queries per request
+            // for shared data (products/options/terms/shipping/tax) that front-end traffic already
+            // cached. Read-mode lets them CONNECT and READ those shared persistent groups from Redis
+            // while still not persisting — collapsing the query storm to cache hits. Product/price
+            // freshness equals the front end (same object-cache invalidation on save). Default OFF.
+            $wc_read_mode = $is_wc_customer_session_request
+                && defined('ACE_OC_WC_READ') && ACE_OC_WC_READ;
+            $this->wc_read_mode = $wc_read_mode;
+
+            if ($editor_bypass && !$wc_read_mode) {
                 $this->runtime_only_mode = true;
                 if (!defined('ACE_OC_RUNTIME_ONLY')) {
                     define('ACE_OC_RUNTIME_ONLY', true);
@@ -327,7 +341,7 @@ if (!class_exists('WP_Object_Cache')) {
 
             // Anonymous public AJAX stays cache-eligible so init_redis() actually runs for it
             // (same shared classifier as the two bypass gates above).
-            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax();
+            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax() && !$wc_read_mode;
 
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
@@ -350,7 +364,8 @@ if (!class_exists('WP_Object_Cache')) {
 
             // Only initialize Redis for cache-eligible requests.
             // Logged-in/admin/system/bypass requests should not pay Redis bootstrap cost.
-            if (extension_loaded('redis') && !$is_admin_system_request && !$this->bypass) {
+            // WC read-mode connects despite bypass (to serve shared reads, no persistence).
+            if (extension_loaded('redis') && !$is_admin_system_request && (!$this->bypass || $wc_read_mode)) {
                 $this->init_redis();
             }
 
@@ -764,6 +779,10 @@ if (!class_exists('WP_Object_Cache')) {
         protected function can_persist_to_redis($group, $key = null, $allow_override = false) {
             if ($this->redis === null || !$this->connected) { return false; }
             if ($this->suspend_persistent_writes) { return false; }
+            // WC read-mode is strictly read-only: a cart/checkout request may READ shared data from
+            // Redis but must NEVER write (not even write-through groups), so no cart/order/session
+            // state can ever leak into the shared cache. The cache is warmed only by front-end traffic.
+            if ($this->wc_read_mode) { return false; }
             if ($this->is_bypass_group($group)) { return false; }
             if (!$this->is_persistent_group($group)) { return false; }
             if ($this->bypass && !$this->should_write_through($group, $key) && !$allow_override) {
@@ -963,14 +982,20 @@ if (!class_exists('WP_Object_Cache')) {
                 return false;
             }
 
-            // Special handling for site-transients: allow them even during bypass (admin)  
+            // Special handling for site-transients: allow them even during bypass (admin)
             $allow_during_bypass = ($group === 'site-transient') && !$this->suspend_persistent_writes;
-            
-            if (($this->bypass && !$allow_during_bypass) || $this->redis === null) { 
-                $found = false; 
+
+            // WC read-mode: cart/checkout bypass PERSISTENCE but may still READ shared persistent
+            // groups from Redis (products/options/terms/shipping). is_persistent_group() was already
+            // asserted above, and session/cart groups are bypass groups (returned earlier), so this
+            // only ever serves shared, front-end-cached data — never cart-specific state.
+            $allow_read = $allow_during_bypass || $this->wc_read_mode;
+
+            if (($this->bypass && !$allow_read) || $this->redis === null) {
+                $found = false;
                 $this->stat_inc('bypass_short_circuit');
                 $this->prof_log('BYPASS', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
-                return false; 
+                return false;
             }
             if ($group === 'options' && $key === 'ace_redis_cache_settings') { $found = false; return false; }
 

@@ -263,6 +263,24 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             $editor_bypass   = ($is_admin_by_url || $is_ajax || $is_admin_req || $is_logged_in_fn || $is_logged_in_cookie || $is_rest || $is_update_operation || $is_wc_customer_session_request);
+            // Anonymous public AJAX (wp_ajax_nopriv — e.g. event/venue detail, map feeds) is real
+            // guest traffic, NOT editorial: it should use AND persist the object cache like any other
+            // anonymous request. But admin-ajax.php lives under /wp-admin/ so it trips is_admin_by_url,
+            // is_admin_req and is_ajax, which forced runtime-only mode — silently making every plugin's
+            // wp_cache write in a nopriv-ajax handler a no-op. Un-set the bypass when the request is
+            // unambiguously an anonymous, non-mutating AJAX call. Logged-in, cart/session, REST and
+            // update operations still bypass exactly as before.
+            $is_anon_public_ajax = (
+                $is_ajax
+                && !$is_logged_in_fn
+                && !$is_logged_in_cookie
+                && !$is_wc_customer_session_request
+                && !$is_update_operation
+                && $request_method === 'GET'
+            );
+            if ($is_anon_public_ajax) {
+                $editor_bypass = false;
+            }
             $editor_bypass   = apply_filters('ace_rc_object_cache_bypass', $editor_bypass, [
                 'is_admin_url'  => $is_admin_by_url,
                 'is_ajax'       => $is_ajax,

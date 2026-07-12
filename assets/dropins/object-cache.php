@@ -104,6 +104,7 @@ if (!class_exists('WP_Object_Cache')) {
             // ace_oc_persistent_groups filter: that filter is applied in __construct()
             // (wp_start_object_cache, before plugins load), so a plugin add_filter() is too late.
             'ace_te', // ace-teams-events per-post event context (build_post_event_context)
+            'ace_events', // Ace-Community-Events feed + venue/event detail cache (versioned, self::cache_get)
         ];
 
         protected $redis;

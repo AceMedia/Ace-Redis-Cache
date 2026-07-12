@@ -74,6 +74,16 @@ class WooCommercePerformance {
             });
         }
 
+        // Stop the async in-request loopback queue runner. Action Scheduler otherwise fires a
+        // blocking loopback HTTP request on front-end shutdown whenever actions are pending, which
+        // pins an FPM worker for the whole batch — the recurring sleep()+curl_exec 5s+ slowlog
+        // traces on WooCommerce sites. Jobs still run off the request path via the
+        // action_scheduler_run_queue cron hook (WP-Cron, or better a dedicated
+        // `wp action-scheduler run` system cron). NEVER disable under WP-CLI: that IS the runner.
+        if ($this->setting('wc_disable_async_action_runner', true) && !(defined('WP_CLI') && WP_CLI)) {
+            add_filter('action_scheduler_allow_async_request_runner', '__return_false');
+        }
+
         if ($this->setting('wc_skip_children_on_archives', true)) {
             add_filter('woocommerce_get_children', function ($children, $product, $visible_only) {
                 if (!did_action('wp')) {

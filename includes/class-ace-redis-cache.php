@@ -1151,7 +1151,12 @@ class AceRedisCache {
         if ($browser_cache) {
             $max_age = intval($this->settings['browser_cache_max_age'] ?? ($this->settings['ttl_page'] ?? 3600));
             $max_age = max(60, min(604800, $max_age));
-            if ($state === 'hit') {
+            // Never let a browser pin a redirect: a 301 cached client-side for a week
+            // keeps sending visitors to a stale destination long after the site moves
+            // a URL (and no server-side purge can reach their cache).
+            if (http_response_code() >= 300) {
+                header('Cache-Control: no-cache, max-age=0');
+            } elseif ($state === 'hit') {
                 header('Cache-Control: public, max-age=' . $max_age . ', s-maxage=' . $max_age);
                 header('Expires: ' . gmdate('D, d M Y H:i:s', $now + $max_age) . ' GMT');
             } else { // miss -> conservative so intermediaries wait for populated version

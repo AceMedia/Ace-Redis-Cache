@@ -104,6 +104,19 @@ if (!class_exists('WP_Object_Cache')) {
         private const MAX_VALUE_BYTES_DEFAULT = 65536;
         private const MAX_VALUE_BYTES_WC = 32768;
 
+        // Per-group ceilings that override the general guard. The general 64KB cap
+        // exists to catch accidental bloat (full WP_Post dumps, runaway transients),
+        // but some first-party groups legitimately store one large computed payload:
+        // Ace-Community-Events caches its ENTIRE feed window (~1k events, several MB
+        // serialised) under one versioned key so paged AJAX requests slice it instead
+        // of re-running the query per page. Local Redis handles values this size in
+        // single-digit ms; without the override the write is silently skipped and
+        // every feed request repays the full multi-second compute.
+        private const MAX_VALUE_BYTES_BY_GROUP = [
+            'ace_events' => 8388608, // 8MB
+            'ace_te'     => 1048576, // 1MB
+        ];
+
         // On-wire format version. Every value we persist is wrapped as
         // ['__aceoc'=>WIRE_VERSION,'d'=>data] so reads can reject anything we did
         // not write (foreign serializer/compression, stale-format keys from a prior
@@ -395,7 +408,7 @@ if (!class_exists('WP_Object_Cache')) {
             return in_array($g, (array) $this->persistent_groups, true);
         }
 
-        protected function exceeds_max_value_size($data) {
+        protected function exceeds_max_value_size($data, $group = null) {
             if ($data === null) {
                 return false;
             }
@@ -411,7 +424,12 @@ if (!class_exists('WP_Object_Cache')) {
                 return false;
             }
 
-            return strlen($payload) > (int) $this->max_value_bytes;
+            // First-party large-payload groups get their own ceiling (see const docs).
+            $limit = ($group !== null && isset(self::MAX_VALUE_BYTES_BY_GROUP[$group]))
+                ? self::MAX_VALUE_BYTES_BY_GROUP[$group]
+                : (int) $this->max_value_bytes;
+
+            return strlen($payload) > $limit;
         }
 
         protected function stat_inc($key, $by = 1) {
@@ -815,7 +833,7 @@ if (!class_exists('WP_Object_Cache')) {
                 return false;
             }
 
-            if ($this->exceeds_max_value_size($data)) {
+            if ($this->exceeds_max_value_size($data, $group)) {
                 $this->stat_inc('oversize_skips');
                 if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
                 return false;
@@ -858,7 +876,7 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             $is_bypass_group = $this->is_bypass_group($group);
-            $is_oversize = $this->exceeds_max_value_size($data);
+            $is_oversize = $this->exceeds_max_value_size($data, $group);
 
             if ($is_bypass_group || $is_oversize) {
                 if ($this->is_bypass_group($group)) {

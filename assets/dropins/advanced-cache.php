@@ -190,8 +190,23 @@ try {
         return;
     }
 
+    // Unwrap whatever serializer the host's phpredis is configured with. We read with
+    // no serializer set (there is no WordPress here to ask), so a site whose connection
+    // uses PHP or igbinary hands us the wrapped bytes rather than the marker string.
+    //
+    // This is read tolerance only — nothing about how entries are written changes — so
+    // it is safe on any setup: sites already storing raw strings fall straight through,
+    // and sites on either serializer now decode instead of being treated as foreign.
     if (preg_match('/^s:\d+:/', $payload) === 1) {
         $decoded = @unserialize($payload);
+        if (is_string($decoded)) {
+            $payload = $decoded;
+        }
+    } elseif (strncmp($payload, "\x00\x00\x00\x02", 4) === 0 && function_exists('igbinary_unserialize')) {
+        // igbinary's header is a 4-byte format version. Only attempt it when the
+        // extension is actually loaded, otherwise leave the payload alone and let the
+        // marker check below fail cleanly into 'MISS undecodable'.
+        $decoded = @igbinary_unserialize($payload);
         if (is_string($decoded)) {
             $payload = $decoded;
         }

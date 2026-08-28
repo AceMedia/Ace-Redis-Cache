@@ -24,6 +24,7 @@ import SaveBar from './components/SaveBar.js';
             // State for Plugin Memory auto-fetch toggle and fetch in-flight guard
             this.pluginMemoryAuto = false;
             this.pluginMemoryFetching = false;
+            this.cachePurgePoller = null;
             // Timestamp when transient cache was (re)enabled to allow warm-up grace
             this.transientEnableTs = null;
             this.init();
@@ -656,6 +657,103 @@ import SaveBar from './components/SaveBar.js';
                 e.preventDefault();
                 this.clearAllCache();
             });
+
+            this.loadCachePurgeStatus(false);
+        }
+
+        formatCachePurgeStatus(data) {
+            if (!data || data.status === 'idle') {
+                return '';
+            }
+
+            const status = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+            const patterns = parseInt(data.patterns, 10) || 0;
+            const patternIndex = Math.min(parseInt(data.pattern_index, 10) || 0, patterns);
+            const deleted = parseInt(data.deleted, 10) || 0;
+            const runs = parseInt(data.runs, 10) || 0;
+            const parts = [`${status}`];
+
+            if (patterns > 0) {
+                parts.push(`patterns ${patternIndex}/${patterns}`);
+            }
+            parts.push(`${deleted} keys removed`);
+            if (runs > 0) {
+                parts.push(`${runs} batch${runs === 1 ? '' : 'es'}`);
+            }
+            if (data.error) {
+                parts.push(data.error);
+            }
+
+            return parts.join(' · ');
+        }
+
+        updateCachePurgeStatus(data) {
+            const $status = $('#ace-redis-cache-purge-status');
+            if (!$status.length) {
+                return;
+            }
+
+            const text = this.formatCachePurgeStatus(data);
+            $status
+                .removeClass('is-running is-complete is-failed')
+                .toggle(!!text)
+                .text(text);
+
+            if (!text) {
+                return;
+            }
+
+            if (data.status === 'complete') {
+                $status.addClass('is-complete');
+            } else if (data.status === 'failed') {
+                $status.addClass('is-failed');
+            } else {
+                $status.addClass('is-running');
+            }
+        }
+
+        startCachePurgePolling() {
+            if (this.cachePurgePoller) {
+                clearInterval(this.cachePurgePoller);
+            }
+
+            this.cachePurgePoller = setInterval(() => {
+                this.loadCachePurgeStatus(true);
+            }, 3000);
+        }
+
+        stopCachePurgePolling() {
+            if (this.cachePurgePoller) {
+                clearInterval(this.cachePurgePoller);
+                this.cachePurgePoller = null;
+            }
+        }
+
+        loadCachePurgeStatus(continuePolling = false) {
+            $.ajax({
+                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache/status",
+                type: 'GET',
+                beforeSend: function(xhr) {
+                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                }
+            })
+                .done((response) => {
+                    if (!response || !response.success) {
+                        return;
+                    }
+
+                    const data = response.data || {};
+                    this.updateCachePurgeStatus(data);
+
+                    if (data.status === 'queued' || data.status === 'running') {
+                        if (continuePolling && !this.cachePurgePoller) {
+                            this.startCachePurgePolling();
+                        }
+                        return;
+                    }
+
+                    this.stopCachePurgePolling();
+                });
         }
 
         // Clear all cache
@@ -683,7 +781,8 @@ import SaveBar from './components/SaveBar.js';
                 .done((response) => {
                     if (response.success) {
                         this.showNotification(`✅ ${response.data.message || 'Cache cleared successfully'}`, 'success');
-                        $('#ace-redis-cache-size').text('0 keys (0 KB)');
+                        this.updateCachePurgeStatus(response.data);
+                        this.startCachePurgePolling();
                     } else {
                         this.showNotification(`❌ Failed to clear cache: ${response.data}`, 'error');
                     }

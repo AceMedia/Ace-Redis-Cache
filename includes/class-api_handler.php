@@ -166,6 +166,12 @@ class API_Handler {
                 ]
             ]
         ]);
+
+        register_rest_route($this->namespace, '/flush-cache/status', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_flush_cache_status'],
+            'permission_callback' => [$this, 'check_permissions'],
+        ]);
         
         // Get cache stats endpoint
         register_rest_route($this->namespace, '/stats', [
@@ -1152,6 +1158,40 @@ class API_Handler {
                 'success' => false,
                 'message' => 'Cache flush failed: ' . $e->getMessage(),
                 'error' => 'EXCEPTION'
+            ], 500);
+        }
+    }
+
+    /**
+     * Get background cache purge status.
+     *
+     * @param \WP_REST_Request $request
+     * @return \WP_REST_Response
+     */
+    public function get_flush_cache_status($request) {
+        try {
+            if (!$this->cache_manager || !method_exists($this->cache_manager, 'get_clear_cache_job_status')) {
+                return new \WP_REST_Response([
+                    'success' => true,
+                    'data' => [
+                        'status' => 'idle',
+                        'deleted' => 0,
+                        'runs' => 0,
+                        'patterns' => 0,
+                        'pattern_index' => 0,
+                    ],
+                ], 200);
+            }
+
+            return new \WP_REST_Response([
+                'success' => true,
+                'data' => $this->cache_manager->get_clear_cache_job_status(),
+            ], 200);
+        } catch (\Exception $e) {
+            return new \WP_REST_Response([
+                'success' => false,
+                'message' => 'Cache purge status failed: ' . $e->getMessage(),
+                'error' => 'FLUSH_STATUS_FAILED',
             ], 500);
         }
     }

@@ -366,6 +366,46 @@ class CacheManager {
     }
 
     /**
+     * Get the current background clear job status.
+     *
+     * @return array Job summary.
+     */
+    public function get_clear_cache_job_status() {
+        $job = get_option($this->clear_job_option, []);
+        if (!is_array($job) || empty($job['status'])) {
+            return [
+                'status' => 'idle',
+                'type' => '',
+                'deleted' => 0,
+                'runs' => 0,
+                'patterns' => 0,
+                'pattern_index' => 0,
+                'started_at' => 0,
+                'updated_at' => 0,
+            ];
+        }
+
+        $patterns = is_array($job['patterns'] ?? null) ? count($job['patterns']) : 0;
+        $pattern_index = max(0, (int) ($job['pattern_index'] ?? 0));
+
+        if (in_array(($job['status'] ?? ''), ['queued', 'running'], true)) {
+            $this->schedule_clear_cache_job();
+        }
+
+        return [
+            'status' => (string) ($job['status'] ?? 'idle'),
+            'type' => (string) ($job['type'] ?? ''),
+            'deleted' => (int) ($job['deleted'] ?? 0),
+            'runs' => (int) ($job['runs'] ?? 0),
+            'patterns' => $patterns,
+            'pattern_index' => min($pattern_index, $patterns),
+            'started_at' => (int) ($job['started_at'] ?? 0),
+            'updated_at' => (int) ($job['updated_at'] ?? 0),
+            'error' => (string) ($job['error'] ?? ''),
+        ];
+    }
+
+    /**
      * Process one bounded cache clear batch. Intended for WP-Cron.
      *
      * @param int $max_seconds Time budget for this batch.

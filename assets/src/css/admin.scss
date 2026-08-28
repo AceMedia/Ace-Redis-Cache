@@ -306,6 +306,26 @@ $mobile-breakpoint: 768px;
             display: flex;
             flex-direction: column;
             gap: 12px; // Slightly increased gap
+
+            .cache-purge-status {
+                display: none;
+                margin: -2px 0 0;
+                color: $text-color-light;
+                font-size: 12px;
+                line-height: 1.4;
+
+                &.is-running {
+                    color: $primary-color;
+                }
+
+                &.is-complete {
+                    color: $success-color;
+                }
+
+                &.is-failed {
+                    color: $error-color;
+                }
+            }
             
             .cache-action-btn {
                 width: 100%;

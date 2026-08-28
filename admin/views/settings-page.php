@@ -284,6 +284,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                         <span class="dashicons dashicons-admin-generic"></span>
                         Clear All Cache
                     </button>
+                    <div id="ace-redis-cache-purge-status" class="cache-purge-status" aria-live="polite"></div>
                 </div>
             </div>
         </div>

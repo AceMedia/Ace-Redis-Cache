@@ -20,6 +20,8 @@ class CacheManager {
     private $cache_prefix = 'page_cache:';
     private $minified_cache_prefix = 'page_cache_min:';
     private $compression_marker_prefixes = ['br:' => 'brotli', 'gz:' => 'gzip', 'raw:' => 'raw'];
+    private $clear_job_option = 'ace_redis_cache_clear_job';
+    private $clear_job_hook = 'ace_redis_cache_process_clear_job';
 
     /**
      * Compression level filters usage examples
@@ -90,6 +92,7 @@ class CacheManager {
     public function __construct($redis_connection, $settings) {
         $this->redis_connection = $redis_connection;
         $this->settings = $settings;
+        add_action($this->clear_job_hook, [$this, 'process_clear_cache_job']);
     }
     
     /**
@@ -280,6 +283,166 @@ class CacheManager {
         
         return $total_deleted;
     }
+
+    /**
+     * Delete keys in bounded chunks, preferring Redis UNLINK when available.
+     *
+     * @param array $keys Keys to delete.
+     * @param int   $chunk_size Number of keys to delete per Redis command.
+     * @return int Number of keys deleted/unlinked.
+     */
+    private function delete_keys_non_blocking($keys, $chunk_size = 500) {
+        if (empty($keys)) {
+            return 0;
+        }
+
+        $total_deleted = 0;
+        foreach (array_chunk(array_values($keys), $chunk_size) as $chunk) {
+            $deleted = $this->redis_connection->retry_operation(function($redis) use ($chunk) {
+                try {
+                    return (int) $redis->rawCommand('UNLINK', ...$chunk);
+                } catch (\Throwable $t) {
+                    return $redis->del($chunk);
+                }
+            });
+
+            if ($deleted !== null) {
+                $total_deleted += (int) $deleted;
+            }
+        }
+
+        return $total_deleted;
+    }
+
+    /**
+     * Return Redis SCAN patterns for a cache clear type.
+     *
+     * @param string $type Clear type: all or blocks.
+     * @return array Redis match patterns.
+     */
+    private function get_clear_patterns($type = 'all') {
+        if ($type === 'blocks') {
+            return ['block_cache:*'];
+        }
+
+        $patterns = [];
+        foreach ($this->get_reporting_prefixes() as $prefix) {
+            if (is_array($prefix)) {
+                foreach ($prefix as $pfx) {
+                    $patterns[] = $pfx . '*';
+                }
+            } else {
+                $patterns[] = $prefix . '*';
+            }
+        }
+
+        return array_values(array_unique($patterns));
+    }
+
+    /**
+     * Queue a bounded background cache clear so REST requests return quickly.
+     *
+     * @param string $type Clear type: all or blocks.
+     * @return array Job summary.
+     */
+    public function start_async_cache_clear($type = 'all') {
+        $type = $type === 'blocks' ? 'blocks' : 'all';
+        $job = [
+            'status' => 'queued',
+            'type' => $type,
+            'patterns' => $this->get_clear_patterns($type),
+            'pattern_index' => 0,
+            'cursor' => null,
+            'deleted' => 0,
+            'runs' => 0,
+            'started_at' => time(),
+            'updated_at' => time(),
+        ];
+
+        update_option($this->clear_job_option, $job, false);
+        $this->schedule_clear_cache_job();
+
+        return $job;
+    }
+
+    /**
+     * Process one bounded cache clear batch. Intended for WP-Cron.
+     *
+     * @param int $max_seconds Time budget for this batch.
+     * @return array Job summary.
+     */
+    public function process_clear_cache_job($max_seconds = 15) {
+        $job = get_option($this->clear_job_option, []);
+        if (!is_array($job) || empty($job['patterns']) || !is_array($job['patterns'])) {
+            delete_option($this->clear_job_option);
+            return ['status' => 'missing'];
+        }
+
+        $redis = $this->redis_connection ? $this->redis_connection->get_connection() : null;
+        if (!$redis) {
+            $job['status'] = 'failed';
+            $job['error'] = 'Redis connection unavailable';
+            $job['updated_at'] = time();
+            update_option($this->clear_job_option, $job, false);
+            return $job;
+        }
+
+        $deadline = microtime(true) + max(1, (int) $max_seconds);
+        $patterns = array_values($job['patterns']);
+        $pattern_index = max(0, (int) ($job['pattern_index'] ?? 0));
+        $cursor = array_key_exists('cursor', $job) && $job['cursor'] !== null ? (int) $job['cursor'] : null;
+        $deleted = (int) ($job['deleted'] ?? 0);
+
+        try {
+            while ($pattern_index < count($patterns) && microtime(true) < $deadline) {
+                $pattern = $patterns[$pattern_index];
+                $scan_keys = $redis->scan($cursor, $pattern, 1000);
+
+                if ($scan_keys && is_array($scan_keys)) {
+                    $deleted += $this->delete_keys_non_blocking($scan_keys);
+                }
+
+                if ($cursor === 0 || $scan_keys === false) {
+                    $pattern_index++;
+                    $cursor = null;
+                }
+            }
+        } catch (\Throwable $t) {
+            $job['status'] = 'failed';
+            $job['error'] = $t->getMessage();
+            $job['updated_at'] = time();
+            update_option($this->clear_job_option, $job, false);
+            return $job;
+        }
+
+        $job['pattern_index'] = $pattern_index;
+        $job['cursor'] = $cursor;
+        $job['deleted'] = $deleted;
+        $job['runs'] = (int) ($job['runs'] ?? 0) + 1;
+        $job['updated_at'] = time();
+
+        if ($pattern_index >= count($patterns)) {
+            $job['status'] = 'complete';
+            update_option($this->clear_job_option, $job, false);
+            do_action('ace_rc_cache_cleared', 'async_' . ($job['type'] ?? 'all'), $deleted);
+            return $job;
+        }
+
+        $job['status'] = 'running';
+        update_option($this->clear_job_option, $job, false);
+        $this->schedule_clear_cache_job();
+
+        return $job;
+    }
+
+    /**
+     * Schedule the next background clear batch.
+     */
+    private function schedule_clear_cache_job() {
+        if (function_exists('wp_next_scheduled') && !wp_next_scheduled($this->clear_job_hook)) {
+            wp_schedule_single_event(time() + 1, $this->clear_job_hook);
+        }
+    }
     
     /**
      * Get cache statistics
@@ -340,29 +503,23 @@ class CacheManager {
      * @return array Result with count of cleared keys
      */
     public function clear_all_cache() {
-        // Collect all plugin-managed keys across prefixes
-        $all_keys = [];
-        foreach ($this->get_reporting_prefixes() as $prefix) {
-            // Prefix can be a string or an array (e.g. transients)
-            if (is_array($prefix)) {
-                foreach ($prefix as $pfx) {
-                    $all_keys = array_merge($all_keys, $this->scan_keys($pfx . '*'));
-                }
-            } else {
-                $all_keys = array_merge($all_keys, $this->scan_keys($prefix . '*'));
-            }
+        $existing_job = get_option($this->clear_job_option, []);
+        if (
+            !is_array($existing_job)
+            || empty($existing_job['patterns'])
+            || in_array(($existing_job['status'] ?? ''), ['complete', 'failed'], true)
+        ) {
+            $this->start_async_cache_clear('all');
         }
 
-        $all_keys = array_unique($all_keys);
-        $deleted_count = $this->delete_keys_chunked($all_keys);
-
-        // Let listeners (e.g. smart WooCommerce warming) react to a full cache clear.
-        do_action('ace_rc_cache_cleared', 'clear_all_cache', $deleted_count);
+        $job = $this->process_clear_cache_job(20);
+        $deleted_count = (int) ($job['deleted'] ?? 0);
 
         return [
-            'success' => true,
+            'success' => ($job['status'] ?? '') !== 'failed',
+            'status' => $job['status'] ?? 'unknown',
             'cleared' => $deleted_count,
-            'message' => sprintf('Cleared %d plugin cache keys', $deleted_count)
+            'message' => sprintf('Processed cache clear batch; %d plugin cache keys cleared so far', $deleted_count)
         ];
     }
     

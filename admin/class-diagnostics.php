@@ -86,11 +86,9 @@ class Diagnostics {
         
         // Cache statistics
         if ($connection_status['connected']) {
-            $cache_stats = $this->cache_manager->get_cache_stats();
             $diagnostics[] = "=== Cache Statistics ===";
-            $diagnostics[] = "Total Keys: " . $cache_stats['total_keys'];
-            $diagnostics[] = "Cache Keys: " . $cache_stats['cache_keys'];
-            $diagnostics[] = "Memory Usage: " . $cache_stats['memory_usage_human'];
+            $diagnostics[] = "Skipped full key/memory scan in diagnostics to keep the request responsive.";
+            $diagnostics[] = "Use the lightweight metrics endpoint or the on-demand Plugin Memory action for cache inventory.";
         }
         $diagnostics[] = "";
 

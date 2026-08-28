@@ -999,53 +999,39 @@ class API_Handler {
     public function test_connection($request) {
         try {
             $start_time = microtime(true);
-            $connection = $this->cache_manager->get_redis_connection();
-            $result = $connection->get_status();
-            $response_time = round((microtime(true) - $start_time) * 1000, 2);
-            
-            // Add response time to the result
-            if (is_array($result)) {
-                $result['response_time'] = $response_time . 'ms';
-                // Fallback: some providers (e.g., serverless Redis) restrict INFO/MEMORY and report 0 KB
-                if (!empty($result['connected'])) {
-                    $mem_unknown = empty($result['memory_usage']) || $result['memory_usage'] === 'N/A';
-                    $kb_zero = !isset($result['size_kb']) || (is_numeric($result['size_kb']) && (float)$result['size_kb'] == 0.0);
-                    if ($mem_unknown || $kb_zero) {
-                        try {
-                            $stats = $this->cache_manager->get_cache_stats();
-                            if (!empty($stats['memory_usage'])) {
-                                $plugin_kb = round($stats['memory_usage'] / 1024, 2);
-                                // Only override if we have a meaningful non-zero estimate
-                                if ($plugin_kb > 0) {
-                                    $result['size_kb'] = $plugin_kb;
-                                    // Preserve original memory_usage string if present; append hint
-                                    $hint = 'plugin memory estimate';
-                                    if (!empty($result['debug_info'])) {
-                                        $result['debug_info'] .= ' | ' . $hint;
-                                    } else {
-                                        $result['debug_info'] = $hint;
-                                    }
-                                } else {
-                                    // If still zero, at least tell the UI why
-                                    $hint = 'memory metrics restricted';
-                                    if (!empty($result['debug_info'])) {
-                                        $result['debug_info'] .= ' | ' . $hint;
-                                    } else {
-                                        $result['debug_info'] = $hint;
-                                    }
-                                }
-                            }
-                        } catch (\Exception $e) {
-                            // Ignore, leave as-is
-                        }
-                    }
-                }
-            } else {
-                $result = [
-                    'original_result' => $result,
-                    'response_time' => $response_time . 'ms'
-                ];
+            $settings_now = SettingsStore::get_settings([]);
+            if (empty($settings_now['enabled']) || !$this->cache_manager) {
+                return new \WP_REST_Response([
+                    'success' => false,
+                    'message' => 'Cache is disabled',
+                    'error' => 'CACHE_DISABLED',
+                ], 400);
             }
+
+            $connection = $this->cache_manager->get_redis_connection();
+            $redis = $connection ? $connection->get_connection() : null;
+            $response_time = round((microtime(true) - $start_time) * 1000, 2);
+
+            if (!$redis) {
+                return new \WP_REST_Response([
+                    'success' => false,
+                    'message' => 'Connection failed',
+                    'error' => 'CONNECTION_FAILED',
+                ], 500);
+            }
+
+            $ping = $redis->ping();
+            $result = [
+                'connected' => true,
+                'status' => $ping ? 'Connected' : 'Ping failed',
+                'size' => 0,
+                'size_kb' => 0,
+                'memory_usage' => 'N/A',
+                'server_type' => 'Redis',
+                'suggestions' => [],
+                'debug_info' => 'Fast ping check; memory/key inventory skipped',
+                'response_time' => $response_time . 'ms',
+            ];
             
             return new \WP_REST_Response([
                 'success' => true,
@@ -1115,7 +1101,26 @@ class API_Handler {
             }
             $type = $request->get_param('type');
             $this->clear_stats_snapshot();
-            
+
+            if (method_exists($this->cache_manager, 'start_async_cache_clear')) {
+                $job = $this->cache_manager->start_async_cache_clear($type === 'blocks' ? 'blocks' : 'all');
+                $message = $type === 'blocks'
+                    ? 'Block cache purge queued.'
+                    : 'Cache purge queued.';
+
+                return new \WP_REST_Response([
+                    'success' => true,
+                    'message' => $message,
+                    'data' => [
+                        'message' => $message,
+                        'status' => $job['status'] ?? 'queued',
+                        'type' => $job['type'] ?? ($type === 'blocks' ? 'blocks' : 'all'),
+                        'deleted' => (int) ($job['deleted'] ?? 0),
+                        'patterns' => count($job['patterns'] ?? []),
+                    ],
+                ], 202);
+            }
+
             if ($type === 'blocks') {
                 $result = $this->cache_manager->clear_block_cache();
                 $message = 'Block cache flushed successfully.';
@@ -1125,15 +1130,13 @@ class API_Handler {
             }
             
             if ($result) {
-                // Get updated stats
-                $stats = $this->cache_manager->get_cache_stats();
-                
                 return new \WP_REST_Response([
                     'success' => true,
                     'message' => $message,
                     'data' => [
-                        'cache_size' => $stats['memory_usage_human'] ?? 'Unknown',
-                        'key_count' => $stats['cache_keys'] ?? 0
+                        'message' => $message,
+                        'status' => $result['status'] ?? 'complete',
+                        'deleted' => (int) ($result['cleared'] ?? 0),
                     ]
                 ], 200);
             } else {
@@ -1252,15 +1255,22 @@ class API_Handler {
                 ], 400);
             }
             
-            // Clear all cache using the cache manager
-            $result = $this->cache_manager->clear_all_cache();
+            // Queue cache clear using the cache manager.
+            $result = method_exists($this->cache_manager, 'start_async_cache_clear')
+                ? $this->cache_manager->start_async_cache_clear('all')
+                : $this->cache_manager->clear_all_cache();
             $this->clear_stats_snapshot();
             
             return new \WP_REST_Response([
                 'success' => true,
-                'message' => 'Cache flushed successfully',
+                'message' => 'Cache purge queued',
+                'data' => [
+                    'message' => 'Cache purge queued',
+                    'status' => $result['status'] ?? 'queued',
+                    'deleted' => (int) ($result['deleted'] ?? ($result['cleared'] ?? 0)),
+                ],
                 'timestamp' => current_time('mysql')
-            ], 200);
+            ], 202);
             
         } catch (\Exception $e) {
             return new \WP_REST_Response([

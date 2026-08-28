@@ -26,7 +26,7 @@ class AceRedisCache {
     
     private $plugin_url;
     private $plugin_path; // define to avoid dynamic property deprecation
-    private $plugin_version = '0.5.0';
+    private $plugin_version = '0.7.15';
     // Debug tracking for transient flag mutation during save
     private $debug_pre_update_transient_early = null;
     
@@ -367,6 +367,7 @@ class AceRedisCache {
         add_filter('site_option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
 
         add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
+        add_action('ace_te_taxonomy_changed', [$this, 'handle_taxonomy_changed'], 10, 2);
         
         // Prime critical options after permalink or rewrite changes
         add_action('update_option_permalink_structure', [$this, 'prime_critical_options_after_permalink_change']);
@@ -412,6 +413,25 @@ class AceRedisCache {
         if (!is_admin() && $this->settings['enabled'] && $this->cache_manager) {
             $this->setup_caching_hooks();
         }
+    }
+
+    /**
+     * Queue a site-scoped page-cache purge after Ace Teams & Events term changes.
+     *
+     * @param string $taxonomy Changed taxonomy, when supplied.
+     * @param int    $term_id  Changed term ID, when supplied.
+     */
+    public function handle_taxonomy_changed($taxonomy = '', $term_id = 0) {
+        if (empty($this->settings['enable_page_cache']) || !$this->cache_manager) {
+            return;
+        }
+
+        $status = $this->cache_manager->get_clear_cache_job_status();
+        if (in_array(($status['status'] ?? ''), ['queued', 'running'], true)) {
+            return;
+        }
+
+        $this->cache_manager->start_async_cache_clear('all');
     }
     
     /**

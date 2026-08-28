@@ -40,7 +40,7 @@
 
     function pollStatus() {
         window.fetch(config.status_url, {
-            headers: { 'X-WP-Nonce': config.nonce },
+            headers: { 'X-WP-Nonce': config.rest_nonce },
             credentials: 'same-origin'
         })
             .then(function (response) { return response.json(); })
@@ -69,10 +69,10 @@
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'X-WP-Nonce': config.nonce
+                'X-WP-Nonce': config.rest_nonce
             },
             credentials: 'same-origin',
-            body: new URLSearchParams({ nonce: config.nonce, type: 'all' })
+            body: new URLSearchParams({ nonce: config.admin_nonce, type: 'all' })
         })
             .then(function (response) { return response.json(); })
             .then(function (response) {

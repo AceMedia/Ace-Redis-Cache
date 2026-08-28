@@ -100,7 +100,8 @@ class AdminInterface {
         wp_localize_script($handle, 'ace_redis_admin_bar', [
             'flush_url' => rest_url('ace-redis-cache/v1/flush-cache'),
             'status_url' => rest_url('ace-redis-cache/v1/flush-cache/status'),
-            'nonce' => wp_create_nonce('wp_rest'),
+            'rest_nonce' => wp_create_nonce('wp_rest'),
+            'admin_nonce' => wp_create_nonce('ace_redis_admin_nonce'),
         ]);
     }
     

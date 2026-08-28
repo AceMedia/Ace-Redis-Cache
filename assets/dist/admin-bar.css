@@ -1,0 +1,25 @@
+#wp-admin-bar-ace-redis-cache-flush > a {
+    display: flex !important;
+    align-items: center;
+    gap: 4px;
+}
+
+#wp-admin-bar-ace-redis-cache-flush .ace-redis-admin-bar-status {
+    display: none;
+    margin-left: 4px;
+    color: #f0f0f1;
+    font-size: 11px;
+    line-height: 1.2;
+}
+
+#wp-admin-bar-ace-redis-cache-flush .ace-redis-admin-bar-status:not(:empty) {
+    display: inline;
+}
+
+#wp-admin-bar-ace-redis-cache-flush .ace-redis-admin-bar-status.is-complete {
+    color: #68de7c;
+}
+
+#wp-admin-bar-ace-redis-cache-flush .ace-redis-admin-bar-status.is-failed {
+    color: #ff8085;
+}

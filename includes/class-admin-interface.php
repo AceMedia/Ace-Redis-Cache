@@ -43,10 +43,65 @@ class AdminInterface {
         add_action('network_admin_menu', [$this, 'network_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
+        add_action('admin_bar_menu', [$this, 'add_admin_bar_flush_item'], 100);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_bar_assets']);
+        add_action('wp_enqueue_scripts', [$this, 'enqueue_admin_bar_assets']);
         add_action('network_admin_notices', [$this, 'show_version_notice']);
         add_action('admin_notices', [$this, 'show_version_notice']);
 
         // Note: Removed update_option hook - now using AJAX save
+    }
+
+    /**
+     * Add a cache flush action for administrators with settings access.
+     *
+     * @param \WP_Admin_Bar $wp_admin_bar Admin bar instance.
+     */
+    public function add_admin_bar_flush_item($wp_admin_bar) {
+        if (!$this->current_user_can_manage()) {
+            return;
+        }
+
+        $wp_admin_bar->add_node([
+            'id' => 'ace-redis-cache-flush',
+            'title' => '<span class="ab-icon dashicons dashicons-trash"></span><span class="ab-label">Clear Redis Cache</span><span class="ace-redis-admin-bar-status" aria-live="polite"></span>',
+            'href' => '#',
+            'meta' => [
+                'title' => 'Clear Redis Cache',
+                'class' => 'ace-redis-admin-bar-flush',
+            ],
+        ]);
+    }
+
+    /**
+     * Enqueue the admin-bar cache flush control on front end and admin pages.
+     */
+    public function enqueue_admin_bar_assets() {
+        if (!$this->current_user_can_manage()) {
+            return;
+        }
+
+        $handle = 'ace-redis-cache-admin-bar';
+        $script_url = $this->plugin_url . 'assets/dist/admin-bar.min.js';
+        $script_path = dirname(__DIR__) . '/assets/dist/admin-bar.min.js';
+
+        if (!file_exists($script_path)) {
+            return;
+        }
+
+        wp_enqueue_style('dashicons');
+        wp_enqueue_style(
+            $handle,
+            $this->plugin_url . 'assets/dist/admin-bar.css',
+            [],
+            $this->plugin_version
+        );
+        wp_enqueue_script($handle, $script_url, [], $this->plugin_version, true);
+        wp_localize_script($handle, 'ace_redis_admin_bar', [
+            'flush_url' => rest_url('ace-redis-cache/v1/flush-cache'),
+            'status_url' => rest_url('ace-redis-cache/v1/flush-cache/status'),
+            'nonce' => wp_create_nonce('wp_rest'),
+        ]);
     }
     
     /**

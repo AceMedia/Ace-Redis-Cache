@@ -1183,9 +1183,20 @@ class API_Handler {
                 ], 200);
             }
 
+            $status = $this->cache_manager->get_clear_cache_job_status();
+            if (
+                method_exists($this->cache_manager, 'process_clear_cache_job')
+                && in_array(($status['status'] ?? ''), ['queued', 'running'], true)
+            ) {
+                $status = $this->cache_manager->process_clear_cache_job(2);
+                if (method_exists($this->cache_manager, 'get_clear_cache_job_status')) {
+                    $status = $this->cache_manager->get_clear_cache_job_status();
+                }
+            }
+
             return new \WP_REST_Response([
                 'success' => true,
-                'data' => $this->cache_manager->get_clear_cache_job_status(),
+                'data' => $status,
             ], 200);
         } catch (\Exception $e) {
             return new \WP_REST_Response([

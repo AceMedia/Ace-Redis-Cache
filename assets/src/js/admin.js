@@ -658,7 +658,7 @@ import SaveBar from './components/SaveBar.js';
                 this.clearAllCache();
             });
 
-            this.loadCachePurgeStatus(false);
+            this.loadCachePurgeStatus(true);
         }
 
         formatCachePurgeStatus(data) {

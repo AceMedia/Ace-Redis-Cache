@@ -1573,18 +1573,19 @@ class AceRedisCache {
         }
         $done = true;
         try {
-            // Publish into the OBJECT CACHE's keyspace (the shared connection), which is where ace:1:*
-            // lives and what advanced-cache reads — not necessarily the same endpoint as the page
-            // connection. rawCommand bypasses the serializer so the values land as plain strings.
-            global $ace_redis_shared_connection;
-            $redis = ($ace_redis_shared_connection instanceof \Redis)
-                ? $ace_redis_shared_connection
-                : $this->cache_manager->get_redis_connection()->get_connection();
+            // Publish on the PAGE-CACHE connection — the same endpoint AND the same logical database
+            // (ACE_REDIS_DB) that the cached pages themselves live in, which is exactly where
+            // advanced-cache.php looks. The object cache's shared connection is NOT usable here: it
+            // stays on its own database (db0 on every site we run), so on any site with ACE_REDIS_DB
+            // set the tokens were written to db0 while the drop-in read them from the page DB and
+            // every early-serve attempt died at 'MISS no-tokens'. rawCommand bypasses the
+            // connection's serializer so the values land as plain strings.
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
             if (!$redis) {
                 return;
             }
-            // Namespace the published tokens per host. These land in the SHARED object-cache
-            // keyspace (ace:1:*) that EVERY site on this Redis writes to, so an un-namespaced key
+            // Namespace the published tokens per host. Sites that share a logical database (any
+            // site without its own ACE_REDIS_DB sits on db0 with the rest), so an un-namespaced key
             // let the last site to (re)build a page clobber every other site's suffix — silently
             // breaking their early-serve the moment any site appended a non-empty filter suffix.
             // The host segment (same normalisation as the drop-in reader) keeps each site's inputs

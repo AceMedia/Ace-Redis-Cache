@@ -797,7 +797,12 @@ class CacheManager {
         }
         
         $decoded = $this->maybe_decompress($result);
-        // If we stored serialized data originally, attempt to unserialize
+        // If we stored serialized data originally, attempt to unserialize - but
+        // only once the header's declared size has been checked against what we
+        // actually hold (see declared_size_is_plausible).
+        if (!$this->declared_size_is_plausible($decoded)) {
+            return $decoded;
+        }
         $unser = @unserialize($decoded);
         return ($unser !== false || $decoded === 'b:0;') ? $unser : $decoded;
     }
@@ -1100,6 +1105,52 @@ class CacheManager {
         return 'raw:' . $payload;
     }
 
+
+    /**
+     * Is this payload's own declared size possible, given how many bytes we hold?
+     *
+     * A serialised string, array or object states its length or element count up
+     * front, and unserialize() trusts that number enough to allocate for it. A
+     * corrupt or truncated payload can therefore ask PHP for far more memory than
+     * the data could ever contain - sheff.events, 4 Sept 2026: a garbled cache
+     * value producing "tried to allocate 4295229440 bytes", eighty seconds of
+     * fatals, and no memory_limit short of 4GB that would have helped.
+     *
+     * The bound is simply that a declared size cannot exceed the bytes present:
+     * exact for strings, generous but sufficient for arrays and objects, since
+     * every element costs at least a byte. Scalars declare no size and pass.
+     * Cheap enough to run on every read, and it has no false positives on a
+     * payload we actually wrote.
+     */
+    private function declared_size_is_plausible($payload) {
+        if (!is_string($payload) || $payload === '') {
+            return false;
+        }
+
+        $bytes = strlen($payload);
+
+        if (preg_match('/^s:(\d{1,10}):"/', $payload, $m) === 1) {
+            return (int) $m[1] <= $bytes;
+        }
+        if (preg_match('/^a:(\d{1,10}):\{/', $payload, $m) === 1) {
+            return (int) $m[1] <= $bytes;
+        }
+        if (preg_match('/^O:\d{1,10}:"[^"]*":(\d{1,10}):\{/', $payload, $m) === 1) {
+            return (int) $m[1] <= $bytes;
+        }
+
+        // Declares a size but did not match the bounded forms above: either the
+        // digits run past ten - no real payload declares a length that long -
+        // or the header is malformed. Implausible either way; the alternative is
+        // falling through to the scalar default and calling it fine.
+        if (preg_match('/^[saO]:/', $payload) === 1) {
+            return false;
+        }
+
+        // Scalars (i: b: d: N;) declare no size, so there is nothing to check.
+        return true;
+    }
+
     /**
      * Decompress based on marker; when for_html is true, also set headers for Content-Encoding if applicable
      */
@@ -1109,7 +1160,8 @@ class CacheManager {
 
         // Some Redis serializer configurations can wrap marker strings (e.g. s:123:"gz6:...").
         // Unwrap once so marker parsing below still works.
-        if (preg_match('/^s:\\d+:/', $stored) === 1) {
+        if (preg_match('/^s:(\\d{1,10}):"/', $stored, $len_m) === 1
+            && (int) $len_m[1] <= strlen($stored)) {
             $decoded = null;
             if (function_exists('maybe_unserialize')) {
                 $decoded = maybe_unserialize($stored);

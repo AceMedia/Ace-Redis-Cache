@@ -876,6 +876,15 @@ class AceRedisCache {
             return $payload;
         }
 
+        // A serialised string declares its own length, and unserialize() trusts
+        // that number enough to allocate for it. Check it against the bytes we
+        // actually hold first: a corrupt s:4294967296:"... header is an
+        // allocation request, not a cache value (sheff.events, 4 Sept 2026).
+        if (preg_match('/^s:(\d{1,10}):"/', $payload, $len_m) !== 1
+            || (int) $len_m[1] > strlen($payload)) {
+            return $payload;
+        }
+
         $decoded = null;
         if (function_exists('maybe_unserialize')) {
             $decoded = maybe_unserialize($payload);

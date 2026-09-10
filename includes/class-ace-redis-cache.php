@@ -465,6 +465,7 @@ class AceRedisCache {
             $this->init_dynamic_placeholder_runtime();
             // Register per-post page cache invalidation hooks
             add_action('save_post', [$this, 'maybe_invalidate_post_page_cache'], 50, 3);
+            add_action('ace_redis_cache_purge_url', [$this, 'purge_url']);
             add_action('deleted_post', [$this, 'maybe_invalidate_post_page_cache_deleted'], 50, 1);
             add_action('transition_post_status', [$this, 'maybe_invalidate_post_page_cache_status'], 50, 3);
             
@@ -1669,6 +1670,60 @@ class AceRedisCache {
      * @param int $post_id
      * @param bool $schedule_prime Whether to schedule a prime request after invalidation
      */
+    /**
+     * Purge the page cache for one URL (every scheme/device/version variant).
+     * Public entry point behind the `ace_redis_cache_purge_url` action so other
+     * plugins (Ace Taxonomy Tools retired archives, Ace Ads Manager) can purge a
+     * URL without knowing how keys are built.
+     */
+    public function purge_url($url) {
+        $path = parse_url((string) $url, PHP_URL_PATH) ?: '/';
+        if ($path === '') { $path = '/'; }
+        if ($path[0] !== '/') { $path = '/' . $path; }
+        $paths = [$path];
+        if ($path !== '/') {
+            $paths[] = substr($path, -1) === '/' ? rtrim($path, '/') : $path . '/';
+        }
+        return $this->invalidate_paths(array_unique($paths));
+    }
+
+    /**
+     * Delete the page-cache keys for a set of request paths. Returns keys deleted.
+     */
+    private function invalidate_paths(array $paths) {
+        $schemes = ['http','https'];
+        $devices = ['desktop','mobile'];
+        $versions = [];
+        try { $cv = (int) wp_cache_get('site_version', 'version'); if ($cv >= 0) { $versions[] = $cv; if ($cv > 0) { $versions[] = $cv-1; } } } catch (\Throwable $t) { $versions[] = 0; }
+        $redis = null;
+        if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
+            $redis = $this->cache_manager->get_raw_client();
+        }
+        $deleted = 0;
+        foreach ($paths as $p) {
+            foreach ($schemes as $scheme) {
+                foreach ($devices as $device) {
+                    foreach ($versions as $ver) {
+                        $core = $this->build_page_cache_core_key($p, $scheme, $device, $ver);
+                        $legacy_core = str_replace(':v' . $ver, '', $core);
+                        $keys = ['page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core];
+                        try {
+                            if ($redis && method_exists($redis, 'del')) {
+                                foreach ($keys as $k) { $deleted += (int) $redis->del($k); }
+                            } elseif ($this->cache_manager) {
+                                foreach ($keys as $k) { $this->cache_manager->delete($k); }
+                            }
+                        } catch (\Throwable $t) {
+                            if (defined('WP_DEBUG') && WP_DEBUG) { error_log('AceRedisCache path invalidation error: ' . $t->getMessage()); }
+                        }
+                    }
+                }
+            }
+        }
+        do_action('ace_rc_paths_invalidated', $paths, $deleted);
+        return $deleted;
+    }
+
     private function invalidate_post_page_cache($post_id, $schedule_prime = true) {
         $post_id = (int)$post_id;
         if (!$post_id) return;

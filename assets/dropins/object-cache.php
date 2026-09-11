@@ -115,6 +115,11 @@ if (!class_exists('WP_Object_Cache')) {
         private const MAX_VALUE_BYTES_BY_GROUP = [
             'ace_events' => 8388608, // 8MB
             'ace_te'     => 1048576, // 1MB
+            // 'alloptions' is the only options-group key that persists (see is_excluded_key)
+            // and on any real site it is well over 64KB (sheff.events: 351 autoloaded rows,
+            // ~150KB), so the general cap silently dropped it on every request and every
+            // request re-read the whole options table from MySQL. Found 11 Sept 2026.
+            'options'    => 1048576, // 1MB
         ];
 
         // On-wire format version. Every value we persist is wrapped as

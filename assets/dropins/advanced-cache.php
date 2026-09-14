@@ -72,6 +72,11 @@ if ($request_uri !== '' && preg_match('#[?&](wc-ajax|add-to-cart|remove_item|und
 
 $request_path = (string) parse_url($request_uri, PHP_URL_PATH);
 $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
+// REST responses are never served as cached pages: they carry their own cache policy
+// and REST_REQUEST is not defined this early, so the path and query var are checked.
+if ($rest_route !== '' || ($request_path !== '' && preg_match('#^/wp-json(/|$)#i', $request_path))) {
+    return;
+}
 if ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path)) {
     return;
 }

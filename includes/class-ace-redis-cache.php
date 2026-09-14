@@ -540,7 +540,7 @@ class AceRedisCache {
 
         // Only intercept transients for guest frontend traffic
         // Avoid affecting wp-admin, logged-in sessions, AJAX, and REST requests
-        if (\is_admin() || \is_user_logged_in() || \wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+        if (\is_admin() || \is_user_logged_in() || \wp_doing_ajax() || $this->is_rest_request()) {
             return;
         }
 
@@ -608,7 +608,7 @@ class AceRedisCache {
         }
         
         // Don't cache REST API requests
-        if (defined('REST_REQUEST') && REST_REQUEST) {
+        if ($this->is_rest_request()) {
             return false;
         }
         
@@ -652,7 +652,7 @@ class AceRedisCache {
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
         $path = (string) wp_parse_url($request_uri, PHP_URL_PATH);
 
-        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+        if (is_admin() || wp_doing_ajax() || $this->is_rest_request()) {
             return true;
         }
 
@@ -758,7 +758,7 @@ class AceRedisCache {
      * True when request is an admin/auth/system endpoint where plugin cache URL/header mutation must not run.
      */
     private function is_admin_auth_or_system_request() {
-        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+        if (is_admin() || wp_doing_ajax() || $this->is_rest_request()) {
             return true;
         }
 
@@ -1171,6 +1171,20 @@ class AceRedisCache {
     }
 
     /**
+     * Is this a REST API request? REST_REQUEST is only defined once the REST server
+     * dispatches, which is after the page cache has decided whether to serve or
+     * store, so a /wp-json/ response used to be cached as a page and stamped with
+     * the page TTL. The path and the rest_route query var are checked as well.
+     */
+    private function is_rest_request() {
+        if (defined('REST_REQUEST') && REST_REQUEST) return true;
+        $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+        $prefix = function_exists('rest_get_url_prefix') ? rest_get_url_prefix() : 'wp-json';
+        if ($path !== '' && preg_match('#^/' . preg_quote($prefix, '#') . '(/|$)#', $path)) return true;
+        return isset($_GET['rest_route']);
+    }
+
+    /**
      * Emit browser cache + diagnostic meta headers.
      */
     private function emit_browser_cache_headers($state, $cache_key) {
@@ -1259,7 +1273,7 @@ class AceRedisCache {
         $enabled = apply_filters('ace_rc_enable_partial_dynamic', $enabled_setting, $this->settings);
         if (!$enabled) { return; }
         // Guest frontend only
-        if (is_admin() || is_user_logged_in() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) { return; }
+        if (is_admin() || is_user_logged_in() || wp_doing_ajax() || $this->is_rest_request()) { return; }
         // Use excluded_blocks as dynamic patterns
         $raw = $this->settings['excluded_blocks'] ?? '';
         $patterns = [];
@@ -1433,7 +1447,7 @@ class AceRedisCache {
      */
     public function filter_render_block_for_placeholders($block_content, $block) {
         // Only apply when page cache is enabled and request qualifies for caching (guest frontend)
-        if (empty($this->settings['enable_page_cache']) || is_user_logged_in() || is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST)) {
+        if (empty($this->settings['enable_page_cache']) || is_user_logged_in() || is_admin() || wp_doing_ajax() || $this->is_rest_request()) {
             return $block_content;
         }
         $block_name = $block['blockName'] ?? '';
@@ -4011,7 +4025,7 @@ class AceRedisCache {
      */
     private function is_admin_context() {
         // Always skip for admin pages, AJAX requests, REST API, and CLI
-        if (is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST) || (defined('WP_CLI') && WP_CLI)) {
+        if (is_admin() || wp_doing_ajax() || $this->is_rest_request() || (defined('WP_CLI') && WP_CLI)) {
             return true;
         }
         

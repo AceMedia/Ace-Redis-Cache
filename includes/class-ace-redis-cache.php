@@ -1080,9 +1080,13 @@ class AceRedisCache {
                 }
             }
             $has_local_dev_refs = $this->contains_local_dev_asset_references($cache_version);
+            // Only ever store a real, complete page. See page_cache_store_block_reason()
+            // for what each guard is protecting against - a 404 or a blank-main 200 that
+            // reaches Redis re-serves itself for the whole TTL.
+            $store_block_reason = $this->page_cache_store_block_reason($content);
 
             // Cache the content with intelligent minification handling
-            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && !empty($content)) {
+            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content)) {
                 $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification);
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
@@ -1097,6 +1101,8 @@ class AceRedisCache {
                 $content .= "\n<!-- AceRedisCache: first_pass_skip path_id={$path_id} -->";
             } elseif ($has_local_dev_refs && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP reason=local_dev_asset_reference -->";
+            } elseif ($store_block_reason !== null && defined('WP_DEBUG') && WP_DEBUG) {
+                $content .= "\n<!-- AceRedisCache: page_cache=SKIP reason={$store_block_reason} -->";
             }
             // For the live response, strip only the wrapper markers (leave real dynamic content rendered)
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -1185,6 +1191,215 @@ class AceRedisCache {
     }
 
     /**
+     * The main query, only when it is safe to interrogate. Called from the page cache
+     * plumbing, which can run before the query exists, so never reach for the
+     * conditional tags directly - is_404() et al. emit a _doing_it_wrong() notice when
+     * the query is not set up yet.
+     *
+     * @return \WP_Query|null
+     */
+    private function main_query_or_null() {
+        $query = $GLOBALS['wp_query'] ?? null;
+        return ($query instanceof \WP_Query) ? $query : null;
+    }
+
+    /**
+     * The status code this response will actually carry.
+     *
+     * http_response_code() alone is not trustworthy here for two reasons, both of which
+     * let the old ">= 300" guard sail straight past a 404:
+     *  - off a web SAPI (wp-cli primers, CLI cron warmers) it returns bool false, and in
+     *    PHP 8 `false >= 300` is false, so the guard silently picks the "public" branch;
+     *  - it only knows what PHP has been told so far. WordPress decides the 404 in
+     *    WP::handle_404(), and anything that calls status_header(404) later - a hub route
+     *    that 404s while the template renders - lands after we have already emitted
+     *    headers, because a cache HIT emits and exits at template_include.
+     * WordPress's own view of the request (is_404()) is settled before either of those,
+     * so ask it as well and let it win. $code is injectable for the tests.
+     *
+     * @param int|null $code Override for the PHP-level status code.
+     * @return int
+     */
+    private function current_response_code($code = null) {
+        if ($code === null) {
+            $code = function_exists('http_response_code') ? http_response_code() : 200;
+        }
+        if (!is_int($code) || $code <= 0) {
+            $code = 200; // false/0 means "nobody set one", which means 200 on the wire.
+        }
+        $query = $this->main_query_or_null();
+        if ($query && $query->is_404()) {
+            $code = 404;
+        }
+        return $code;
+    }
+
+    /**
+     * Why this render must not enter the page cache, or null when it may.
+     *
+     * Every one of these guards is here because the store path will otherwise happily
+     * pin a response that is not a real page, and a pinned non-page survives for the
+     * full TTL in Redis AND in every shared cache in front of us. Do not remove them
+     * without a replacement:
+     *  - a 404 body cached under its own URL is a poisoned entry that re-serves itself
+     *    (MISS, HIT, HIT) and, worse, is exactly what a temporarily broken route emits;
+     *  - any non-200 status (redirects, 5xx from a half-deployed tree) is a transient
+     *    condition being frozen for a week;
+     *  - search results are per-query and unbounded, and feeds are not HTML pages at all;
+     *  - a structurally valid 200 whose main panel is empty is the blank-page failure
+     *    that got pinned for a week after a deploy raced the opcache clear. The HTML
+     *    parses, the status is 200, and nothing else here would have caught it.
+     *
+     * @param string   $content Rendered response body.
+     * @param int|null $code    Override for the PHP-level status code (tests).
+     * @return string|null Reason slug, or null to allow the store.
+     */
+    private function page_cache_store_block_reason($content, $code = null) {
+        if (!is_string($content) || trim($content) === '') {
+            return 'empty_body';
+        }
+        $query = $this->main_query_or_null();
+        // 404 first, so the debug reason names the actual fault rather than the status
+        // code it implies.
+        if ($query && $query->is_404()) {
+            return 'is_404';
+        }
+        if ($this->current_response_code($code) !== 200) {
+            return 'status_not_200';
+        }
+        if ($query) {
+            if ($query->is_search()) {
+                return 'is_search';
+            }
+            if ($query->is_feed()) {
+                return 'is_feed';
+            }
+        }
+        if (!$this->rendered_main_is_substantive($content)) {
+            return 'empty_main';
+        }
+        return null;
+    }
+
+    /**
+     * Does the rendered page actually carry a populated main panel?
+     *
+     * Cheap and deliberately defensive: a string search for the shell's main element,
+     * a depth-counted scan to its close so nested <main> cannot truncate the slice,
+     * then script/style/comment removal before measuring the visible text. If the
+     * element cannot be found at all we return false - an unrecognisable document is
+     * precisely the shape a fatal-error or half-booted render takes, and storing it is
+     * the failure we are here to prevent.
+     *
+     * @param string $html Rendered response body.
+     * @return bool
+     */
+    private function rendered_main_is_substantive($html) {
+        $min_bytes = (int) apply_filters('ace_rc_min_main_text_bytes', 400, $html);
+        $marker = (string) apply_filters('ace_rc_main_content_marker', 'ace-shell__main', $html);
+
+        // Locate the opening <main ...> tag that carries the marker class.
+        $open = false;
+        $offset = 0;
+        while (($candidate = stripos($html, '<main', $offset)) !== false) {
+            $end = strpos($html, '>', $candidate);
+            if ($end === false) {
+                break;
+            }
+            if ($marker === '' || stripos(substr($html, $candidate, $end - $candidate), $marker) !== false) {
+                $open = $end + 1;
+                break;
+            }
+            $offset = $end + 1;
+        }
+        if ($open === false) {
+            return false;
+        }
+
+        // Walk to the matching close so a nested <main> cannot cut the slice short.
+        $depth = 1;
+        $cursor = $open;
+        $close = false;
+        while ($depth > 0) {
+            $next_open = stripos($html, '<main', $cursor);
+            $next_close = stripos($html, '</main', $cursor);
+            if ($next_close === false) {
+                break; // Unclosed main - treat as unrecognisable below.
+            }
+            if ($next_open !== false && $next_open < $next_close) {
+                $depth++;
+                $cursor = $next_open + 5;
+                continue;
+            }
+            $depth--;
+            $cursor = $next_close + 6;
+            if ($depth === 0) {
+                $close = $next_close;
+            }
+        }
+        if ($close === false) {
+            return false;
+        }
+
+        $inner = substr($html, $open, $close - $open);
+        // Scripts, styles, SVG paths and comments are not reading matter - a shell that
+        // shipped only its loading spinner and a JSON blob must still count as empty.
+        $inner = preg_replace('#<(script|style|svg|template|noscript)\b[^>]*>.*?</\1>#is', ' ', $inner);
+        $inner = preg_replace('#<!--.*?-->#s', ' ', (string) $inner);
+        $text = trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags((string) $inner), ENT_QUOTES, 'UTF-8')));
+
+        return strlen($text) >= $min_bytes;
+    }
+
+    /**
+     * The browser/shared cache headers for this response, as name => value.
+     *
+     * Split deliberately, and returned rather than sent so the tests can assert on the
+     * exact strings:
+     *  - s-maxage keeps the long life for Varnish and Cloudflare, which we can purge
+     *    when a render turns out to be wrong;
+     *  - max-age is short for the visitor's own browser, which we cannot purge. A bad
+     *    render used to sit in a real person's browser for a week with no way to clear
+     *    it, and Expires (the HTTP/1.0 spelling of the same thing) is pinned to the
+     *    browser figure for the same reason;
+     *  - Vary: Cookie because these pages are advertised public. Logged-in requests
+     *    bypass Redis, but nothing downstream knew the response varies by session, so a
+     *    shared cache was free to hand a guest copy to a member and back again.
+     *
+     * @param string   $state 'hit' or 'miss'.
+     * @param int|null $now   Timestamp for Expires (tests).
+     * @param int|null $code  Override for the PHP-level status code (tests).
+     * @return array
+     */
+    private function browser_cache_header_values($state, $now = null, $code = null) {
+        $now = ($now === null) ? time() : (int) $now;
+        $shared_max_age = intval($this->settings['browser_cache_max_age'] ?? ($this->settings['ttl_page'] ?? 3600));
+        $shared_max_age = max(60, min(604800, $shared_max_age));
+        $browser_max_age = (int) apply_filters('ace_rc_browser_max_age', 300, $shared_max_age, $state);
+        $browser_max_age = max(0, min($shared_max_age, $browser_max_age));
+
+        $headers = ['Vary' => 'Cookie'];
+
+        // Never let a browser pin a non-page: a 301 cached client-side for a week keeps
+        // sending visitors to a stale destination long after the site moves a URL, and a
+        // 404 cached the same way outlives the fix (and no server-side purge can reach
+        // either). current_response_code() is used rather than http_response_code() so
+        // that WordPress's own 404 verdict counts - see the note on that method.
+        if ($this->current_response_code($code) !== 200) {
+            $headers['Cache-Control'] = 'no-cache, max-age=0';
+            return $headers;
+        }
+        if ($state !== 'hit') {
+            // miss -> conservative so intermediaries wait for the populated version
+            $headers['Cache-Control'] = 'no-cache, max-age=0';
+            return $headers;
+        }
+        $headers['Cache-Control'] = 'public, max-age=' . $browser_max_age . ', s-maxage=' . $shared_max_age;
+        $headers['Expires'] = gmdate('D, d M Y H:i:s', $now + $browser_max_age) . ' GMT';
+        return $headers;
+    }
+
+    /**
      * Emit browser cache + diagnostic meta headers.
      */
     private function emit_browser_cache_headers($state, $cache_key) {
@@ -1193,18 +1408,11 @@ class AceRedisCache {
         $now = time();
         // Browser cache headers only on HITs (MISS sends no-cache to avoid double-store) unless explicitly allowed
         if ($browser_cache) {
-            $max_age = intval($this->settings['browser_cache_max_age'] ?? ($this->settings['ttl_page'] ?? 3600));
-            $max_age = max(60, min(604800, $max_age));
-            // Never let a browser pin a redirect: a 301 cached client-side for a week
-            // keeps sending visitors to a stale destination long after the site moves
-            // a URL (and no server-side purge can reach their cache).
-            if (http_response_code() >= 300) {
-                header('Cache-Control: no-cache, max-age=0');
-            } elseif ($state === 'hit') {
-                header('Cache-Control: public, max-age=' . $max_age . ', s-maxage=' . $max_age);
-                header('Expires: ' . gmdate('D, d M Y H:i:s', $now + $max_age) . ' GMT');
-            } else { // miss -> conservative so intermediaries wait for populated version
-                header('Cache-Control: no-cache, max-age=0');
+            foreach ($this->browser_cache_header_values($state, $now) as $name => $value) {
+                // Vary is appended rather than replaced: other layers already declare
+                // Accept-Encoding and Accept, and clobbering their field list would make
+                // a shared cache serve the wrong encoding.
+                header($name . ': ' . $value, ($name !== 'Vary'));
             }
         }
         if ($send_meta) {

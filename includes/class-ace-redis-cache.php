@@ -1379,6 +1379,11 @@ class AceRedisCache {
         $browser_max_age = max(0, min($shared_max_age, $browser_max_age));
 
         $headers = ['Vary' => 'Cookie'];
+        // Temporary: one probe so a live request can say what it actually computed.
+        if (isset($_GET['ace_hdr_probe'])) {
+            $headers['X-Ace-Hdr-Probe'] = 'shared=' . $shared_max_age . ' browser=' . $browser_max_age
+                . ' state=' . (string) $state . ' code=' . (string) $this->current_response_code($code);
+        }
 
         // Never let a browser pin a non-page: a 301 cached client-side for a week keeps
         // sending visitors to a stale destination long after the site moves a URL, and a

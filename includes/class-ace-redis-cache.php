@@ -1087,7 +1087,7 @@ class AceRedisCache {
 
             // Cache the content with intelligent minification handling
             if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content)) {
-                $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification);
+                $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification, $this->page_cache_physical_ttl());
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
                     if ($this->cache_manager && method_exists($this->cache_manager, 'set')) {
@@ -1278,7 +1278,10 @@ class AceRedisCache {
         if (!$this->rendered_main_is_substantive($content)) {
             return 'empty_main';
         }
-        return null;
+        // A site can insist on more before a page is kept, for instance that a single event
+        // page carries its headline and its Event schema, so a half-rendered page never re-serves itself.
+        $reason = apply_filters('ace_rc_page_store_block_reason', null, $content, $query);
+        return is_string($reason) && $reason !== '' ? $reason : null;
     }
 
     /**
@@ -1751,10 +1754,29 @@ class AceRedisCache {
      *
      * @return string Cache key
      */
+    /**
+     * The request URI as the page cache keys it. Tracking parameters are dropped and what is left
+     * is sorted, so the same page reached by ten campaign links is one entry rather than ten.
+     * advanced-cache.php carries a copy of this so the pre-boot lookup lands on the same key.
+     */
+    public static function normalize_request_uri($uri) {
+        $uri = (string) $uri;
+        $q = strpos($uri, '?');
+        if ($q === false) return $uri;
+        $path = substr($uri, 0, $q);
+        parse_str(substr($uri, $q + 1), $params);
+        foreach (array_keys($params) as $k) {
+            if (preg_match('/^(utm_|fbclid$|gclid$|gbraid$|wbraid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|v$)/i', (string) $k)) unset($params[$k]);
+        }
+        if (!$params) return $path;
+        ksort($params);
+        return $path . '?' . http_build_query($params);
+    }
+
     private function generate_page_cache_key() {
         $version = $this->get_site_cache_version();
         $host = $this->normalize_cache_host($_SERVER['HTTP_HOST'] ?? '');
-        $request_path = $_SERVER['REQUEST_URI'] ?? '/';
+        $request_path = self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/');
         $key_parts = [
             'page_cache',
             $request_path,
@@ -2885,11 +2907,29 @@ class AceRedisCache {
      * stale while it refreshes in the background. Freshness is judged separately via stored_at.
      */
     private function page_cache_physical_ttl() {
-        $ttl = (int) ($this->settings['ttl_page'] ?? 3600);
-        if (!empty($this->settings['wc_smart_cache']) && class_exists('WooCommerce')) {
-            $ttl += (int) ($this->settings['page_cache_grace'] ?? 0);
-        }
+        $ttl = $this->page_cache_fresh_ttl();
+        $ttl += $this->page_cache_grace();
         return max(1, $ttl);
+    }
+
+    /**
+     * How long this response counts as fresh. Sites set it per request through `ace_rc_page_ttl`
+     * (a listing that changes hourly, a single event that changes when it is edited).
+     */
+    private function page_cache_fresh_ttl() {
+        $ttl = (int) ($this->settings['ttl_page'] ?? 3600);
+        $ttl = (int) apply_filters('ace_rc_page_ttl', $ttl, $_SERVER['REQUEST_URI'] ?? '/', $this->settings);
+        return max(60, $ttl);
+    }
+
+    /**
+     * The window after freshness in which a stale copy is still served while one background
+     * refresh runs. It used to need WooCommerce's smart cache; any site with `page_cache_grace`
+     * set, or the `ace_rc_page_grace` filter, gets it.
+     */
+    private function page_cache_grace() {
+        $grace = (int) ($this->settings['page_cache_grace'] ?? 0);
+        return max(0, (int) apply_filters('ace_rc_page_grace', $grace, $_SERVER['REQUEST_URI'] ?? '/', $this->settings));
     }
 
     /**
@@ -2914,10 +2954,10 @@ class AceRedisCache {
      * @param string $cache_key The page cache key being served.
      */
     private function maybe_trigger_swr_refresh($cache_key) {
-        if (empty($this->settings['wc_smart_cache']) || !class_exists('WooCommerce') || !$this->cache_manager) {
+        if (!$this->cache_manager) {
             return;
         }
-        $grace = (int) ($this->settings['page_cache_grace'] ?? 0);
+        $grace = $this->page_cache_grace();
         if ($grace <= 0) {
             return;
         }
@@ -2934,7 +2974,7 @@ class AceRedisCache {
         }
 
         $age = time() - $stored_at;
-        if ($age < (int) ($this->settings['ttl_page'] ?? 3600)) {
+        if ($age < $this->page_cache_fresh_ttl()) {
             return; // still fresh
         }
 

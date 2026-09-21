@@ -910,7 +910,8 @@ class CacheManager {
      * @param object $minifier Optional minification instance
      * @return bool Success status
      */
-    public function set_with_minification($key, $content, $minifier = null) {
+    public function set_with_minification($key, $content, $minifier = null, $ttl = null) {
+        $ttl = $ttl !== null ? max(1, (int) $ttl) : $this->get_cache_expiry();
         if (empty($content)) {
             return false;
         }
@@ -930,11 +931,11 @@ class CacheManager {
                 
                 // Store minified version with separate key
                 $minified_key = $this->minified_cache_prefix . $key;
-                $redis->setex($minified_key, $this->get_cache_expiry(), $this->maybe_compress($minified_content, 'page'));
+                $redis->setex($minified_key, $ttl, $this->maybe_compress($minified_content, 'page'));
                 
                 // Store original version (as fallback)
                 $original_key = $this->cache_prefix . $key;
-                $redis->setex($original_key, $this->get_cache_expiry(), $this->maybe_compress($content, 'page'));
+                $redis->setex($original_key, $ttl, $this->maybe_compress($content, 'page'));
                 
                 return true;
             } catch (\Exception $e) {
@@ -945,7 +946,7 @@ class CacheManager {
             // Store original version only
             // Store under the raw key (compat with get_with_minification fallback), using page context
             try {
-                return $redis->setex($key, $this->get_cache_expiry(), $this->maybe_compress($content, 'page'));
+                return $redis->setex($key, $ttl, $this->maybe_compress($content, 'page'));
             } catch (\Exception $e) {
                 return false;
             }

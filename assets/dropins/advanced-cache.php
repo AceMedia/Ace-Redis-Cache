@@ -71,6 +71,16 @@ if ($request_uri !== '' && preg_match('#[?&](wc-ajax|add-to-cart|remove_item|und
 }
 
 $request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+// Same normalisation as Ace_Redis_Cache::normalize_request_uri(): drop tracking parameters, sort the rest.
+$key_uri = $request_uri;
+if (($q = strpos($key_uri, '?')) !== false) {
+    parse_str(substr($key_uri, $q + 1), $key_params);
+    foreach (array_keys($key_params) as $k) {
+        if (preg_match('/^(utm_|fbclid$|gclid$|gbraid$|wbraid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|v$)/i', (string) $k)) unset($key_params[$k]);
+    }
+    ksort($key_params);
+    $key_uri = substr($key_uri, 0, $q) . ($key_params ? '?' . http_build_query($key_params) : '');
+}
 $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
 // REST responses are never served as cached pages: they carry their own cache policy
 // and REST_REQUEST is not defined this early, so the path and query var are checked.
@@ -171,7 +181,7 @@ try {
         return;
     }
 
-    $core_key = 'page_cache:' . $request_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version;
+    $core_key = 'page_cache:' . $key_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version;
     if ($suffix !== '') {
         $core_key .= ':' . $suffix;
     }

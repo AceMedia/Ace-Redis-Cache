@@ -1098,6 +1098,7 @@ class AceRedisCache {
                         $this->cache_manager->set($meta_key, [ 'stored_at' => time() ], $this->page_cache_physical_ttl());
                     }
                 } catch (\Throwable $t) {}
+                $this->publish_page_freshness($cache_key);
             } elseif ($skip_cache && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP host={$req_host} reason=" . ($skip_cache_reason ?: 'mismatch') . " -->";
             } elseif ($is_first_pass && defined('WP_DEBUG') && WP_DEBUG) {
@@ -1829,6 +1830,23 @@ class AceRedisCache {
      * plain strings (advanced-cache reads with no serializer, pre-WP). Once per request — the suffix is
      * global, so storing it on the request that (re)builds a key keeps it current across version bumps.
      */
+    /**
+     * Tell advanced-cache.php when this page was stored and until when it counts as fresh, as a
+     * plain "stored_at:fresh_until" string beside it. Without this the pre-boot drop-in served any
+     * stored page until its Redis key expired - past its fresh TTL and past a soft purge - so
+     * stale-while-revalidate never ran for the pages it served. Now it hands those to WordPress,
+     * which serves the stored copy and queues one background refresh.
+     */
+    private function publish_page_freshness($cache_key) {
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            if ($redis) {
+                $now = time();
+                $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $now . ':' . ($now + $this->page_cache_fresh_ttl()), 'EX', (string) $this->page_cache_physical_ttl());
+            }
+        } catch (\Throwable $t) {}
+    }
+
     private function maybe_publish_page_key_inputs($version, $host, array $suffix_parts) {
         static $done = false;
         if ($done) {
@@ -3014,6 +3032,15 @@ class AceRedisCache {
         } catch (\Throwable $t) {
             return false;
         }
+        // Also for advanced-cache.php (plain string, same per-host namespace as its key inputs),
+        // so the pre-boot path stops serving pages stored before this moment as if fresh.
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            $host  = $this->normalize_cache_host((string) parse_url(home_url(), PHP_URL_HOST));
+            if ($redis) {
+                $redis->rawCommand('SET', 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '') . 'epoch', (string) time(), 'EX', (string) (30 * DAY_IN_SECONDS));
+            }
+        } catch (\Throwable $t) {}
         $this->page_epoch = time();
         return true;
     }
@@ -3074,6 +3101,16 @@ class AceRedisCache {
         }
 
         $age = time() - $stored_at;
+        // Pages stored before advanced-cache.php understood freshness carry no marker, so it hands
+        // every request for them to WordPress. Add the marker from the stored time (NX: never
+        // overwrite a real one) so fresh pages go back to the pre-boot path.
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            $left  = $this->page_cache_physical_ttl() - $age;
+            if ($redis && $left > 60) {
+                $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $stored_at . ':' . ($stored_at + $this->page_cache_fresh_ttl()), 'EX', (string) $left, 'NX');
+            }
+        } catch (\Throwable $t) {}
         if ($age < $this->page_cache_fresh_ttl() && $stored_at >= $this->get_page_epoch()) {
             return; // still fresh, and stored after the last soft purge
         }

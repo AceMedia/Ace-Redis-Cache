@@ -28,6 +28,11 @@ if (preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $
     return;
 }
 
+// Primers and refreshers must reach WordPress so it re-renders and re-stores the page.
+if (!empty($_SERVER['HTTP_X_ACEREDIS_PRIME']) || !empty($_SERVER['HTTP_X_ACEREDIS_SITEMAP_PRIME']) || !empty($_SERVER['HTTP_X_ACEREDIS_REFRESH'])) {
+    return;
+}
+
 // LOGGED_IN_COOKIE is NOT defined this early (wp-settings defines cookie constants
 // after advanced-cache loads), so a constant-gated check is dead code — which served
 // cached guest pages to logged-in users the moment early-serve went live. Match the
@@ -191,6 +196,24 @@ try {
         'page_cache:' . $core_key,
         $core_key, // minification-off sites store under the bare core key
     ];
+
+    // Stale pages go to WordPress, which serves the stored copy and queues one background refresh
+    // (stale-while-revalidate). A page is stale past its fresh-until time, or when it was stored
+    // before the site's last soft purge. Pages stored before the plugin wrote freshness markers
+    // are only handed over once a soft purge has happened.
+    $fresh = $redis->get('ace:1:fresh:' . $core_key);
+    $epoch = $redis->get($token_ns . 'epoch');
+    $now   = time();
+    if (is_string($fresh) && strpos($fresh, ':') !== false) {
+        list($stored_at, $fresh_until) = array_map('intval', explode(':', $fresh, 2));
+        if ($now > $fresh_until || ($epoch !== false && $stored_at < (int) $epoch)) {
+            $emit('MISS stale');
+            return;
+        }
+    } elseif ($epoch !== false) {
+        $emit('MISS stale-unmarked');
+        return;
+    }
 
     $payload = false;
     foreach ($candidates as $candidate) {

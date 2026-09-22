@@ -197,6 +197,7 @@ if (!class_exists('WP_Object_Cache')) {
         protected $suspend_persistent_writes = false;
         protected $request_context = [];
         protected $runtime_only_mode = false;
+        protected $invalidate_connect_failed = false; // see invalidate_persistent()
         protected $wc_read_mode = false; // cart/checkout: read shared groups from Redis, never persist
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
         protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
@@ -712,6 +713,34 @@ if (!class_exists('WP_Object_Cache')) {
             $this->runtime[$group][$key] = $val;
         }
 
+        /**
+         * A write made in runtime-only mode (cron, admin, update operations) lands in this
+         * process only, and the copy in Redis stays as it was until it expires. Once
+         * alloptions persisted (0.7.17) that meant a system-cron run rescheduled every event
+         * in the database while wp-cli and the front end kept reading a cron array in which
+         * all 49 sat overdue for hours, and any option a cron job saved was stale on the site
+         * for the rest of its TTL. So a runtime-only write deletes the persistent key (and
+         * alloptions, which carries every autoloaded option) and lets the next normal-mode
+         * request rebuild it from the database. One lazy connection per process, only when
+         * something persistent is actually written.
+         */
+        protected function invalidate_persistent($group, $key) {
+            $group = $group ?: 'default';
+            if (!$this->is_persistent_group($group) || $this->is_bypass_group($group) || $this->is_excluded_group($group)) return;
+            if (!extension_loaded('redis') || $this->invalidate_connect_failed) return;
+            if ($this->redis === null) {
+                try { $this->init_redis(); } catch (\Throwable $e) {}
+                if ($this->redis === null) { $this->invalidate_connect_failed = true; return; }
+            }
+            try {
+                $this->redis->del($this->k($key, $group));
+                if ($group === 'options' && $key !== 'alloptions') {
+                    $this->redis->del($this->k('alloptions', 'options'));
+                }
+                $this->stat_inc('runtime_only_invalidations');
+            } catch (\Throwable $e) {}
+        }
+
         protected function use_runtime_only_mode() {
             return (bool) $this->runtime_only_mode;
         }
@@ -822,6 +851,7 @@ if (!class_exists('WP_Object_Cache')) {
             if ($this->use_runtime_only_mode()) {
                 if (!isset($this->runtime[$group]) || !array_key_exists($key, $this->runtime[$group])) {
                     $this->runtime_set($group, $key, $data);
+                    $this->invalidate_persistent($group, $key);
                     return true;
                 }
                 return false;
@@ -866,6 +896,7 @@ if (!class_exists('WP_Object_Cache')) {
 
             if ($this->use_runtime_only_mode()) {
                 $this->runtime_set($group, $key, $data);
+                $this->invalidate_persistent($group, $key);
                 return true;
             }
 
@@ -1149,6 +1180,7 @@ if (!class_exists('WP_Object_Cache')) {
 
             if ($this->use_runtime_only_mode()) {
                 unset($this->runtime[$group][$key]);
+                $this->invalidate_persistent($group, $key);
                 return true;
             }
 
@@ -1348,6 +1380,7 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($found && is_numeric($current)) {
                     $new_value = $current + $offset;
                     $this->runtime_set($group, $key, $new_value);
+                    $this->invalidate_persistent($group, $key);
                     return $new_value;
                 }
                 return false;
@@ -1359,6 +1392,7 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($found && is_numeric($current)) {
                     $new_value = $current + $offset;
                     $this->runtime_set($group, $key, $new_value);
+                    $this->invalidate_persistent($group, $key);
                     return $new_value;
                 }
                 return false;
@@ -1394,6 +1428,7 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($found && is_numeric($current)) {
                     $new_value = $current - $offset;
                     $this->runtime_set($group, $key, $new_value);
+                    $this->invalidate_persistent($group, $key);
                     return $new_value;
                 }
                 return false;
@@ -1405,6 +1440,7 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($found && is_numeric($current)) {
                     $new_value = $current - $offset;
                     $this->runtime_set($group, $key, $new_value);
+                    $this->invalidate_persistent($group, $key);
                     return $new_value;
                 }
                 return false;

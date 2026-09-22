@@ -199,6 +199,8 @@ if (!class_exists('WP_Object_Cache')) {
         protected $runtime_only_mode = false;
         protected $invalidate_connect_failed = false; // see invalidate_persistent()
         protected $wc_read_mode = false; // cart/checkout: read shared groups from Redis, never persist
+        protected $member_read_mode = false; // signed-in front end: read shared groups from Redis, never persist
+        protected $redis_loaded = []; // group => key => md5 of what Redis handed us this request
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
         protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
         protected $persistent_groups = self::PERSISTENT_GROUPS_DEFAULT;
@@ -304,6 +306,7 @@ if (!class_exists('WP_Object_Cache')) {
                 'is_rest'      => $is_rest,
                 'is_wc_customer_session_request' => $is_wc_customer_session_request,
                 'method'       => $request_method,
+                'member_read'  => false, // set below once the bypass decision is known
             ];
 
             // Admin navigation previously exhausted Redis by caching whole WP_Post objects during read-only loads.
@@ -358,6 +361,24 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
+            // Member read mode (default on; define ACE_OC_MEMBER_READ false to turn it off). A
+            // signed-in visitor reading the front end is runtime-only, and without help that means
+            // no Redis at all: a page that costs a guest 20 queries costs a member 700, because
+            // every post, term, option and transient the guests already cached is re-read from the
+            // database. The data in the persistent groups is shared (posts, terms, options,
+            // transients, first-party context caches) and identical for every visitor, so a member
+            // page view may READ it. It still never persists: writes stay in this process and
+            // invalidate as before, so nothing member-specific can ever reach the shared cache.
+            // Admin, AJAX, REST, cron, update and cart requests keep the strict behaviour.
+            $member_read_mode = $this->runtime_only_mode
+                && ($is_logged_in_fn || $is_logged_in_cookie)
+                && !$is_admin_by_url && !$is_admin_req && !$is_ajax && !$is_rest && !$is_cron
+                && !$is_update_operation && !$is_wc_customer_session_request
+                && in_array($request_method, $allow_methods, true)
+                && (!defined('ACE_OC_MEMBER_READ') || ACE_OC_MEMBER_READ);
+            $this->member_read_mode = (bool) apply_filters('ace_oc_member_read_mode', $member_read_mode, $this->request_context);
+            $this->request_context['member_read'] = $this->member_read_mode;
+
             // Anonymous public AJAX stays cache-eligible so init_redis() actually runs for it
             // (same shared classifier as the two bypass gates above).
             $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax() && !$wc_read_mode;
@@ -384,7 +405,7 @@ if (!class_exists('WP_Object_Cache')) {
             // Only initialize Redis for cache-eligible requests.
             // Logged-in/admin/system/bypass requests should not pay Redis bootstrap cost.
             // WC read-mode connects despite bypass (to serve shared reads, no persistence).
-            if (extension_loaded('redis') && !$is_admin_system_request && (!$this->bypass || $wc_read_mode)) {
+            if (extension_loaded('redis') && !$is_admin_system_request && (!$this->bypass || $wc_read_mode || $this->member_read_mode)) {
                 $this->init_redis();
             }
 
@@ -724,9 +745,16 @@ if (!class_exists('WP_Object_Cache')) {
          * request rebuild it from the database. One lazy connection per process, only when
          * something persistent is actually written.
          */
-        protected function invalidate_persistent($group, $key) {
+        protected function invalidate_persistent($group, $key, $data = null, $is_write = false) {
             $group = $group ?: 'default';
             if (!$this->is_persistent_group($group) || $this->is_bypass_group($group) || $this->is_excluded_group($group)) return;
+            // A cache fill that re-sets exactly what Redis handed this request is not a change:
+            // deleting the key would only make the next guest rebuild it. Only a different value
+            // (a real update) or a delete invalidates.
+            if ($is_write && isset($this->redis_loaded[$group][$key]) && $this->redis_loaded[$group][$key] === md5(serialize($data))) {
+                $this->stat_inc('runtime_only_fills_kept');
+                return;
+            }
             if (!extension_loaded('redis') || $this->invalidate_connect_failed) return;
             if ($this->redis === null) {
                 try { $this->init_redis(); } catch (\Throwable $e) {}
@@ -734,8 +762,16 @@ if (!class_exists('WP_Object_Cache')) {
             }
             try {
                 $this->redis->del($this->k($key, $group));
+                // alloptions carries every autoloaded option, so a change to one of those must drop
+                // it too. WordPress rewrites alloptions itself on such an update (a set of the
+                // 'alloptions' key, handled by the line above); this covers the option's own key
+                // when it is one the loaded alloptions copy holds. A miss-then-fill of some other
+                // option must not drop alloptions: that was hundreds of deletes per member page view.
                 if ($group === 'options' && $key !== 'alloptions') {
-                    $this->redis->del($this->k('alloptions', 'options'));
+                    $all = $this->runtime_get('options', 'alloptions', $all_found);
+                    if (!$all_found || (is_array($all) && array_key_exists($key, $all))) {
+                        $this->redis->del($this->k('alloptions', 'options'));
+                    }
                 }
                 $this->stat_inc('runtime_only_invalidations');
             } catch (\Throwable $e) {}
@@ -743,6 +779,33 @@ if (!class_exists('WP_Object_Cache')) {
 
         protected function use_runtime_only_mode() {
             return (bool) $this->runtime_only_mode;
+        }
+
+        /**
+         * Member read mode: one Redis read of a shared, persistent, non-bypass group key for a
+         * signed-in front-end request. Never writes. Remembers what came back so a later
+         * cache fill of the identical value is not mistaken for a change (see invalidate_persistent).
+         */
+        protected function member_read($group, $key, &$found) {
+            $found = false;
+            if ($this->redis === null || !$this->connected) { return false; }
+            if (!$this->is_persistent_group($group) || $this->is_bypass_group($group) || $this->is_excluded_group($group)) { return false; }
+            if ($group === 'options' && $key === 'ace_redis_cache_settings') { return false; }
+            try {
+                $raw = $this->redis->get($this->k($key, $group));
+            } catch (\Throwable $e) {
+                $this->stat_inc('redis_errors');
+                return false;
+            }
+            if ($raw === false || $raw === null) { $this->stat_inc('redis_misses'); return false; }
+            $val = $this->decode_from_store($raw);
+            if ($val === $this->decode_miss_token()) { $this->stat_inc('foreign_format_misses'); return false; }
+            if ($this->should_block_post_object_persistence($group, $val)) { return false; }
+            $this->runtime_set($group, $key, $val);
+            $this->redis_loaded[$group][$key] = md5(serialize($val));
+            $this->stat_inc('member_read_hits');
+            $found = true;
+            return $val;
         }
 
         protected function should_write_through($group, $key = null) {
@@ -851,7 +914,7 @@ if (!class_exists('WP_Object_Cache')) {
             if ($this->use_runtime_only_mode()) {
                 if (!isset($this->runtime[$group]) || !array_key_exists($key, $this->runtime[$group])) {
                     $this->runtime_set($group, $key, $data);
-                    $this->invalidate_persistent($group, $key);
+                    $this->invalidate_persistent($group, $key, $data, true);
                     return true;
                 }
                 return false;
@@ -896,7 +959,7 @@ if (!class_exists('WP_Object_Cache')) {
 
             if ($this->use_runtime_only_mode()) {
                 $this->runtime_set($group, $key, $data);
-                $this->invalidate_persistent($group, $key);
+                $this->invalidate_persistent($group, $key, $data, true);
                 return true;
             }
 
@@ -969,6 +1032,10 @@ if (!class_exists('WP_Object_Cache')) {
                     $found = true;
                     $this->stat_inc('local_hits');
                     return $local;
+                }
+                if ($this->member_read_mode) {
+                    $val = $this->member_read($group, $key, $found);
+                    if ($found) { return $val; }
                 }
                 $found = false;
                 return false;

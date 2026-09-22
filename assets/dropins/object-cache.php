@@ -1005,6 +1005,12 @@ if (!class_exists('WP_Object_Cache')) {
                 $this->prof_log('RUNTIME_HIT', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
                 return $local; 
             }
+            // wp-cron's lock is written by this process and read straight back with $force
+            // (_get_cron_lock), and re-read after every hook. If the persistent layer cannot
+            // answer (bypass, no connection, or a flush in between), the copy this process
+            // wrote is still the truth; answering false tells wp-cron another process holds
+            // the lock and it abandons the run.
+            $cron_lock_fallback = ($local_found && $group === 'transient' && $key === 'doing_cron') ? $local : null;
 
             if (!$this->is_persistent_group($group)) {
                 $this->stat_inc('non_persistent_group_short_circuit');
@@ -1022,6 +1028,7 @@ if (!class_exists('WP_Object_Cache')) {
             $allow_read = $allow_during_bypass || $this->wc_read_mode;
 
             if (($this->bypass && !$allow_read) || $this->redis === null) {
+                if ($cron_lock_fallback !== null) { $found = true; return $cron_lock_fallback; }
                 $found = false;
                 $this->stat_inc('bypass_short_circuit');
                 $this->prof_log('BYPASS', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
@@ -1036,6 +1043,7 @@ if (!class_exists('WP_Object_Cache')) {
                 $redis_time = (microtime(true) - $redis_start) * 1000;
                 
                 if ($val === false || $val === null) { 
+                    if ($cron_lock_fallback !== null) { $found = true; return $cron_lock_fallback; }
                     $found = false; 
                     $this->stat_inc('redis_misses');
                     $this->prof_log('REDIS_MISS', $group . ':' . $key, (microtime(true) - $start_time) * 1000, sprintf(' redis=%.1fms', $redis_time));
@@ -1174,8 +1182,18 @@ if (!class_exists('WP_Object_Cache')) {
          * 
          * @param bool $force Force flush even during bypass mode
          */
-        public function flush($force = false) {
+        /**
+         * Empty the runtime store but keep wp-cron's lock: a flush fired by a hook mid-run
+         * (Action Scheduler and friends do) must not make the run look like it lost its lock.
+         */
+        protected function reset_runtime() {
+            $lock = $this->runtime['transient']['doing_cron'] ?? null;
             $this->runtime = [];
+            if ($lock !== null) { $this->runtime['transient']['doing_cron'] = $lock; }
+        }
+
+        public function flush($force = false) {
+            $this->reset_runtime();
             $respect_bypass = !$this->suspend_persistent_writes;
             if ((!$force && $this->bypass && $respect_bypass) || $this->redis === null) return true;
 
@@ -1214,7 +1232,7 @@ if (!class_exists('WP_Object_Cache')) {
          * @return bool
          */
         public function flush_runtime() {
-            $this->runtime = [];
+            $this->reset_runtime();
             return true;
         }
 
@@ -1227,8 +1245,10 @@ if (!class_exists('WP_Object_Cache')) {
         public function flush_group($group) {
             $group = $group ?: 'default';
             
-            // Clear from runtime
+            // Clear from runtime (keeping wp-cron's lock, see reset_runtime)
+            $lock = ($group === 'transient') ? ($this->runtime['transient']['doing_cron'] ?? null) : null;
             unset($this->runtime[$group]);
+            if ($lock !== null) { $this->runtime['transient']['doing_cron'] = $lock; }
             
             if (($this->bypass && !$this->suspend_persistent_writes) || $this->redis === null) return true;
             

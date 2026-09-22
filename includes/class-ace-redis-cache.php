@@ -56,6 +56,9 @@ class AceRedisCache {
 
     // Precise stored_at meta for page cache Age header (side key)
     private $page_cache_meta_prefix = 'page_cache_meta:'; // stores JSON {stored_at:int}
+    // Pages stored before this time count as stale (soft purge): still served, refreshed in the background.
+    private $page_epoch_key = 'ace_rc:page_epoch';
+    private $page_epoch = null;
 
     // OPcache optimization toggle
     private $opcache_runtime_enabled = false;
@@ -2191,6 +2194,21 @@ class AceRedisCache {
         if (!$post || !is_post_type_viewable($post->post_type)) return;
         // Allow broad purge override
         $broad = apply_filters('ace_rc_broad_page_cache_purge_on_post_update', false, $post_id, $post, $this->settings);
+        // Opt-in: instead of wiping everything on every save (which turns an import into a
+        // site-wide cold start), mark all pages stale and let the background refresher re-render
+        // them while visitors keep the stored copies. The saved post's own page is purged by the
+        // caller; block caches still go. Sites whose object-cache data relies on the flush must
+        // not opt in. Needs a grace window (see soft_purge_page_cache()); otherwise falls through.
+        if ($broad && apply_filters('ace_rc_soft_broad_purge', false, $post_id, $post, $this->settings)) {
+            static $soft_done = false;
+            if ($soft_done || $this->soft_purge_page_cache()) {
+                if (!$soft_done && method_exists($this->cache_manager, 'clear_block_cache')) {
+                    $this->cache_manager->clear_block_cache();
+                }
+                $soft_done = true; // once per request, however many posts the batch holds
+                return;
+            }
+        }
         if ($broad) {
             // Broad = wipe THIS SITE's caches only. (This used to flushDB / scan bare
             // page_cache:*/ace:* prefixes, which nuked every site sharing the Redis DB.)
@@ -2758,25 +2776,44 @@ class AceRedisCache {
     }
 
     private function get_sitemap_prime_batch_size() {
-        return max(1, (int) apply_filters('ace_rc_sitemap_prime_batch_size', 2, $this->settings));
+        return max(1, (int) apply_filters('ace_rc_sitemap_prime_batch_size', 10, $this->settings));
     }
 
-    private function schedule_sitemap_prime_runner() {
+    private function schedule_sitemap_prime_runner($delay = null) {
         if (!wp_next_scheduled('ace_rc_run_sitemap_prime_batch')) {
-            @wp_schedule_single_event(time() + $this->get_sitemap_prime_delay(), 'ace_rc_run_sitemap_prime_batch');
+            $delay = $delay === null ? $this->get_sitemap_prime_delay() : max(1, (int) $delay);
+            @wp_schedule_single_event(time() + $delay, 'ace_rc_run_sitemap_prime_batch');
         }
     }
 
+    /**
+     * Re-render queued URLs one at a time. Only one runner works at once (a Redis lock), each run
+     * stops at its URL count or time budget, and leftovers continue shortly after — so refresh
+     * load is one sequential render however many pages went stale.
+     */
     public function run_sitemap_prime_batch() {
         $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
         if (empty($queue)) return;
 
+        $lock_key = 'ace_rc:prime_runner';
+        if ($this->cache_manager && method_exists($this->cache_manager, 'add') && !$this->cache_manager->add($lock_key, 1, 120)) {
+            $this->schedule_sitemap_prime_runner(60);
+            return;
+        }
+
         $batch_size = $this->get_sitemap_prime_batch_size();
+        // System cron (WP-CLI) has minutes to spare; a web-triggered WP-Cron request does not.
+        $is_cli = defined('WP_CLI') && WP_CLI;
+        $budget = (float) apply_filters('ace_rc_prime_time_budget', $is_cli ? 120 : 20, $this->settings);
+        $started = microtime(true);
         $urls = array_keys($queue);
-        $batch = array_slice($urls, 0, $batch_size);
+        $batch = $is_cli ? $urls : array_slice($urls, 0, $batch_size);
+        $done = [];
 
         $args = [
-            'timeout' => 5,
+            // A cold render can take several seconds; giving up early only abandons a render that
+            // carries on server-side, so wait for it (requests run one at a time).
+            'timeout' => (int) apply_filters('ace_rc_prime_timeout', 25, $this->settings),
             'redirection' => 2,
             'user-agent' => 'AceRedisCache-SitemapPrimer/1.0',
             'headers' => [ 'X-AceRedis-Sitemap-Prime' => '1' ],
@@ -2785,6 +2822,9 @@ class AceRedisCache {
         ];
 
         foreach ($batch as $url) {
+            if ($done && (microtime(true) - $started) > $budget) {
+                break;
+            }
             try {
                 $resp = wp_remote_get($url, $args);
                 if (is_wp_error($resp) && defined('WP_DEBUG') && WP_DEBUG) {
@@ -2795,14 +2835,24 @@ class AceRedisCache {
                     error_log('AceRedisCache sitemap prime exception: ' . $url . ' error=' . $t->getMessage());
                 }
             }
+            $done[] = $url;
+        }
+
+        // Re-read before writing back, so URLs queued while this run was working are kept.
+        $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+        foreach ($done as $url) {
             unset($queue[$url]);
         }
 
         if (!empty($queue)) {
             $this->set_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option, $queue, $this->sitemap_prime_queue_ttl);
-            $this->schedule_sitemap_prime_runner();
+            $this->schedule_sitemap_prime_runner((int) apply_filters('ace_rc_prime_continue_delay', 30, $this->settings));
         } else {
             $this->delete_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
+        }
+
+        if ($this->cache_manager) {
+            $this->cache_manager->delete($lock_key);
         }
     }
 
@@ -2948,6 +2998,41 @@ class AceRedisCache {
     }
 
     /**
+     * Soft purge: every page stored before now counts as stale. Visitors and crawlers keep getting
+     * the stored copy while the background refresher re-renders pages one at a time, instead of a
+     * hard purge sending every request to a cold render at once (a deploy under crawler load).
+     * Pages without a grace window are not affected and simply age out on their own TTL.
+     *
+     * @return bool False when there is no cache connection (callers should fall back to a purge).
+     */
+    public function soft_purge_page_cache() {
+        if (!$this->cache_manager || $this->page_cache_grace_default() <= 0 && !has_filter('ace_rc_page_grace')) {
+            return false;
+        }
+        try {
+            $this->cache_manager->set($this->page_epoch_key, time(), 30 * DAY_IN_SECONDS);
+        } catch (\Throwable $t) {
+            return false;
+        }
+        $this->page_epoch = time();
+        return true;
+    }
+
+    private function page_cache_grace_default() {
+        return (int) ($this->settings['page_cache_grace'] ?? 0);
+    }
+
+    private function get_page_epoch() {
+        if ($this->page_epoch === null) {
+            $this->page_epoch = 0;
+            try {
+                $this->page_epoch = (int) $this->cache_manager->get($this->page_epoch_key);
+            } catch (\Throwable $t) {}
+        }
+        return $this->page_epoch;
+    }
+
+    /**
      * Reconstruct the absolute URL of the current request (for background re-warming).
      */
     private function current_request_url() {
@@ -2989,8 +3074,8 @@ class AceRedisCache {
         }
 
         $age = time() - $stored_at;
-        if ($age < $this->page_cache_fresh_ttl()) {
-            return; // still fresh
+        if ($age < $this->page_cache_fresh_ttl() && $stored_at >= $this->get_page_epoch()) {
+            return; // still fresh, and stored after the last soft purge
         }
 
         // Soft-expired within grace: first requester to win the lock enqueues a background refresh.

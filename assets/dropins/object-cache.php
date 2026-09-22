@@ -51,6 +51,31 @@ if (!function_exists('ace_oc_is_public_ajax')) {
     }
 }
 
+if (!function_exists('ace_oc_is_member_front_ajax')) {
+    /**
+     * A signed-in visitor's front-end admin-ajax GET (map layers, live panels, polling).
+     *
+     * admin-ajax.php sits under /wp-admin/, so these were treated as editorial and ran with no
+     * Redis at all: every option, post and term the guests already cached was re-read from the
+     * database on every poll (~1-3s each on sheff.events). They are reads of shared data, so
+     * they get member read mode like a signed-in page view: read Redis, never persist. A call
+     * made from a wp-admin screen (Referer under /wp-admin/) keeps the strict behaviour.
+     */
+    function ace_oc_is_member_front_ajax() {
+        if (defined('ACE_OC_MEMBER_READ') && !ACE_OC_MEMBER_READ) { return false; }
+        $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        if ($method !== 'GET' && $method !== 'HEAD') { return false; }
+        $uri    = $_SERVER['REQUEST_URI'] ?? '';
+        $script = $_SERVER['SCRIPT_NAME'] ?? '';
+        if (strpos($uri, 'admin-ajax.php') === false && strpos($script, 'admin-ajax.php') === false) { return false; }
+        if (strpos((string) ($_SERVER['HTTP_REFERER'] ?? ''), '/wp-admin/') !== false) { return false; }
+        foreach (array_keys($_COOKIE) as $ck) {
+            if (strpos((string) $ck, 'wordpress_logged_in_') === 0) { return true; }
+        }
+        return false;
+    }
+}
+
 $uri    = $_SERVER['REQUEST_URI']  ?? '';
 $script = $_SERVER['SCRIPT_NAME']  ?? '';
 $php    = $_SERVER['PHP_SELF']     ?? '';
@@ -67,7 +92,7 @@ $is_admin_req = (
 
 // Safer: just force cache bypass for admin/login requests — EXCEPT anonymous public AJAX, which is
 // real guest traffic served through admin-ajax.php and must stay cache-eligible (see helper above).
-if ($is_admin_req && !ace_oc_is_public_ajax() && !defined('ACE_OC_BYPASS')) {
+if ($is_admin_req && !ace_oc_is_public_ajax() && !ace_oc_is_member_front_ajax() && !defined('ACE_OC_BYPASS')) {
     define('ACE_OC_BYPASS', true);
 }
 
@@ -201,6 +226,7 @@ if (!class_exists('WP_Object_Cache')) {
         protected $wc_read_mode = false; // cart/checkout: read shared groups from Redis, never persist
         protected $member_read_mode = false; // signed-in front end: read shared groups from Redis, never persist
         protected $redis_loaded = []; // group => key => md5 of what Redis handed us this request
+        protected $signed_in = false;
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
         protected $bypass_groups = self::BYPASS_GROUPS_DEFAULT;
         protected $persistent_groups = self::PERSISTENT_GROUPS_DEFAULT;
@@ -369,19 +395,24 @@ if (!class_exists('WP_Object_Cache')) {
             // transients, first-party context caches) and identical for every visitor, so a member
             // page view may READ it. It still never persists: writes stay in this process and
             // invalidate as before, so nothing member-specific can ever reach the shared cache.
-            // Admin, AJAX, REST, cron, update and cart requests keep the strict behaviour.
+            // Admin, AJAX, REST, cron, update and cart requests keep the strict behaviour, except a
+            // signed-in front-end admin-ajax GET (see ace_oc_is_member_front_ajax()).
+            $is_member_front_ajax = ace_oc_is_member_front_ajax();
             $member_read_mode = $this->runtime_only_mode
                 && ($is_logged_in_fn || $is_logged_in_cookie)
-                && !$is_admin_by_url && !$is_admin_req && !$is_ajax && !$is_rest && !$is_cron
+                && ($is_member_front_ajax || (!$is_admin_by_url && !$is_admin_req && !$is_ajax && !$is_rest))
+                && !$is_cron
                 && !$is_update_operation && !$is_wc_customer_session_request
                 && in_array($request_method, $allow_methods, true)
                 && (!defined('ACE_OC_MEMBER_READ') || ACE_OC_MEMBER_READ);
             $this->member_read_mode = (bool) apply_filters('ace_oc_member_read_mode', $member_read_mode, $this->request_context);
             $this->request_context['member_read'] = $this->member_read_mode;
+            $this->signed_in = ($is_logged_in_fn || $is_logged_in_cookie);
+            if (!$is_cli) { register_shutdown_function([$this, 'log_slow_request']); }
 
             // Anonymous public AJAX stays cache-eligible so init_redis() actually runs for it
             // (same shared classifier as the two bypass gates above).
-            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax() && !$wc_read_mode;
+            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax() && !$wc_read_mode && !$this->member_read_mode;
 
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
@@ -457,6 +488,39 @@ if (!class_exists('WP_Object_Cache')) {
                 : (int) $this->max_value_bytes;
 
             return strlen($payload) > $limit;
+        }
+
+        /**
+         * One line per slow request (ACE_OC_SLOW_LOG_MS, default 1500; 0 turns it off) in
+         * ace-requests.log beside the pool's PHP error log, or ACE_OC_SLOW_LOG. Tab-separated:
+         * time, ms, method, member|guest, cache mode, queries, Redis hits/misses/member reads,
+         * peak memory, status, path (query string dropped except an AJAX action). The FPM slow
+         * log says where a request stalled; this says who paid and whether the cache helped.
+         */
+        public function log_slow_request() {
+            $min = defined('ACE_OC_SLOW_LOG_MS') ? (int) ACE_OC_SLOW_LOG_MS : 1500;
+            $ms  = (int) round((microtime(true) - (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000);
+            if ($min <= 0 || $ms < $min) { return; }
+            $file = defined('ACE_OC_SLOW_LOG') ? (string) ACE_OC_SLOW_LOG : '';
+            if ($file === '') {
+                $err = (string) ini_get('error_log');
+                if ($err === '' || !is_dir(dirname($err))) { return; }
+                $file = dirname($err) . '/ace-requests.log';
+            }
+            $mode = $this->member_read_mode ? 'member-read'
+                : ($this->wc_read_mode ? 'wc-read'
+                : ($this->runtime_only_mode || $this->bypass ? 'no-redis'
+                : ($this->redis !== null && $this->connected ? 'redis' : 'no-conn')));
+            $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+            if (isset($_REQUEST['action']) && is_string($_REQUEST['action'])) { $path .= '?action=' . substr($_REQUEST['action'], 0, 60); }
+            global $wpdb;
+            $line = sprintf("%s\t%d\t%s\t%s\t%s\tq=%d\thit=%d\tmiss=%d\tmr=%d\tmem=%dM\t%d\t%s\n",
+                gmdate('Y-m-d\TH:i:s\Z'), $ms, strtoupper($_SERVER['REQUEST_METHOD'] ?? '-'),
+                $this->signed_in ? 'member' : 'guest', $mode,
+                isset($wpdb->num_queries) ? (int) $wpdb->num_queries : -1,
+                $this->stats['redis_hits'] ?? 0, $this->stats['redis_misses'] ?? 0, $this->stats['member_read_hits'] ?? 0,
+                (int) round(memory_get_peak_usage(true) / 1048576), (int) http_response_code(), substr($path, 0, 200));
+            @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
         }
 
         protected function stat_inc($key, $by = 1) {

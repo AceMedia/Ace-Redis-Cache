@@ -926,8 +926,15 @@ if (!class_exists('WP_Object_Cache')) {
             $start_time = microtime(true);
 
             if ($this->use_runtime_only_mode()) {
+                // $force means "skip the local copy and re-read the persistent layer". In runtime-only
+                // mode there is no persistent layer, so the local copy is the only truth and must be
+                // returned. Honouring $force here answered false to wp-cron's _get_cron_lock() (a forced
+                // read of 'doing_cron' straight after set_transient()), so wp-cron.php concluded another
+                // process held the lock and exited without running a single event. Cron runs are
+                // classified as update operations and land in this mode, so every scheduled job on a
+                // site with DISABLE_WP_CRON and a system cron stalled silently.
                 $local = $this->runtime_get($group, $key, $local_found);
-                if ($local_found && !$force) {
+                if ($local_found) {
                     $found = true;
                     $this->stat_inc('local_hits');
                     return $local;

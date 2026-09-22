@@ -839,12 +839,16 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($key === 'ace_redis_cache_settings') {
                     return $this->bypass; // Only exclude during bypass
                 }
-                // Cache theme options and other important settings
-                if (strpos($key, 'theme_mods_') === 0 || strpos($key, 'widget_') === 0) {
-                    return false;
+                // notoptions is per-request bookkeeping and must never be shared.
+                if ($key === 'notoptions') {
+                    return true;
                 }
-                // Exclude most individual options to prevent cache pollution
-                return true;
+                // Every other option persists. Non-autoloaded options (600 of them on
+                // sheff.events) were runtime-only "to prevent cache pollution", which meant
+                // each one read on a page was a MySQL query on every uncached request. They are
+                // plain DB rows like alloptions: update_option and delete_option keep the key
+                // current, admin and cron writes invalidate it, and the backstop TTL bounds it.
+                return false;
             }
             
             // Transients: persist by DEFAULT (denylist, not allowlist).
@@ -1078,10 +1082,16 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
-            // Check both group and key-level exclusions
-            if ($this->is_excluded_group($group) || $this->is_excluded_key($group, $key)) { 
-                $found = false; 
-                return false; 
+            // Excluded keys never touch Redis, but they must still answer from the in-request
+            // store: returning a miss here meant every get_option() of a non-autoloaded option
+            // hit MySQL again each time it was asked (one option 30 times in one request) and
+            // WordPress's notoptions list never stuck, so 160 of a guest page's 260 queries
+            // were the same handful of options over and over.
+            if ($this->is_excluded_group($group) || $this->is_excluded_key($group, $key)) {
+                $local = $this->runtime_get($group, $key, $local_found);
+                if ($local_found) { $found = true; $this->stat_inc('local_hits'); return $local; }
+                $found = false;
+                return false;
             }
 
             if ($this->is_bypass_group($group)) {

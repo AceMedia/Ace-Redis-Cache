@@ -1315,27 +1315,42 @@ class AceRedisCache {
             }
             $offset = $end + 1;
         }
+        // Not every site renders a marked-up shell: a block theme's front end is a
+        // <div class="wp-site-blocks"> with no <main> at all, and the first release of
+        // this guard silently stopped such a site storing any page whatsoever. Fall back
+        // to the first <main> without the marker, then to <body>; only a document with
+        // neither is the unrecognisable shape a fatal or half-booted render takes.
+        $element = 'main';
+        if ($open === false && $marker !== '' && ($candidate = stripos($html, '<main')) !== false && ($end = strpos($html, '>', $candidate)) !== false) {
+            $open = $end + 1;
+        }
+        if ($open === false && ($candidate = stripos($html, '<body')) !== false && ($end = strpos($html, '>', $candidate)) !== false) {
+            $open = $end + 1;
+            $element = 'body';
+        }
         if ($open === false) {
             return false;
         }
 
-        // Walk to the matching close so a nested <main> cannot cut the slice short.
+        // Walk to the matching close so a nested element cannot cut the slice short.
         $depth = 1;
         $cursor = $open;
         $close = false;
+        $open_tag = '<' . $element;
+        $close_tag = '</' . $element;
         while ($depth > 0) {
-            $next_open = stripos($html, '<main', $cursor);
-            $next_close = stripos($html, '</main', $cursor);
+            $next_open = stripos($html, $open_tag, $cursor);
+            $next_close = stripos($html, $close_tag, $cursor);
             if ($next_close === false) {
-                break; // Unclosed main - treat as unrecognisable below.
+                break; // Unclosed element - treat as unrecognisable below.
             }
             if ($next_open !== false && $next_open < $next_close) {
                 $depth++;
-                $cursor = $next_open + 5;
+                $cursor = $next_open + strlen($open_tag);
                 continue;
             }
             $depth--;
-            $cursor = $next_close + 6;
+            $cursor = $next_close + strlen($close_tag);
             if ($depth === 0) {
                 $close = $next_close;
             }

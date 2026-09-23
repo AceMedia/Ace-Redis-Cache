@@ -399,6 +399,7 @@ class AceRedisCache {
         add_action('ace_rc_cache_cleared', [$this, 'schedule_woocommerce_warm'], 10, 1);
         add_action('ace_rc_warm_woocommerce', [$this, 'run_woocommerce_warm'], 10, 1);
         add_action('init', [$this, 'maybe_serve_asset_proxy_request'], 0);
+        add_action('init', [$this, 'drain_early_refresh_queue'], 20);
         // Static asset headers (apply for all requests including admin media loads)
         if (!empty($this->settings['enable_static_asset_cache'])) {
             add_filter('wp_headers', [$this, 'set_static_cache_headers']);
@@ -2789,6 +2790,20 @@ class AceRedisCache {
         return $urls;
     }
 
+    /** Logical CPUs on this host, for pacing background work against the load average. */
+    private function cpu_count() {
+        static $n = null;
+        if ($n === null) {
+            $n = 0;
+            $info = @file_get_contents('/proc/cpuinfo');
+            if (is_string($info)) {
+                $n = preg_match_all('/^processor\s*:/m', $info);
+            }
+            $n = max(1, (int) apply_filters('ace_rc_cpu_count', $n ?: 2));
+        }
+        return $n;
+    }
+
     private function get_sitemap_prime_delay() {
         return max(60, (int) apply_filters('ace_rc_sitemap_prime_delay', 300, $this->settings));
     }
@@ -2839,10 +2854,60 @@ class AceRedisCache {
             'sslverify' => apply_filters('https_local_ssl_verify', false),
         ];
 
-        foreach ($batch as $url) {
+        // Pace to the box: a few renders at once when it is quiet (so a purge's backlog clears in
+        // minutes), one at a time with a breather and a shorter budget when it is busy.
+        $cpus = $this->cpu_count();
+        $load = function_exists('sys_getloadavg') ? (float) (sys_getloadavg()[0] ?? 0) : 0.0;
+        $busy = $load >= $cpus;
+        $parallel = ($is_cli && $load < $cpus / 2 && class_exists('WpOrg\\Requests\\Requests'))
+            ? max(1, (int) apply_filters('ace_rc_prime_parallel', 3, $this->settings)) : 1;
+        if ($busy) {
+            $budget = min($budget, 30.0);
+        }
+
+        foreach (array_chunk($batch, $parallel) as $chunk) {
             if ($done && (microtime(true) - $started) > $budget) {
                 break;
             }
+            if (count($chunk) > 1) {
+                $requests = [];
+                foreach ($chunk as $url) {
+                    $requests[$url] = [
+                        'url' => $url,
+                        'headers' => $args['headers'],
+                        'type' => 'GET',
+                        'options' => [
+                            'timeout' => $args['timeout'],
+                            'useragent' => $args['user-agent'],
+                            'redirects' => $args['redirection'],
+                            'verify' => (bool) $args['sslverify'],
+                        ],
+                    ];
+                }
+                // Requests' multi path never applies 'verify' => false to its sub-handles (only the
+                // single-request path does), so apply the same setting through its own hook.
+                $multi_options = [];
+                if (empty($args['sslverify'])) {
+                    $hooks = new \WpOrg\Requests\Hooks();
+                    $hooks->register('curl.before_multi_add', function (&$handle) {
+                        curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, 0);
+                        curl_setopt($handle, CURLOPT_SSL_VERIFYHOST, 0);
+                    });
+                    $multi_options['hooks'] = $hooks;
+                }
+                try {
+                    \WpOrg\Requests\Requests::request_multiple($requests, $multi_options);
+                } catch (\Throwable $t) {
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        error_log('AceRedisCache sitemap prime exception (batch): ' . $t->getMessage());
+                    }
+                }
+                foreach ($chunk as $url) {
+                    $done[] = $url;
+                }
+                continue;
+            }
+            $url = $chunk[0];
             try {
                 $resp = wp_remote_get($url, $args);
                 if (is_wp_error($resp) && defined('WP_DEBUG') && WP_DEBUG) {
@@ -2854,6 +2919,9 @@ class AceRedisCache {
                 }
             }
             $done[] = $url;
+            if ($busy) {
+                usleep(500000);
+            }
         }
 
         // Re-read before writing back, so URLs queued while this run was working are kept.
@@ -2881,6 +2949,50 @@ class AceRedisCache {
      *
      * @param array $urls Absolute URLs to warm.
      */
+    /**
+     * Pull the refreshes advanced-cache.php queued while serving stale pages pre-boot (a Redis set
+     * per host, ace:1:pagekey:{host}:refresh) into the refresher's queue. One SPOP per WordPress
+     * request, so it costs nothing measurable, and system cron boots WordPress every minute.
+     * They are due soon (a visitor already saw the stale copy), so the runner is asked for in a
+     * minute rather than the usual sitemap-prime delay.
+     */
+    public function drain_early_refresh_queue() {
+        if (!$this->cache_manager || empty($this->settings['enable_page_cache'])) {
+            return;
+        }
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+        } catch (\Throwable $t) {
+            return;
+        }
+        if (!$redis) {
+            return;
+        }
+        $hosts = array_unique(array_filter([
+            $this->normalize_cache_host((string) parse_url(home_url(), PHP_URL_HOST)),
+            $this->normalize_cache_host((string) ($_SERVER['HTTP_HOST'] ?? '')),
+        ]));
+        $urls = [];
+        foreach ($hosts as $host) {
+            try {
+                $got = $redis->rawCommand('SPOP', 'ace:1:pagekey:' . $host . ':refresh', '100');
+            } catch (\Throwable $t) {
+                continue;
+            }
+            foreach ((array) $got as $url) {
+                $url = (string) $url;
+                $url_host = $this->normalize_cache_host((string) parse_url($url, PHP_URL_HOST));
+                if ($url_host === $host && preg_match('#^https?://#', $url)) {
+                    $urls[] = $url;
+                }
+            }
+        }
+        if ($urls) {
+            $this->schedule_sitemap_prime_runner(60);
+            $this->enqueue_prime_urls($urls);
+        }
+    }
+
     private function enqueue_prime_urls(array $urls) {
         $urls = array_values(array_unique(array_filter(array_map('strval', $urls))));
         if (empty($urls)) {

@@ -197,21 +197,28 @@ try {
         $core_key, // minification-off sites store under the bare core key
     ];
 
-    // Stale pages go to WordPress, which serves the stored copy and queues one background refresh
-    // (stale-while-revalidate). A page is stale past its fresh-until time, or when it was stored
-    // before the site's last soft purge. Pages stored before the plugin wrote freshness markers
-    // are only handed over once a soft purge has happened.
+    // Stale-while-revalidate, served from here. A page is stale past its fresh-until time, or when
+    // it was stored before the site's last soft purge (pages stored before the plugin wrote
+    // freshness markers count as stale once a soft purge has happened). A stale page used to go to
+    // WordPress, which booted in full only to serve the same stored copy and queue a refresh, so
+    // after every deploy or import purge the whole site lost this fast path until the one-at-a-time
+    // refresher got round to each page. Now the stored copy is served here and the refresh is
+    // queued in Redis (one per page per 45s); the plugin drains that queue into its refresher.
+    // Define ACE_REDIS_EARLY_STALE false to hand stale pages to WordPress as before.
+    $stale = '';
     $fresh = $redis->get('ace:1:fresh:' . $core_key);
     $epoch = $redis->get($token_ns . 'epoch');
     $now   = time();
     if (is_string($fresh) && strpos($fresh, ':') !== false) {
         list($stored_at, $fresh_until) = array_map('intval', explode(':', $fresh, 2));
         if ($now > $fresh_until || ($epoch !== false && $stored_at < (int) $epoch)) {
-            $emit('MISS stale');
-            return;
+            $stale = 'stale';
         }
     } elseif ($epoch !== false) {
-        $emit('MISS stale-unmarked');
+        $stale = 'stale-unmarked';
+    }
+    if ($stale !== '' && defined('ACE_REDIS_EARLY_STALE') && !ACE_REDIS_EARLY_STALE) {
+        $emit('MISS ' . $stale);
         return;
     }
 
@@ -295,8 +302,19 @@ try {
 
     if (!$early_serve) {
         // Dark-launch: a real early-serve hit was confirmed — record it and let WordPress serve normally.
-        $emit('HIT');
+        $emit($stale !== '' ? 'HIT ' . $stale : 'HIT');
         return;
+    }
+
+    if ($stale !== '') {
+        // First stale hit for this page in 45s queues its refresh (same lock window the plugin uses).
+        // Best effort: a failure here only means the page is refreshed on a later hit.
+        try {
+            if ($redis->set('ace:1:swrlock:' . $core_key, '1', ['nx', 'ex' => 45])) {
+                $redis->sAdd($token_ns . 'refresh', $scheme . '://' . $host . $key_uri);
+                $redis->expire($token_ns . 'refresh', 86400);
+            }
+        } catch (Throwable $e) {}
     }
 
     if (!headers_sent()) {
@@ -305,8 +323,8 @@ try {
             header('Content-Encoding: ' . $encoding);
             header('Vary: Accept-Encoding');
         }
-        header('X-Ace-Early: HIT');
-        header('X-AceRedisCache: HIT (advcache)');
+        header('X-Ace-Early: ' . ($stale !== '' ? 'HIT ' . $stale : 'HIT'));
+        header('X-AceRedisCache: HIT (advcache' . ($stale !== '' ? ', stale' : '') . ')');
         if (function_exists('header_remove')) {
             header_remove('Content-Length');
         }

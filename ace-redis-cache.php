@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Ace Redis Cache
  * Description: Smart Redis-powered caching with WordPress Block API support and configurable exclusions for any plugins.
- * Version: 0.7.27
+ * Version: 0.7.28
  * Author: Ace Media
  * Requires at least: 5.0
  * Tested up to: 6.4
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ACE_REDIS_CACHE_VERSION', '0.7.27');
+define('ACE_REDIS_CACHE_VERSION', '0.7.28');
 define('ACE_REDIS_CACHE_PLUGIN_FILE', __FILE__);
 define('ACE_REDIS_CACHE_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('ACE_REDIS_CACHE_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -280,11 +280,13 @@ function ace_redis_cache() {
 
 /**
  * Mark every cached page stale without deleting it (see AceRedisCache::soft_purge_page_cache()).
- * For deploy hooks and imports.
+ * For deploy hooks and imports. Calls within ace_rc_soft_purge_min_interval of the last soft
+ * purge are coalesced into one trailing purge; pass $force = true (deploys) to purge at once.
  *
+ * @param bool $force Skip the coalescing window.
  * @return bool False when soft purging is not possible here; the caller should purge instead.
  */
-function ace_rc_soft_purge_page_cache() {
+function ace_rc_soft_purge_page_cache($force = false) {
     $plugin = ace_redis_cache();
-    return $plugin && method_exists($plugin, 'soft_purge_page_cache') && $plugin->soft_purge_page_cache();
+    return $plugin && method_exists($plugin, 'soft_purge_page_cache') && $plugin->soft_purge_page_cache((bool) $force);
 }

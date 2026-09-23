@@ -400,6 +400,8 @@ class AceRedisCache {
         add_action('ace_rc_warm_woocommerce', [$this, 'run_woocommerce_warm'], 10, 1);
         add_action('init', [$this, 'maybe_serve_asset_proxy_request'], 0);
         add_action('init', [$this, 'drain_early_refresh_queue'], 20);
+        // The trailing purge a coalesced soft purge asked for (see soft_purge_page_cache()).
+        add_action('ace_rc_deferred_soft_purge', function () { $this->soft_purge_page_cache(true); });
         // Static asset headers (apply for all requests including admin media loads)
         if (!empty($this->settings['enable_static_asset_cache'])) {
             add_filter('wp_headers', [$this, 'set_static_cache_headers']);
@@ -479,6 +481,25 @@ class AceRedisCache {
             
             // Priming cron handler
             add_action('ace_rc_prime_post_cache', [$this, 'prime_post_cache'], 10, 1);
+
+            // WooCommerce changes stock (orders, refunds, imports) and scheduled prices without a
+            // save_post, so a product page could keep showing the old stock or price until it
+            // expired. Purge just that product's page (and a variation's parent). Deliberately not
+            // the archive/broad purge: that would flush the whole cache on every order.
+            $purge_product = function ($product) {
+                $id = is_object($product) && method_exists($product, 'get_id') ? (int) $product->get_id() : (int) $product;
+                if (!$id) return;
+                $post = get_post($id);
+                if ($post && $post->post_type === 'product_variation' && $post->post_parent) {
+                    $id = (int) $post->post_parent;
+                }
+                $this->invalidate_post_page_cache($id, true);
+            };
+            add_action('woocommerce_product_set_stock', $purge_product, 50, 1);
+            add_action('woocommerce_variation_set_stock', $purge_product, 50, 1);
+            add_action('woocommerce_product_set_stock_status', function ($id) use ($purge_product) { $purge_product($id); }, 50, 1);
+            add_action('woocommerce_variation_set_stock_status', function ($id) use ($purge_product) { $purge_product($id); }, 50, 1);
+            add_action('woocommerce_update_product', $purge_product, 50, 1);
         }
     }
     
@@ -926,6 +947,21 @@ class AceRedisCache {
         if ($this->is_admin_auth_or_system_request()) {
             return;
         }
+        // "Never cache this response" (WooCommerce basket/checkout/account, Jetpack subscribers,
+        // live-odds pages): neither serve a stored copy nor store this one, and drop any copy stored
+        // before the page said so (once an hour per path). WooCommerce defines it on 'wp', before this.
+        if (defined('DONOTCACHEPAGE') && DONOTCACHEPAGE) {
+            if (!headers_sent()) { header('X-AceRedisCache: BYPASS donotcachepage'); }
+            $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+            $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+            try {
+                if ($this->cache_manager && method_exists($this->cache_manager, 'add')
+                    && $this->cache_manager->add('ace_rc:dnc:' . md5($host . $uri), 1, HOUR_IN_SECONDS)) {
+                    $this->purge_url($uri);
+                }
+            } catch (\Throwable $t) {}
+            return;
+        }
         // Respect no-cache warm window transient
         if (get_transient('ace_rc_no_cache_window')) {
             if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -1019,8 +1055,13 @@ class AceRedisCache {
             $host_mismatch = ($home_host && strcasecmp($home_host, $req_host) !== 0);
             $skip_cache_reason = null;
             if ($is_ip) { $skip_cache_reason = 'ip_host'; }
+            // The standard "never cache this response" signal: WooCommerce sets it on the basket,
+            // checkout and account pages, Jetpack for subscribers, plugins on live-odds or blocked
+            // responses. It was not honoured here, so a guest's (empty) basket was stored and served.
+            $do_not_cache = defined('DONOTCACHEPAGE') && DONOTCACHEPAGE;
+            if ($do_not_cache) { $skip_cache_reason = 'donotcachepage'; }
             // Optional: allow override via filter
-            $skip_cache = apply_filters('ace_rc_skip_page_cache_store', ($is_ip || $host_mismatch), [
+            $skip_cache = apply_filters('ace_rc_skip_page_cache_store', ($is_ip || $host_mismatch || $do_not_cache), [
                 'home_host' => $home_host,
                 'request_host' => $req_host,
                 'is_ip' => $is_ip,
@@ -1108,6 +1149,16 @@ class AceRedisCache {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP reason=local_dev_asset_reference -->";
             } elseif ($store_block_reason !== null && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP reason={$store_block_reason} -->";
+            }
+            // A copy stored before this page said "do not cache" would otherwise keep being served
+            // (and, once stale, queue refreshes that never store). Drop it, once an hour per path.
+            if ($do_not_cache && $this->cache_manager && method_exists($this->cache_manager, 'add')) {
+                $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+                try {
+                    if ($this->cache_manager->add('ace_rc:dnc:' . md5($req_host . $uri), 1, HOUR_IN_SECONDS)) {
+                        $this->purge_url($uri);
+                    }
+                } catch (\Throwable $t) {}
             }
             // For the live response, strip only the wrapper markers (leave real dynamic content rendered)
             if ($this->enable_dynamic_block_placeholders && !empty($this->placeholder_blocks)) {
@@ -1875,6 +1926,25 @@ class AceRedisCache {
             $ns = 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '');
             $redis->rawCommand('SET', $ns . 'site_version', (string) $version);
             $redis->rawCommand('SET', $ns . 'suffix', implode(':', $suffix_parts));
+            // Paths advanced-cache.php must never serve from cache, published because it runs before
+            // WordPress and cannot ask: WooCommerce's basket, checkout and account pages under
+            // whatever slugs this site gives them (it only knows the default /cart/ etc.), so a copy
+            // stored before those pages were marked do-not-cache is never handed out pre-boot.
+            $bypass = [];
+            if (function_exists('wc_get_page_permalink')) {
+                foreach (['cart', 'checkout', 'myaccount'] as $wc_page) {
+                    $bypass[] = (string) parse_url((string) wc_get_page_permalink($wc_page), PHP_URL_PATH);
+                }
+            }
+            $bypass = array_values(array_unique(array_filter(array_map(function ($p) {
+                $p = '/' . trim((string) $p, '/');
+                return $p === '/' ? '' : $p; // never the whole site
+            }, (array) apply_filters('ace_rc_early_bypass_paths', $bypass, $host)))));
+            if ($bypass) {
+                $redis->rawCommand('SET', $ns . 'bypass_paths', implode("\n", $bypass), 'EX', (string) DAY_IN_SECONDS);
+            } else {
+                $redis->rawCommand('DEL', $ns . 'bypass_paths');
+            }
         } catch (\Throwable $t) {
             // Non-fatal: advanced-cache just stays in dark-launch MISS until the keys exist.
         }
@@ -3133,11 +3203,29 @@ class AceRedisCache {
      * hard purge sending every request to a cold render at once (a deploy under crawler load).
      * Pages without a grace window are not affected and simply age out on their own TTL.
      *
+     * Coalesced: every soft purge marks the whole site stale, and imports, feeds and publishing
+     * can call this many times an hour, which kept the refresher re-rendering the site all day.
+     * Within ace_rc_soft_purge_min_interval (default 300s) of the last one, a call schedules a
+     * single trailing purge at the end of the window and reports success, so nothing waits
+     * longer than the window. $force (deploys: a new release renders differently) skips it.
+     *
+     * @param bool $force Purge now even inside the coalescing window.
      * @return bool False when there is no cache connection (callers should fall back to a purge).
      */
-    public function soft_purge_page_cache() {
+    public function soft_purge_page_cache($force = false) {
         if (!$this->cache_manager || $this->page_cache_grace_default() <= 0 && !has_filter('ace_rc_page_grace')) {
             return false;
+        }
+        $min = (int) apply_filters('ace_rc_soft_purge_min_interval', 300, $this->settings);
+        if (!$force && $min > 0) {
+            $last = 0;
+            try { $last = (int) $this->cache_manager->get($this->page_epoch_key); } catch (\Throwable $t) {}
+            if ($last > 0 && time() - $last < $min) {
+                if (function_exists('wp_next_scheduled') && !wp_next_scheduled('ace_rc_deferred_soft_purge')) {
+                    wp_schedule_single_event($last + $min + 5, 'ace_rc_deferred_soft_purge');
+                }
+                return true;
+            }
         }
         try {
             $this->cache_manager->set($this->page_epoch_key, time(), 30 * DAY_IN_SECONDS);

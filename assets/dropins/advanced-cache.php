@@ -186,6 +186,19 @@ try {
         return;
     }
 
+    // Paths the plugin says must never come from cache (WooCommerce basket/checkout/account under
+    // this site's own slugs; see maybe_publish_page_key_inputs()). Prefix match on the path.
+    $bypass_paths = $redis->get($token_ns . 'bypass_paths');
+    if (is_string($bypass_paths) && $bypass_paths !== '') {
+        $req_path = '/' . trim((string) parse_url($request_uri, PHP_URL_PATH), '/');
+        foreach (explode("\n", $bypass_paths) as $bp) {
+            if ($bp !== '' && ($req_path === $bp || strpos($req_path . '/', rtrim($bp, '/') . '/') === 0)) {
+                $emit('BYPASS path');
+                return;
+            }
+        }
+    }
+
     $core_key = 'page_cache:' . $key_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version;
     if ($suffix !== '') {
         $core_key .= ':' . $suffix;

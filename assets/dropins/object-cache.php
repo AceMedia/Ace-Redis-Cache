@@ -809,6 +809,63 @@ if (!class_exists('WP_Object_Cache')) {
          * request rebuild it from the database. One lazy connection per process, only when
          * something persistent is actually written.
          */
+        /**
+         * Transients are shared data with their own expiry, not per-request or per-user state, so
+         * they are read from and written to Redis even when the rest of the request is held in
+         * memory only (admin, logged-in, AJAX, REST, cron). With a persistent object cache
+         * WordPress keeps transients nowhere else: before this, every transient set during an
+         * admin request was forgotten when the request ended, so every admin page re-ran every
+         * transient-cached remote call it touched. On IEG that was Jetpack's brute-force and HTTPS
+         * checks, a plugin SDK's five-day rollback lookup, the cookie banner's API calls and core's
+         * own update checks, each a blocking HTTP request on every admin page, 3-10 s in all.
+         * Excluded keys, oversize values and ACE_OC_SHARED_TRANSIENTS=false keep the old behaviour.
+         */
+        protected function is_shared_transient($group, $key) {
+            if ($group !== 'transient' && $group !== 'site-transient') return false;
+            if ($this->suspend_persistent_writes || !extension_loaded('redis')) return false;
+            if (defined('ACE_OC_SHARED_TRANSIENTS') && !ACE_OC_SHARED_TRANSIENTS) return false;
+            return !$this->is_excluded_key($group, $key);
+        }
+
+        protected function ensure_redis() {
+            if ($this->redis !== null) return true;
+            if ($this->invalidate_connect_failed) return false;
+            try { $this->init_redis(); } catch (\Throwable $e) {}
+            if ($this->redis === null) { $this->invalidate_connect_failed = true; return false; }
+            return true;
+        }
+
+        protected function shared_transient_read($group, $key, &$found) {
+            $found = false;
+            try { $raw = $this->redis->get($this->k($key, $group)); } catch (\Throwable $e) { $this->stat_inc('redis_errors'); return false; }
+            if ($raw === false || $raw === null) { $this->stat_inc('redis_misses'); return false; }
+            $val = $this->decode_from_store($raw);
+            if ($val === $this->decode_miss_token()) { $this->stat_inc('foreign_format_misses'); return false; }
+            $this->runtime_set($group, $key, $val);
+            $this->stat_inc('shared_transient_hits');
+            $found = true;
+            return $val;
+        }
+
+        protected function shared_transient_write($group, $key, $data, $expire, $only_if_absent = false) {
+            $this->runtime_set($group, $key, $data);
+            if ($this->exceeds_max_value_size($data, $group)) {
+                $this->invalidate_persistent($group, $key, $data, true);
+                return true;
+            }
+            try {
+                $k = $this->k($key, $group);
+                $payload = $this->encode_for_store($data);
+                $ttl = $this->effective_ttl($expire);
+                $ok = $only_if_absent ? (bool) $this->redis->set($k, $payload, ['nx', 'ex' => $ttl]) : (bool) $this->redis->setex($k, $ttl, $payload);
+                if ($ok) $this->stat_inc('shared_transient_writes');
+                return $only_if_absent ? $ok : true;
+            } catch (\Throwable $e) {
+                $this->stat_inc('persist_write_errors');
+                return true;
+            }
+        }
+
         protected function invalidate_persistent($group, $key, $data = null, $is_write = false) {
             $group = $group ?: 'default';
             if (!$this->is_persistent_group($group) || $this->is_bypass_group($group) || $this->is_excluded_group($group)) return;
@@ -980,12 +1037,15 @@ if (!class_exists('WP_Object_Cache')) {
             $group = $group ?: 'default';
 
             if ($this->use_runtime_only_mode()) {
-                if (!isset($this->runtime[$group]) || !array_key_exists($key, $this->runtime[$group])) {
-                    $this->runtime_set($group, $key, $data);
-                    $this->invalidate_persistent($group, $key, $data, true);
-                    return true;
+                if (isset($this->runtime[$group]) && array_key_exists($key, $this->runtime[$group])) {
+                    return false;
                 }
-                return false;
+                if ($this->is_shared_transient($group, $key) && $this->ensure_redis()) {
+                    return $this->shared_transient_write($group, $key, $data, $expire, true);
+                }
+                $this->runtime_set($group, $key, $data);
+                $this->invalidate_persistent($group, $key, $data, true);
+                return true;
             }
 
             // For excluded groups: do a no-op but report success and keep runtime coherent
@@ -1026,6 +1086,9 @@ if (!class_exists('WP_Object_Cache')) {
             $start_time = microtime(true);
 
             if ($this->use_runtime_only_mode()) {
+                if ($this->is_shared_transient($group, $key) && $this->ensure_redis()) {
+                    return $this->shared_transient_write($group, $key, $data, $expire);
+                }
                 $this->runtime_set($group, $key, $data);
                 $this->invalidate_persistent($group, $key, $data, true);
                 return true;
@@ -1100,6 +1163,9 @@ if (!class_exists('WP_Object_Cache')) {
                     $found = true;
                     $this->stat_inc('local_hits');
                     return $local;
+                }
+                if ($this->is_shared_transient($group, $key) && $this->ensure_redis()) {
+                    return $this->shared_transient_read($group, $key, $found);
                 }
                 if ($this->member_read_mode) {
                     $val = $this->member_read($group, $key, $found);

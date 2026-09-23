@@ -822,7 +822,12 @@ if (!class_exists('WP_Object_Cache')) {
          */
         protected function is_shared_transient($group, $key) {
             if ($group !== 'transient' && $group !== 'site-transient') return false;
-            if ($this->suspend_persistent_writes || !extension_loaded('redis')) return false;
+            // Deliberately NOT gated on suspend_persistent_writes: that flag is set for every
+            // wp-admin page load, which is exactly where the lost transients cost the most. It
+            // exists so the editorial backend never depends on Redis, and this path does not
+            // either: a 0.3 s connect timeout, one attempt per request, and a miss falls back to
+            // whatever the caller does without a cache.
+            if (!extension_loaded('redis')) return false;
             if (defined('ACE_OC_SHARED_TRANSIENTS') && !ACE_OC_SHARED_TRANSIENTS) return false;
             return !$this->is_excluded_key($group, $key);
         }

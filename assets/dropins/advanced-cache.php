@@ -324,7 +324,8 @@ try {
         // Best effort: a failure here only means the page is refreshed on a later hit.
         try {
             if ($redis->set('ace:1:swrlock:' . $core_key, '1', ['nx', 'ex' => 45])) {
-                $redis->sAdd($token_ns . 'refresh', $scheme . '://' . $host . $key_uri);
+                // #mobile: the refresher renders the mobile copy with a mobile user agent.
+                $redis->sAdd($token_ns . 'refresh', $scheme . '://' . $host . $key_uri . ($mobile ? '#mobile' : ''));
                 $redis->expire($token_ns . 'refresh', 86400);
             }
         } catch (Throwable $e) {}

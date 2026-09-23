@@ -370,6 +370,13 @@ class AceRedisCache {
         add_filter('site_option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
 
         add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
+        // Recache on edit (#21). Registered for every request, not in setup_caching_hooks():
+        // editors save from wp-admin and the REST API as signed-in users, which that skips.
+        if (!empty($this->settings['enabled']) && !empty($this->settings['enable_page_cache']) && $this->cache_manager) {
+            add_action('save_post', [$this, 'queue_recache_on_save'], 99, 2);
+            add_action('before_delete_post', [$this, 'recache_on_delete'], 10, 2);
+            add_action('wp_update_nav_menu', [$this, 'queue_sitewide_recache']);
+        }
         add_action('ace_te_taxonomy_changed', [$this, 'handle_taxonomy_changed'], 10, 2);
         
         // Prime critical options after permalink or rewrite changes
@@ -2444,6 +2451,20 @@ class AceRedisCache {
         $is_published  = ($post_after->post_status === 'publish');
         if (!$was_published && !$is_published) return; // neither side published
         if (!is_post_type_viewable($post_after->post_type)) return;
+        // A page that stopped being published, or moved, is not recached (its new render is a 404
+        // or lives elsewhere); its old address is purged now. get_permalink() of the before
+        // snapshot is the address it was cached under (trashing renames the slug).
+        if ($was_published && (!$is_published || $post_before->post_name !== $post_after->post_name)
+            && $this->recache_on_edit_enabled()) {
+            $old_link = get_permalink($post_before);
+            if ($old_link) {
+                $this->purge_url($old_link);
+            }
+            if (!$is_published) {
+                // The pages that listed it are recached (queue_recache_on_save() skips unpublished posts).
+                $this->queue_recache_post($post_ID);
+            }
+        }
         // Critical change detection: a transition into publish OR a slug change while published must invalidate immediately.
         // Deferring these allows stale transients (old slug / draft permalink) to survive long enough to cause
         // redirect_canonical() to send guests to a non-public draft URL (404). Force immediate purge to prevent that.
@@ -2750,9 +2771,27 @@ class AceRedisCache {
         return apply_filters('ace_rc_defer_post_invalidation', true, $this->settings) && !$this->deferred_processing;
     }
 
+    /**
+     * This site's copy of a plugin-wide Redis key. The plugin's connection has no key prefix, so a
+     * bare key is shared by every site in a multisite network and by every install on the same
+     * Redis database. For the work queues that meant one site's cron runner took another site's
+     * queued post IDs, looked them up in the wrong blog (a different post, or none) and then
+     * deleted the lot, so the site that queued them never purged anything.
+     */
+    private function site_scoped_key($key) {
+        $home = (string) home_url();
+        $host = $this->normalize_cache_host((string) parse_url($home, PHP_URL_HOST));
+        $path = rtrim((string) parse_url($home, PHP_URL_PATH), '/');
+        return $key . ':' . $host . $path;
+    }
+
+    private function site_page_epoch_key() {
+        return $this->site_scoped_key($this->page_epoch_key);
+    }
+
     private function get_runtime_queue($key, $fallback_option) {
         if ($this->cache_manager) {
-            $queue = $this->cache_manager->get($key);
+            $queue = $this->cache_manager->get($this->site_scoped_key($key));
             return is_array($queue) ? $queue : [];
         }
 
@@ -2762,7 +2801,7 @@ class AceRedisCache {
 
     private function set_runtime_queue($key, $fallback_option, array $queue, $ttl) {
         if ($this->cache_manager) {
-            $this->cache_manager->set($key, $queue, max(60, (int) $ttl));
+            $this->cache_manager->set($this->site_scoped_key($key), $queue, max(60, (int) $ttl));
             return;
         }
 
@@ -2771,7 +2810,7 @@ class AceRedisCache {
 
     private function delete_runtime_queue($key, $fallback_option) {
         if ($this->cache_manager) {
-            $this->cache_manager->delete($key);
+            $this->cache_manager->delete($this->site_scoped_key($key));
             return;
         }
 
@@ -2883,8 +2922,15 @@ class AceRedisCache {
     }
 
     private function schedule_sitemap_prime_runner($delay = null) {
-        if (!wp_next_scheduled('ace_rc_run_sitemap_prime_batch')) {
-            $delay = $delay === null ? $this->get_sitemap_prime_delay() : max(1, (int) $delay);
+        $delay = $delay === null ? $this->get_sitemap_prime_delay() : max(1, (int) $delay);
+        $next = wp_next_scheduled('ace_rc_run_sitemap_prime_batch');
+        // Bring a run that is further off than this caller needs forward (an edit's recache must not
+        // wait behind the five-minute sitemap delay); never push one back.
+        if ($next && $next > time() + $delay + 30) {
+            wp_unschedule_event($next, 'ace_rc_run_sitemap_prime_batch');
+            $next = false;
+        }
+        if (!$next) {
             @wp_schedule_single_event(time() + $delay, 'ace_rc_run_sitemap_prime_batch');
         }
     }
@@ -2939,56 +2985,35 @@ class AceRedisCache {
             if ($done && (microtime(true) - $started) > $budget) {
                 break;
             }
-            if (count($chunk) > 1) {
-                $requests = [];
-                foreach ($chunk as $url) {
-                    $requests[$url] = [
-                        'url' => $url,
-                        'headers' => $args['headers'],
-                        'type' => 'GET',
-                        'options' => [
-                            'timeout' => $args['timeout'],
-                            'useragent' => $args['user-agent'],
-                            'redirects' => $args['redirection'],
-                            'verify' => (bool) $args['sslverify'],
-                        ],
-                    ];
-                }
-                // Requests' multi path never applies 'verify' => false to its sub-handles (only the
-                // single-request path does), so apply the same setting through its own hook.
-                $multi_options = [];
-                if (empty($args['sslverify'])) {
-                    $hooks = new \WpOrg\Requests\Hooks();
-                    $hooks->register('curl.before_multi_add', function (&$handle) {
-                        curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, 0);
-                        curl_setopt($handle, CURLOPT_SSL_VERIFYHOST, 0);
-                    });
-                    $multi_options['hooks'] = $hooks;
-                }
-                try {
-                    \WpOrg\Requests\Requests::request_multiple($requests, $multi_options);
-                } catch (\Throwable $t) {
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        error_log('AceRedisCache sitemap prime exception (batch): ' . $t->getMessage());
-                    }
-                }
-                foreach ($chunk as $url) {
-                    $done[] = $url;
-                }
-                continue;
+            // Each page's freshness marker before the render, to tell afterwards whether the
+            // render replaced the stored copy.
+            $before = [];
+            foreach ($chunk as $url) {
+                $before[$url] = $this->page_fresh_marker_for_url($url);
             }
-            $url = $chunk[0];
-            try {
-                $resp = wp_remote_get($url, $args);
-                if (is_wp_error($resp) && defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('AceRedisCache sitemap prime failed: ' . $url . ' error=' . $resp->get_error_message());
+            $fetch_start = time();
+            $this->prime_fetch($chunk, $args);
+            // Only a stored render replaces the copy visitors are getting. The first render of a
+            // path whose warm marker has lapsed, or one inside the post-edit warm window, is
+            // deliberately not stored, so the old copy stayed until some later visitor's refresh.
+            // One more render stores it. Only pages that had a copy are checked, so a URL that is
+            // never stored (a sitemap) is not rendered twice.
+            $retry = [];
+            foreach ($chunk as $url) {
+                if ($before[$url] === null) {
+                    continue;
                 }
-            } catch (\Throwable $t) {
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('AceRedisCache sitemap prime exception: ' . $url . ' error=' . $t->getMessage());
+                $after = $this->page_fresh_marker_for_url($url);
+                if ($after === null || $after === $before[$url] || $this->fresh_marker_stored_at($after) < $fetch_start) {
+                    $retry[] = $url;
                 }
             }
-            $done[] = $url;
+            if ($retry && (microtime(true) - $started) <= $budget) {
+                $this->prime_fetch($retry, $args);
+            }
+            foreach ($chunk as $url) {
+                $done[] = $url;
+            }
             if ($busy) {
                 usleep(500000);
             }
@@ -3010,6 +3035,480 @@ class AceRedisCache {
         if ($this->cache_manager) {
             $this->cache_manager->delete($lock_key);
         }
+    }
+
+    /**
+     * Fetch queued URLs as the refresher: a primer header (so both cache layers re-render and
+     * re-store rather than serve), several at once when asked. A URL queued with #mobile is the
+     * mobile copy of that page and is fetched with a mobile user agent, because the page key
+     * carries the device: a desktop-only refresh never replaced what phones were being served.
+     */
+    private function prime_fetch(array $urls, array $args) {
+        $mobile_ua = 'Mozilla/5.0 (Linux; Android 14; Mobile) ' . $args['user-agent'];
+        if (count($urls) > 1 && class_exists('WpOrg\\Requests\\Requests')) {
+            $requests = [];
+            foreach ($urls as $url) {
+                list($fetch_url, $device) = $this->split_prime_url($url);
+                $requests[$url] = [
+                    'url' => $fetch_url,
+                    'headers' => $args['headers'],
+                    'type' => 'GET',
+                    'options' => [
+                        'timeout' => $args['timeout'],
+                        'useragent' => $device === 'mobile' ? $mobile_ua : $args['user-agent'],
+                        'redirects' => $args['redirection'],
+                        'verify' => (bool) $args['sslverify'],
+                    ],
+                ];
+            }
+            // Requests' multi path never applies 'verify' => false to its sub-handles (only the
+            // single-request path does), so apply the same setting through its own hook.
+            $multi_options = [];
+            if (empty($args['sslverify'])) {
+                $hooks = new \WpOrg\Requests\Hooks();
+                $hooks->register('curl.before_multi_add', function (&$handle) {
+                    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, 0);
+                    curl_setopt($handle, CURLOPT_SSL_VERIFYHOST, 0);
+                });
+                $multi_options['hooks'] = $hooks;
+            }
+            try {
+                \WpOrg\Requests\Requests::request_multiple($requests, $multi_options);
+            } catch (\Throwable $t) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('AceRedisCache sitemap prime exception (batch): ' . $t->getMessage());
+                }
+            }
+            return;
+        }
+        foreach ($urls as $url) {
+            list($fetch_url, $device) = $this->split_prime_url($url);
+            $request_args = $args;
+            if ($device === 'mobile') {
+                $request_args['user-agent'] = $mobile_ua;
+            }
+            try {
+                $resp = wp_remote_get($fetch_url, $request_args);
+                if (is_wp_error($resp) && defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('AceRedisCache sitemap prime failed: ' . $url . ' error=' . $resp->get_error_message());
+                }
+            } catch (\Throwable $t) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('AceRedisCache sitemap prime exception: ' . $url . ' error=' . $t->getMessage());
+                }
+            }
+        }
+    }
+
+    /** [url to fetch, device] for a queued refresh URL (see prime_fetch()). */
+    private function split_prime_url($url) {
+        $url = (string) $url;
+        if (substr($url, -7) === '#mobile') {
+            return [substr($url, 0, -7), 'mobile'];
+        }
+        $hash = strpos($url, '#');
+        return [$hash === false ? $url : substr($url, 0, $hash), 'desktop'];
+    }
+
+    /**
+     * The page-cache key (without the page_cache:/page_cache_min: prefix) that a request for this
+     * queued URL is stored under. Built from the key inputs the plugin publishes for
+     * advanced-cache.php (site_version + suffix per host), the same way the drop-in builds it, so
+     * it matches what visitors are served; falls back to building it here when none are published.
+     */
+    private function page_core_key_for_url($url) {
+        list($fetch_url, $device) = $this->split_prime_url($url);
+        $parts = wp_parse_url($fetch_url);
+        if (!is_array($parts) || empty($parts['host'])) {
+            return '';
+        }
+        $host = $this->normalize_cache_host($parts['host']);
+        $scheme = strtolower((string) ($parts['scheme'] ?? 'https'));
+        $uri = (string) ($parts['path'] ?? '/');
+        if ($uri === '') {
+            $uri = '/';
+        }
+        if (isset($parts['query']) && $parts['query'] !== '') {
+            $uri .= '?' . $parts['query'];
+        }
+        $uri = self::normalize_request_uri($uri);
+
+        static $tokens = [];
+        if (!array_key_exists($host, $tokens)) {
+            $tokens[$host] = null;
+            try {
+                $redis = $this->cache_manager ? $this->cache_manager->get_redis_connection()->get_connection() : null;
+                if ($redis) {
+                    $ns = 'ace:1:pagekey:' . $host . ':';
+                    $version = $redis->rawCommand('GET', $ns . 'site_version');
+                    $suffix = $redis->rawCommand('GET', $ns . 'suffix');
+                    if ($version !== false && $version !== null && $suffix !== false && $suffix !== null) {
+                        $tokens[$host] = [(int) $version, (string) $suffix];
+                    }
+                }
+            } catch (\Throwable $t) {}
+        }
+        if ($tokens[$host] === null) {
+            return $this->build_page_cache_core_key($uri, $scheme, $device, null, $host);
+        }
+        list($version, $suffix) = $tokens[$host];
+        return 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . $version . ($suffix !== '' ? ':' . $suffix : '');
+    }
+
+    /** The raw "stored_at:fresh_until" marker beside a queued URL's page, or null. */
+    private function page_fresh_marker_for_url($url) {
+        $core = $this->page_core_key_for_url($url);
+        if ($core === '' || !$this->cache_manager) {
+            return null;
+        }
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            $raw = $redis ? $redis->rawCommand('GET', 'ace:1:fresh:' . $core) : false;
+        } catch (\Throwable $t) {
+            return null;
+        }
+        return is_string($raw) && $raw !== '' ? $raw : null;
+    }
+
+    private function fresh_marker_stored_at($marker) {
+        return (int) explode(':', (string) $marker, 2)[0];
+    }
+
+    /* ============================= Recache on edit (#21) ============================= */
+
+    /**
+     * Post types whose content is on every page (templates, template parts, navigation, global
+     * styles, classic menu items): an edit makes the whole site stale.
+     */
+    private function sitewide_recache_post_types() {
+        return (array) apply_filters('ace_rc_sitewide_recache_post_types', [
+            'wp_template', 'wp_template_part', 'wp_navigation', 'wp_global_styles', 'nav_menu_item',
+        ], $this->settings);
+    }
+
+    private function recache_on_edit_enabled() {
+        return !empty($this->settings['enable_page_cache']) && $this->cache_manager
+            && apply_filters('ace_rc_recache_on_edit', true, $this->settings);
+    }
+
+    /**
+     * Whether an edit's pages are re-rendered straight away or only marked stale (refreshed when
+     * next visited). Asked when the post is saved, not when cron gets to it, because sites turn
+     * priming off for bulk imports and cron/CLI saves through ace_rc_enable_cache_priming
+     * (Sheff.Events: an import queued 919 primes and put the box under load 17).
+     */
+    private function recache_priming_allowed($post_id) {
+        return (bool) apply_filters('ace_rc_enable_cache_priming', true, (int) $post_id, $this->settings);
+    }
+
+    /**
+     * Hook: save_post, in every request context. Editors save from wp-admin or the REST API as a
+     * signed-in user, and the page-cache purge hooks are only registered for front-end guest
+     * requests, so an edit made in the block editor never purged anything itself; synced
+     * patterns, template parts and navigation (not "viewable" post types) were skipped
+     * everywhere. This only queues the post: the work runs from cron (run_deferred_invalidation).
+     * A revision stands for its post, so restoring or saving one recaches the post it belongs to.
+     */
+    public function queue_recache_on_save($post_id, $post = null) {
+        if (!$this->recache_on_edit_enabled() || wp_is_post_autosave($post_id)) {
+            return;
+        }
+        $parent = wp_is_post_revision($post_id);
+        if ($parent) {
+            $post_id = (int) $parent;
+            $post = get_post($post_id);
+        }
+        if (!$post instanceof \WP_Post || $post->post_status !== 'publish') {
+            return; // leaving publish is handled by on_post_updated(), which knows the old URL
+        }
+        static $queued = [];
+        if (in_array($post->post_type, $this->sitewide_recache_post_types(), true)) {
+            if (!isset($queued['__sitewide'])) {
+                $queued['__sitewide'] = true;
+                $this->queue_sitewide_recache(); // once, however many menu items a save touches
+            }
+            return;
+        }
+        if ($post->post_type !== 'wp_block' && !is_post_type_viewable($post->post_type)) {
+            return;
+        }
+        if (isset($queued[$post_id])) {
+            return;
+        }
+        $queued[$post_id] = true;
+        $this->queue_recache_post($post_id);
+    }
+
+    /**
+     * Queue one post for the cron runner. A Redis set rather than the deferred queue's array,
+     * which is read and rewritten whole on every save: an import that inserts thousands of posts
+     * would move that growing array in and out of Redis once per post. Each member is
+     * "post_id:prime" (see recache_priming_allowed()).
+     */
+    private function queue_recache_post($post_id) {
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+            if (!$redis) {
+                return;
+            }
+            $key = $this->site_scoped_key('ace_rc_recache_posts');
+            $redis->rawCommand('SADD', $key, (int) $post_id . ':' . ($this->recache_priming_allowed($post_id) ? 1 : 0));
+            $redis->rawCommand('EXPIRE', $key, (string) $this->deferred_queue_ttl);
+        } catch (\Throwable $t) {
+            return;
+        }
+        $this->schedule_deferred_runner();
+    }
+
+    /** Take up to $limit queued posts: [post_id => ['recache' => true, 'prime' => bool]]. */
+    private function take_recache_posts($limit = 500) {
+        $taken = [];
+        try {
+            $redis = $this->cache_manager ? $this->cache_manager->get_redis_connection()->get_connection() : null;
+            $members = $redis ? $redis->rawCommand('SPOP', $this->site_scoped_key('ace_rc_recache_posts'), (string) (int) $limit) : [];
+        } catch (\Throwable $t) {
+            $members = [];
+        }
+        foreach ((array) $members as $member) {
+            list($id, $prime) = array_pad(explode(':', (string) $member, 2), 2, '1');
+            $id = (int) $id;
+            if ($id > 0) {
+                $taken[$id] = ['recache' => true, 'prime' => !empty($taken[$id]['prime']) || $prime === '1'];
+            }
+        }
+        return $taken;
+    }
+
+    private function has_queued_recache_posts() {
+        try {
+            $redis = $this->cache_manager ? $this->cache_manager->get_redis_connection()->get_connection() : null;
+            return $redis && (int) $redis->rawCommand('SCARD', $this->site_scoped_key('ace_rc_recache_posts')) > 0;
+        } catch (\Throwable $t) {
+            return false;
+        }
+    }
+
+    /** Hook: wp_update_nav_menu. A classic menu is on every page. */
+    public function queue_sitewide_recache() {
+        if (!$this->recache_on_edit_enabled()) {
+            return;
+        }
+        $queue = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
+        $queue['__sitewide'] = ['recache' => true];
+        $this->set_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option, $queue, $this->deferred_queue_ttl);
+        $this->schedule_deferred_runner();
+    }
+
+    /**
+     * Hook: before_delete_post. The post is gone by the time cron would look at it, so its own
+     * page is purged and the pages that listed it are recached now. Deleting a published post
+     * outright is rare (the admin deletes from the bin, by which time it is unpublished).
+     */
+    public function recache_on_delete($post_id, $post = null) {
+        if (!$this->recache_on_edit_enabled()) {
+            return;
+        }
+        $post = $post instanceof \WP_Post ? $post : get_post($post_id);
+        if (!$post || $post->post_status !== 'publish' || !is_post_type_viewable($post->post_type)) {
+            return;
+        }
+        $permalink = get_permalink($post);
+        if ($permalink) {
+            $this->purge_url($permalink);
+        }
+        $urls = $this->related_listing_urls($post);
+        $this->recache_urls($urls, [], $this->recache_priming_allowed($post_id) ? [] : $urls);
+    }
+
+    /**
+     * The URLs whose cached copy shows this post somewhere other than its own page: the home
+     * page, the posts page, its post type archive and its term archives (the author archive
+     * only for posts). Filter: ace_rc_recache_related_urls.
+     */
+    private function related_listing_urls(\WP_Post $post) {
+        $urls = [home_url('/')];
+        $page_for_posts = (int) get_option('page_for_posts');
+        if ($page_for_posts && $post->post_type === 'post') {
+            $urls[] = get_permalink($page_for_posts);
+        }
+        $archive = get_post_type_archive_link($post->post_type);
+        if ($archive) {
+            $urls[] = $archive;
+        }
+        foreach (get_object_taxonomies($post->post_type, 'objects') as $tax) {
+            if (empty($tax->public) || empty($tax->publicly_queryable)) {
+                continue;
+            }
+            $terms = get_the_terms($post, $tax->name);
+            if (!is_array($terms)) {
+                continue;
+            }
+            foreach ($terms as $term) {
+                $link = get_term_link($term);
+                if (is_string($link)) {
+                    $urls[] = $link;
+                }
+            }
+        }
+        if ($post->post_type === 'post') {
+            $urls[] = get_author_posts_url((int) $post->post_author);
+        }
+        return (array) apply_filters('ace_rc_recache_related_urls', array_values(array_unique(array_filter($urls))), $post, $this->settings);
+    }
+
+    /**
+     * What an edited post changes: the URLs to recache, and whether the whole site is affected.
+     * A synced pattern (wp_block) is traced to the published posts that include it (and to
+     * patterns that include those, three levels deep); one used by a template or template part,
+     * in the database or in the active theme's files, is on every page.
+     *
+     * @return array{0: string[], 1: bool} [urls, sitewide]
+     */
+    private function recache_targets(\WP_Post $post, $depth = 0, array &$seen = []) {
+        if (isset($seen[$post->ID]) || $depth > 3) {
+            return [[], false];
+        }
+        $seen[$post->ID] = true;
+        if (in_array($post->post_type, $this->sitewide_recache_post_types(), true)) {
+            return [[], true];
+        }
+        if ($post->post_type === 'wp_block') {
+            return $this->synced_pattern_targets($post, $depth, $seen);
+        }
+        if (!is_post_type_viewable($post->post_type)) {
+            return [[], false];
+        }
+        $urls = $post->post_status === 'publish' ? [get_permalink($post)] : [];
+        $urls = array_merge($urls, $this->related_listing_urls($post));
+        return [(array) apply_filters('ace_rc_recache_urls', array_values(array_unique(array_filter($urls))), $post, $this->settings), false];
+    }
+
+    private function synced_pattern_targets(\WP_Post $pattern, $depth, array &$seen) {
+        global $wpdb;
+        $id = (int) $pattern->ID;
+        $ref = '<!-- wp:block {"ref":' . $id;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT ID FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_type <> 'revision'"
+            . " AND (post_content LIKE %s OR post_content LIKE %s) LIMIT 200",
+            '%' . $wpdb->esc_like($ref . '}') . '%',
+            '%' . $wpdb->esc_like($ref . ',') . '%'
+        ));
+        $urls = [];
+        $sitewide = false;
+        foreach ((array) $rows as $row) {
+            $using = get_post((int) $row->ID);
+            if (!$using) {
+                continue;
+            }
+            list($more, $wide) = $this->recache_targets($using, $depth + 1, $seen);
+            $urls = array_merge($urls, $more);
+            $sitewide = $sitewide || $wide;
+        }
+        // Theme template files can include a synced pattern by its ID too.
+        if (!$sitewide && function_exists('wp_is_block_theme') && wp_is_block_theme()) {
+            $needle = '"ref":' . $id;
+            foreach (array_unique([get_stylesheet_directory(), get_template_directory()]) as $dir) {
+                foreach (array_merge((array) glob($dir . '/templates/*.html'), (array) glob($dir . '/parts/*.html')) as $file) {
+                    $html = is_string($file) ? @file_get_contents($file) : false;
+                    if (is_string($html) && preg_match('/wp:block \{' . preg_quote($needle, '/') . '[,}]/', $html)) {
+                        $sitewide = true;
+                        break 2;
+                    }
+                }
+            }
+        }
+        return [array_values(array_unique($urls)), $sitewide];
+    }
+
+    /**
+     * The broad purge an edit asks for (ace_rc_broad_page_cache_purge_on_post_update), done the
+     * recache way: when the site has a grace window every page is marked stale (soft purge) and
+     * refreshed in the background as it is visited, so nobody meets a cold page. A site without
+     * one cannot serve stale, so it keeps the old wipe. Returns true when it wiped. The caller
+     * has already asked ace_rc_broad_page_cache_purge_on_post_update.
+     */
+    private function recache_broad_purge($post_id, $post) {
+        if (apply_filters('ace_rc_soft_broad_purge', true, $post_id, $post, $this->settings) && $this->soft_purge_page_cache()) {
+            if (method_exists($this->cache_manager, 'clear_block_cache')) {
+                $this->cache_manager->clear_block_cache();
+            }
+            return false;
+        }
+        if (function_exists('wp_cache_flush')) {
+            wp_cache_flush();
+        }
+        $this->cache_manager->clear_all_cache();
+        return true;
+    }
+
+    /**
+     * Recache pages in place: each cached copy (desktop and mobile) is marked stale, so both
+     * cache layers keep serving it and queue a refresh if it is still stale on the next visit,
+     * and a refresh is queued now at the front of the refresher's queue. The refresh re-renders
+     * with a primer header and overwrites the stored copy only once the new render is complete,
+     * so visitors get the old page until the new one is ready and never a cold render.
+     * Only copies that exist are refreshed (nobody asked for the others), except where
+     * $always_desktop lists URLs to warm regardless (after a wipe, the edited page and home).
+     * $stale_only lists URLs to mark stale without queueing a render (priming turned off).
+     *
+     * @return int Refreshes queued.
+     */
+    private function recache_urls(array $urls, array $always_desktop = [], array $stale_only = []) {
+        if (!$this->cache_manager) {
+            return 0;
+        }
+        try {
+            $redis = $this->cache_manager->get_redis_connection()->get_connection();
+        } catch (\Throwable $t) {
+            $redis = null;
+        }
+        if (!$redis) {
+            return 0;
+        }
+        $max = max(1, (int) apply_filters('ace_rc_recache_max_urls', 100, $this->settings));
+        $queue = [];
+        foreach (array_values(array_unique(array_filter(array_map('strval', $urls)))) as $url) {
+            if (!preg_match('#^https?://#i', $url)) {
+                continue;
+            }
+            foreach (['desktop' => $url, 'mobile' => $url . '#mobile'] as $device => $queued) {
+                $core = $this->page_core_key_for_url($queued);
+                if ($core === '') {
+                    continue;
+                }
+                $ttl = -2;
+                try {
+                    foreach (['page_cache_min:' . $core, 'page_cache:' . $core, $core] as $k) {
+                        $ttl = (int) $redis->ttl($k);
+                        if ($ttl !== -2) {
+                            break;
+                        }
+                    }
+                    if ($ttl !== -2) {
+                        // "0:0": stale for advanced-cache.php and maybe_trigger_swr_refresh().
+                        $args = ['SET', 'ace:1:fresh:' . $core, '0:0'];
+                        if ($ttl > 0) {
+                            array_push($args, 'EX', (string) $ttl);
+                        }
+                        $redis->rawCommand(...$args);
+                    }
+                } catch (\Throwable $t) {
+                    continue;
+                }
+                if (in_array($url, $stale_only, true)) {
+                    continue;
+                }
+                if ($ttl !== -2 || ($device === 'desktop' && in_array($url, $always_desktop, true))) {
+                    if (count($queue) < $max) {
+                        $queue[] = $queued;
+                    }
+                }
+            }
+        }
+        if ($queue) {
+            $this->enqueue_prime_urls($queue, true);
+        }
+        return count($queue);
     }
 
     /* ============================= Smart WooCommerce warming ============================= */
@@ -3063,18 +3562,26 @@ class AceRedisCache {
         }
     }
 
-    private function enqueue_prime_urls(array $urls) {
+    /**
+     * @param bool $urgent Put these at the front of the queue and ask for a run within seconds
+     *                     (an edit being recached), rather than behind the sitemap delay.
+     */
+    private function enqueue_prime_urls(array $urls, $urgent = false) {
         $urls = array_values(array_unique(array_filter(array_map('strval', $urls))));
         if (empty($urls)) {
             return;
         }
         $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
         $now = time();
-        foreach ($urls as $url) {
-            $queue[$url] = $now;
+        if ($urgent) {
+            $queue = array_fill_keys($urls, $now) + $queue;
+        } else {
+            foreach ($urls as $url) {
+                $queue[$url] = $now;
+            }
         }
         $this->set_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option, $queue, $this->sitemap_prime_queue_ttl);
-        $this->schedule_sitemap_prime_runner();
+        $this->schedule_sitemap_prime_runner($urgent ? 5 : null);
     }
 
     /**
@@ -3219,7 +3726,7 @@ class AceRedisCache {
         $min = (int) apply_filters('ace_rc_soft_purge_min_interval', 300, $this->settings);
         if (!$force && $min > 0) {
             $last = 0;
-            try { $last = (int) $this->cache_manager->get($this->page_epoch_key); } catch (\Throwable $t) {}
+            try { $last = (int) $this->cache_manager->get($this->site_page_epoch_key()); } catch (\Throwable $t) {}
             if ($last > 0 && time() - $last < $min) {
                 if (function_exists('wp_next_scheduled') && !wp_next_scheduled('ace_rc_deferred_soft_purge')) {
                     wp_schedule_single_event($last + $min + 5, 'ace_rc_deferred_soft_purge');
@@ -3228,7 +3735,7 @@ class AceRedisCache {
             }
         }
         try {
-            $this->cache_manager->set($this->page_epoch_key, time(), 30 * DAY_IN_SECONDS);
+            $this->cache_manager->set($this->site_page_epoch_key(), time(), 30 * DAY_IN_SECONDS);
         } catch (\Throwable $t) {
             return false;
         }
@@ -3253,7 +3760,7 @@ class AceRedisCache {
         if ($this->page_epoch === null) {
             $this->page_epoch = 0;
             try {
-                $this->page_epoch = (int) $this->cache_manager->get($this->page_epoch_key);
+                $this->page_epoch = (int) $this->cache_manager->get($this->site_page_epoch_key());
             } catch (\Throwable $t) {}
         }
         return $this->page_epoch;
@@ -3304,14 +3811,22 @@ class AceRedisCache {
         // Pages stored before advanced-cache.php understood freshness carry no marker, so it hands
         // every request for them to WordPress. Add the marker from the stored time (NX: never
         // overwrite a real one) so fresh pages go back to the pre-boot path.
+        // The marker also carries "stale now" from recache_urls() (an edit to this page or to
+        // something it shows), which the stored time alone cannot tell.
+        $marked_stale = false;
         try {
             $redis = $this->cache_manager->get_redis_connection()->get_connection();
-            $left  = $this->page_cache_physical_ttl() - $age;
-            if ($redis && $left > 60) {
-                $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $stored_at . ':' . ($stored_at + $this->page_cache_fresh_ttl()), 'EX', (string) $left, 'NX');
+            $marker = $redis ? $redis->rawCommand('GET', 'ace:1:fresh:' . $cache_key) : false;
+            if (is_string($marker) && strpos($marker, ':') !== false) {
+                $marked_stale = (int) explode(':', $marker, 2)[1] < time();
+            } else {
+                $left = $this->page_cache_physical_ttl() - $age;
+                if ($redis && $left > 60) {
+                    $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $stored_at . ':' . ($stored_at + $this->page_cache_fresh_ttl()), 'EX', (string) $left, 'NX');
+                }
             }
         } catch (\Throwable $t) {}
-        if ($age < $this->page_cache_fresh_ttl() && $stored_at >= $this->get_page_epoch()) {
+        if (!$marked_stale && $age < $this->page_cache_fresh_ttl() && $stored_at >= $this->get_page_epoch()) {
             return; // still fresh, and stored after the last soft purge
         }
 
@@ -3321,6 +3836,10 @@ class AceRedisCache {
         }
         $url = $this->current_request_url();
         if ($url) {
+            // The mobile copy is a different key; queue that one (see prime_fetch()).
+            if (\wp_is_mobile()) {
+                $url .= '#mobile';
+            }
             $this->enqueue_prime_urls([$url]);
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 error_log('Ace-Redis-Cache: SWR background refresh queued age=' . $age . 's url=' . $url);
@@ -3349,17 +3868,74 @@ class AceRedisCache {
 
     public function run_deferred_invalidation() {
         $queue = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
-        if (empty($queue)) return;
         // Remove timestamp marker if present
         if (isset($queue['__ts'])) { unset($queue['__ts']); }
+        $taken = $this->recache_on_edit_enabled() ? $this->take_recache_posts() : [];
+        if (empty($queue) && empty($taken)) return;
+        $handled = array_keys($queue);
+        foreach ($taken as $pid => $ops) {
+            $queue[$pid] = isset($queue[$pid]) ? array_merge($queue[$pid], $ops, ['prime' => $ops['prime'] || !empty($queue[$pid]['prime'])]) : $ops;
+        }
         $this->deferred_processing = true;
+        // Recache on edit (#21): the edited page and every page that shows it are re-rendered in
+        // the background and replace their cached copies once ready, instead of being deleted.
+        $recache = $this->recache_on_edit_enabled();
+        $recache_urls = [];
+        $edited_urls = [];
+        $prime_urls = [];
+        $sitewide = !empty($queue['__sitewide']);
+        $broad_done = false;
+        $wiped = false;
         foreach ($queue as $pid => $ops) {
             $pid = (int)$pid; if (!$pid) continue;
             $post = get_post($pid);
             if (!$post) continue;
-            if (!empty($ops['page'])) { $this->invalidate_post_page_cache($pid, true); }
-            if (!empty($ops['archives'])) { $this->maybe_invalidate_related_archive_page_cache($pid, $post); }
+            if ($recache && (!empty($ops['recache']) || !empty($ops['page']) || !empty($ops['archives']))) {
+                list($urls, $wide) = $this->recache_targets($post);
+                if ($post->post_status === 'publish' && is_post_type_viewable($post->post_type)) {
+                    $urls[] = get_permalink($post);
+                    $edited_urls[] = get_permalink($post);
+                }
+                $recache_urls = array_merge($recache_urls, $urls);
+                $sitewide = $sitewide || $wide;
+                $prime = array_key_exists('prime', $ops) ? !empty($ops['prime']) : $this->recache_priming_allowed($pid);
+                if ($prime) {
+                    $prime_urls = array_merge($prime_urls, $urls);
+                }
+                // One broad purge per run, however many posts it holds (a second soft purge inside
+                // the coalescing window would only schedule another one).
+                if (!$broad_done && is_post_type_viewable($post->post_type)
+                    && apply_filters('ace_rc_broad_page_cache_purge_on_post_update', false, $pid, $post, $this->settings)) {
+                    $broad_done = true;
+                    $wiped = $this->recache_broad_purge($pid, $post);
+                }
+            } else {
+                if (!empty($ops['page'])) { $this->invalidate_post_page_cache($pid, true); }
+                if (!empty($ops['archives'])) { $this->maybe_invalidate_related_archive_page_cache($pid, $post); }
+            }
             if (!empty($ops['transients'])) { $this->maybe_flush_post_transients($pid, $post->post_type); }
+        }
+        if ($recache && $sitewide) {
+            // A template, part, menu or synced pattern used by one: every page is stale.
+            if (!$broad_done && !$this->soft_purge_page_cache()) {
+                $this->cache_manager->clear_all_cache();
+                $wiped = true;
+            }
+            $recache_urls[] = home_url('/');
+            $prime_urls[] = home_url('/');
+        }
+        $queued = 0;
+        if ($recache && $recache_urls) {
+            $recache_urls = array_values(array_unique(array_filter($recache_urls)));
+            $prime_urls = array_values(array_unique(array_filter($prime_urls)));
+            // After a wipe nothing is left to find, so warm the edited pages and home regardless.
+            $always = $wiped ? array_intersect(array_merge($edited_urls, [home_url('/')]), $prime_urls) : [];
+            // The edited pages first: they head the refresher's queue.
+            $ordered = array_values(array_unique(array_merge(array_intersect($edited_urls, $recache_urls), $recache_urls)));
+            $queued = $this->recache_urls($ordered, $always, array_values(array_diff($recache_urls, $prime_urls)));
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Ace-Redis-Cache: recache on edit queued=' . $queued . ' sitewide=' . ($sitewide ? 1 : 0) . ' wiped=' . ($wiped ? 1 : 0));
+            }
         }
         $needs_block_full = false;
         foreach ($queue as $ops) { if (!empty($ops['blocks_full'])) { $needs_block_full = true; break; } }
@@ -3372,8 +3948,24 @@ class AceRedisCache {
                 }
             }
         }
-        $this->delete_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
+        // Remove only what this run handled: a save that queued a post while it worked stays.
+        $left = $this->get_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
+        foreach ($handled as $k) { unset($left[$k]); }
+        unset($left['__ts']);
+        if ($left) {
+            $this->set_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option, $left, $this->deferred_queue_ttl);
+        } else {
+            $this->delete_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option);
+        }
+        if ($left || $this->has_queued_recache_posts()) {
+            $this->schedule_deferred_runner();
+        }
         $this->deferred_processing = false;
+        // Already inside this site's cron run: refresh now rather than waiting for the next tick.
+        // The refresher takes its own lock, budget and load pacing.
+        if ($queued && wp_doing_cron()) {
+            $this->run_sitemap_prime_batch();
+        }
     }
     
     /**

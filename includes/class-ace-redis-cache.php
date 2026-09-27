@@ -2057,7 +2057,7 @@ class AceRedisCache {
                     foreach ($versions as $ver) {
                         $core = $this->build_page_cache_core_key($p, $scheme, $device, $ver);
                         $legacy_core = str_replace(':v' . $ver, '', $core);
-                        $keys = ['page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core];
+                        $keys = [$core, 'page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core];
                         try {
                             if ($redis && method_exists($redis, 'del')) {
                                 foreach ($keys as $k) { $deleted += (int) $redis->del($k); }
@@ -2124,12 +2124,14 @@ class AceRedisCache {
                         try {
                             if ($redis) {
                                 if (method_exists($redis, 'del')) {
+                                    $deleted += (int)$redis->del($core);
                                     $deleted += (int)$redis->del($raw_key);
                                     $deleted += (int)$redis->del($min_key);
                                     $deleted += (int)$redis->del($legacy_key);
                                     $deleted += (int)$redis->del($legacy_raw);
                                     $deleted += (int)$redis->del($legacy_min);
                                 } elseif (method_exists($redis, 'unlink')) {
+                                    $deleted += (int)$redis->unlink($core);
                                     $deleted += (int)$redis->unlink($raw_key);
                                     $deleted += (int)$redis->unlink($min_key);
                                     $deleted += (int)$redis->unlink($legacy_key);

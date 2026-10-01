@@ -22,6 +22,8 @@ class AceRedisCache {
     private $admin_interface;
     private $admin_ajax;
     private $api_handler;
+    /** Set once start_full_page_cache() has run for this request (it can be reached twice). */
+    private $page_cache_started = false;
     private $diagnostics;
     
     private $plugin_url;
@@ -520,6 +522,11 @@ class AceRedisCache {
                 $this->start_full_page_cache();
                 return $template;
             }, 99);
+            // Routes a plugin renders itself and exits from (in template_redirect, say) never
+            // reach template_include, so they were never page cached. Such a plugin fires this
+            // action just before it starts output to opt the response in; nothing changes for
+            // sites that never fire it. Starting twice is harmless.
+            add_action('ace_rc_start_page_cache', [$this, 'start_full_page_cache']);
             
             // Post-save hooks for priming coherent option state & setting no-cache warm window.
             add_action('save_post', [$this, 'post_save_prime_schedule'], 10, 3);
@@ -951,6 +958,10 @@ class AceRedisCache {
      * Start full page cache output buffering
      */
     public function start_full_page_cache() {
+        if ($this->page_cache_started) {
+            return;
+        }
+        $this->page_cache_started = true;
         if ($this->is_admin_auth_or_system_request()) {
             return;
         }

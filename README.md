@@ -160,6 +160,15 @@ See source for additional key derivation, compression and diagnostics hooks.
 `ace_redis_cache_page_cache_key_parts` receives both key-part array and context (`request_uri`, `scheme`, `device`, `host`, `version`) and can be used to customize key derivation without forking.
 
 ---
+## Varnish
+If Varnish sits in front of the site, every page-cache purge is mirrored as a Varnish ban for the same pages, so the two layers never disagree. A full or soft purge bans the whole host.
+
+- Auto-detected on `127.0.0.1:6081` (CloudPanel default), checked at most every 10 minutes. Sites not behind Varnish are unaffected.
+- `ACE_RC_VARNISH` (`true`, `false` or `'auto'`) and `ACE_RC_VARNISH_HOST` (`'host:port'`) override detection.
+- Filters: `ace_rc_varnish_enabled`, `ace_rc_varnish_hosts`. Action: `ace_redis_cache_varnish_ban_site`.
+- Expects a VCL that turns `PURGE <regex>` into `ban(req.http.host == ... && req.url ~ <regex>)` and accepts PURGE from localhost (CloudPanel's stock VCL does both).
+- Recommended VCL additions: `return (pass)` for requests carrying `X-AceRedis-Prime`, so background refreshes reach PHP, and a short TTL (e.g. 10s) when `X-AceRedisCache` contains `stale`.
+
 ## Installation & Requirements
 1. Install plugin into `wp-content/plugins/ace-redis-cache`
 2. Copy `assets/dropins/object-cache.php` to `wp-content/object-cache.php`

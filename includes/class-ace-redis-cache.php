@@ -358,6 +358,9 @@ class AceRedisCache {
      * Setup WordPress hooks
      */
     private function setup_hooks() {
+        // Keep a Varnish in front of the site in step with page-cache purges (no-op without one).
+        VarnishBridge::boot();
+
         // Settings update hooks (single-site + network mode).
         add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
         add_action('update_site_option_ace_redis_cache_settings', [$this, 'on_site_settings_updated'], 10, 4);
@@ -3760,6 +3763,7 @@ class AceRedisCache {
             }
         } catch (\Throwable $t) {}
         $this->page_epoch = time();
+        do_action('ace_rc_page_epoch_bumped');
         return true;
     }
 

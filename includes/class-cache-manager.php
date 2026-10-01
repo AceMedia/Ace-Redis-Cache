@@ -1305,9 +1305,10 @@ class CacheManager {
             return false;
         }
         
-        // Get all cache keys (both regular and minified)
-        $regular_keys = $redis->keys($this->scoped_page_prefix($this->cache_prefix) . '*');
-        $minified_keys = $redis->keys($this->scoped_page_prefix($this->minified_cache_prefix) . '*');
+        // SCAN, never KEYS: KEYS walks the whole keyspace in one blocking call (60-900 ms on a shared
+        // 170k-key Redis), stalling every other site on it while it runs.
+        $regular_keys = $this->scan_keys($this->scoped_page_prefix($this->cache_prefix) . '*');
+        $minified_keys = $this->scan_keys($this->scoped_page_prefix($this->minified_cache_prefix) . '*');
         
         $all_keys = array_merge($regular_keys ?: [], $minified_keys ?: []);
         

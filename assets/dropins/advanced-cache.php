@@ -131,6 +131,16 @@ $redis_pass = defined('ACE_REDIS_PASSWORD') ? ACE_REDIS_PASSWORD : (defined('WP_
 $redis_timeout = defined('ACE_REDIS_TIMEOUT') ? (float) ACE_REDIS_TIMEOUT : 0.5;
 $redis_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : 0;
 $redis_socket = defined('ACE_REDIS_SOCKET') ? ACE_REDIS_SOCKET : '/var/run/redis/redis.sock';
+// Page cache on a different Redis from the object cache (e.g. ElastiCache for pages while the object
+// cache stays on a local socket): ACE_REDIS_PAGE_* points this file at the page store only, without
+// moving object-cache.php, which also reads ACE_REDIS_HOST. Use 'tls://host' for TLS endpoints.
+if (defined('ACE_REDIS_PAGE_HOST') && ACE_REDIS_PAGE_HOST !== '') {
+    $redis_host = ACE_REDIS_PAGE_HOST;
+    $redis_socket = '';
+    if (defined('ACE_REDIS_PAGE_PORT')) { $redis_port = (int) ACE_REDIS_PAGE_PORT; }
+    if (defined('ACE_REDIS_PAGE_PASSWORD')) { $redis_pass = ACE_REDIS_PAGE_PASSWORD; }
+    if (defined('ACE_REDIS_PAGE_DB')) { $redis_db = (int) ACE_REDIS_PAGE_DB; }
+}
 
 if (!class_exists('Redis')) {
     return;

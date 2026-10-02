@@ -165,6 +165,9 @@ See source for additional key derivation, compression and diagnostics hooks.
 ## Page cache on a separate Redis
 `advanced-cache.php` (early serve) normally reads the same Redis as the object cache. When pages live elsewhere, for example ElastiCache over TLS while the object cache stays on a local socket, define `ACE_REDIS_PAGE_HOST` (`'tls://host'` for TLS) and optionally `ACE_REDIS_PAGE_PORT`, `ACE_REDIS_PAGE_PASSWORD` and `ACE_REDIS_PAGE_DB`. Only the early-serve drop-in uses them, so the object cache doesn't move.
 
+## Purging one page
+`do_action('ace_redis_cache_purge_url', $url)` deletes that page's stored copies, including the ones the early-serve drop-in (`advanced-cache.php`) reads, which are keyed from the published `ace:1:pagekey:<host>:*` inputs. Keys are deleted one per command, so it also works on Redis/Valkey clusters.
+
 ## Varnish
 If Varnish sits in front of the site, every page-cache purge is mirrored as a Varnish ban for the same pages, so the two layers never disagree. A full or soft purge bans the whole host.
 

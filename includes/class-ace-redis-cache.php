@@ -2096,8 +2096,65 @@ class AceRedisCache {
                 }
             }
         }
+        $deleted += $this->invalidate_early_serve_paths($paths, $redis);
         do_action('ace_rc_paths_invalidated', $paths, $deleted);
         return $deleted;
+    }
+
+    /**
+     * advanced-cache.php serves pages before WordPress boots, under keys built from the
+     * site_version and suffix the plugin publishes (ace:1:pagekey:<host>:*). The filter-built keys
+     * above can miss those (a request-local site_version, or key parts that differ outside a page
+     * request), which left purge_url() deleting nothing the drop-in reads: the next visitor still
+     * got an early HIT. Delete the published-input keys too, and their freshness markers.
+     */
+    private function invalidate_early_serve_paths(array $paths, $redis) {
+        if (!$redis || !method_exists($redis, 'rawCommand')) {
+            return 0;
+        }
+        $host = $this->normalize_cache_host(parse_url(home_url(), PHP_URL_HOST) ?: '');
+        try {
+            $ns = 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '');
+            $version = $redis->rawCommand('GET', $ns . 'site_version');
+            $suffix = $redis->rawCommand('GET', $ns . 'suffix');
+        } catch (\Throwable $t) {
+            return 0;
+        }
+        if ($version === false || $version === null || $suffix === false || $suffix === null) {
+            return 0; // Nothing published: the drop-in cannot serve early for this host.
+        }
+        $keys = self::early_serve_keys($paths, $host, (int) $version, (string) $suffix);
+        // One key per DEL: a multi-key DEL fails with CROSSSLOT on a cluster (e.g. ElastiCache
+        // Serverless Valkey), which would silently purge nothing.
+        $deleted = 0;
+        foreach ($keys as $key) {
+            try {
+                $deleted += (int) $redis->rawCommand('DEL', $key);
+            } catch (\Throwable $t) {
+            }
+        }
+        return $deleted;
+    }
+
+    /**
+     * Every key advanced-cache.php may read for these paths (each scheme and device, the three
+     * candidate prefixes and the freshness marker), built exactly as the drop-in builds them.
+     */
+    public static function early_serve_keys(array $paths, $host, $version, $suffix) {
+        $keys = [];
+        foreach ($paths as $path) {
+            $uri = self::normalize_request_uri((string) $path);
+            foreach (['http', 'https'] as $scheme) {
+                foreach (['desktop', 'mobile'] as $device) {
+                    $core = 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $version;
+                    if ((string) $suffix !== '') {
+                        $core .= ':' . $suffix;
+                    }
+                    array_push($keys, 'page_cache_min:' . $core, 'page_cache:' . $core, $core, 'ace:1:fresh:' . $core);
+                }
+            }
+        }
+        return array_values(array_unique($keys));
     }
 
     private function invalidate_post_page_cache($post_id, $schedule_prime = true) {

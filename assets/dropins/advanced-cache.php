@@ -81,7 +81,7 @@ $key_uri = $request_uri;
 if (($q = strpos($key_uri, '?')) !== false) {
     parse_str(substr($key_uri, $q + 1), $key_params);
     foreach (array_keys($key_params) as $k) {
-        if (preg_match('/^(utm_|fbclid$|gclid$|gbraid$|wbraid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|v$)/i', (string) $k)) unset($key_params[$k]);
+        if (preg_match('/^(utm_|fbclid$|gclid$|gclsrc$|gbraid$|wbraid$|gad_source$|gad_campaignid$|dclid$|srsltid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|li_fat_id$|epik$|yclid$|hsa_|_hsenc$|_hsmi$|_kx$|v$)/i', (string) $k)) unset($key_params[$k]);
     }
     ksort($key_params);
     $key_uri = substr($key_uri, 0, $q) . ($key_params ? '?' . http_build_query($key_params) : '');

@@ -120,6 +120,8 @@ Any matching exclusion triggers bypass or block-level freshness:
 
 Dynamic blocks always freshly rendered (or micro-cached) then substituted.
 
+**Tracking parameters** never split the page cache: campaign and click IDs (`utm_*`, `gclid`, `gclsrc`, `gbraid`, `wbraid`, `gad_source`, `gad_campaignid`, `dclid`, `srsltid`, `fbclid`, `msclkid`, `twclid`, `ttclid`, `igshid`, `li_fat_id`, `epik`, `yclid`, `hsa_*`, `_hsenc`, `_hsmi`, `_kx`, `mc_cid`, `mc_eid`, `_ga`, `_gl`, `ref`, `v`) are dropped from the key and the rest sorted, so a paid landing is served the same entry as the clean URL. The list lives in `normalize_request_uri()` and its copy in `assets/dropins/advanced-cache.php`; a unit test keeps the two in step. `ace_rc_page_ttl` and `ace_rc_page_grace` receive this normalised URI (0.8.3).
+
 ---
 ## Reliability & Fallbacks
 - Circuit breaker pauses page caching after consecutive failures

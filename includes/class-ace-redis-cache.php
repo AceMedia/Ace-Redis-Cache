@@ -1862,7 +1862,7 @@ class AceRedisCache {
         $path = substr($uri, 0, $q);
         parse_str(substr($uri, $q + 1), $params);
         foreach (array_keys($params) as $k) {
-            if (preg_match('/^(utm_|fbclid$|gclid$|gbraid$|wbraid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|v$)/i', (string) $k)) unset($params[$k]);
+            if (preg_match('/^(utm_|fbclid$|gclid$|gclsrc$|gbraid$|wbraid$|gad_source$|gad_campaignid$|dclid$|srsltid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|li_fat_id$|epik$|yclid$|hsa_|_hsenc$|_hsmi$|_kx$|v$)/i', (string) $k)) unset($params[$k]);
         }
         if (!$params) return $path;
         ksort($params);
@@ -3704,11 +3704,13 @@ class AceRedisCache {
 
     /**
      * How long this response counts as fresh. Sites set it per request through `ace_rc_page_ttl`
-     * (a listing that changes hourly, a single event that changes when it is edited).
+     * (a listing that changes hourly, a single event that changes when it is edited). The URI
+     * the filters see is the normalised one the entry is keyed by, so an ad click's tracking
+     * parameters never give the clean page a query-string lifetime.
      */
     private function page_cache_fresh_ttl() {
         $ttl = (int) ($this->settings['ttl_page'] ?? 3600);
-        $ttl = (int) apply_filters('ace_rc_page_ttl', $ttl, $_SERVER['REQUEST_URI'] ?? '/', $this->settings);
+        $ttl = (int) apply_filters('ace_rc_page_ttl', $ttl, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings);
         return max(60, $ttl);
     }
 
@@ -3719,7 +3721,7 @@ class AceRedisCache {
      */
     private function page_cache_grace() {
         $grace = (int) ($this->settings['page_cache_grace'] ?? 0);
-        return max(0, (int) apply_filters('ace_rc_page_grace', $grace, $_SERVER['REQUEST_URI'] ?? '/', $this->settings));
+        return max(0, (int) apply_filters('ace_rc_page_grace', $grace, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings));
     }
 
     /**

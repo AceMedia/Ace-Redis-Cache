@@ -40,7 +40,7 @@ if (!defined('ABSPATH')) {
 class BlockCache {
 
     // Part of every key: bump when the stored entry format changes, so old entries are never read.
-    const VER = 2;
+    const VER = 3;
     const CLOSURE = '__ace_bc_closure__';
     const DEFAULT_TTL = 43200;
 
@@ -439,8 +439,36 @@ class BlockCache {
         if (self::has_pagination($block)) {
             $vary[] = $this->current_path(); // Pagination links point at the current page.
         }
+        $def = self::profiles()[$profile] ?? [];
+        if (!empty($def['vary_page'])) {
+            $vary[] = self::page_vary();
+        }
+        if (isset($def['vary']) && is_callable($def['vary'])) {
+            $vary[] = call_user_func($def['vary'], $block);
+        }
         $vary = apply_filters('ace_rc_block_cache_vary', $vary, $block, $profile);
         return self::build_key($this->prefix(), $v['gen'] ?? 0, $profile, $v['ver:' . $profile] ?? 0, $vary);
+    }
+
+    /**
+     * What a block that reads "the page" sees: the queried object, the post in the loop, the page
+     * number and whether the post body is being rendered. For profiles with 'vary_page' => true.
+     */
+    public static function page_vary() {
+        $q = get_queried_object();
+        return [
+            is_object($q) ? get_class($q) : '',
+            (int) get_queried_object_id(),
+            (int) get_the_ID(),
+            (int) max(1, get_query_var('paged'), get_query_var('page')),
+            doing_filter('the_content') ? 1 : 0,
+        ];
+    }
+
+    /** Entry lifetime for a profile: its own 'ttl' when shorter than the global one. */
+    private function profile_ttl($profile) {
+        $t = (int) (self::profiles()[$profile]['ttl'] ?? 0);
+        return $t > 0 ? max(60, min($t, $this->ttl)) : $this->ttl;
     }
 
     /** Reverse-index member for one stored entry: "<entry key>|<page path>". */
@@ -624,7 +652,20 @@ class BlockCache {
             return $html;
         }
 
+        // Handles the render registered as well as enqueued (wp_enqueue_style with a src inside a
+        // render callback) are not registered on a hit, so keep their registration too.
+        foreach (['styles' => wp_styles(), 'scripts' => wp_scripts()] as $kind => $wp_deps) {
+            foreach ($entry[$kind] as $h) {
+                $d = $wp_deps->registered[$h] ?? null;
+                if ($d && is_string($d->src) && $d->src !== '' && !isset($before['registered'][$kind][$h])) {
+                    $entry['reg'][$kind][$h] = [$d->src, (array) $d->deps, $d->ver, $d->args, (array) $d->extra];
+                }
+            }
+        }
         foreach ($after['inline'] as $handle => $css) {
+            if ($handle === 'wp-interactivity-router-animations') {
+                continue; // Added again by the router replay below.
+            }
             $added = array_slice($css, count($before['inline'][$handle] ?? []));
             if ($added) {
                 $entry['inline'][$handle] = $added;
@@ -707,7 +748,8 @@ class BlockCache {
                     }
                 }
             }
-            $this->cache_manager->set($key, $entry, $this->ttl);
+            $ttl = $this->profile_ttl($profile);
+            $this->cache_manager->set($key, $entry, $ttl);
             $path = $this->current_path();
             $member = self::index_member($key, $path);
             $pipe = $redis->multi(\Redis::PIPELINE);
@@ -795,6 +837,7 @@ class BlockCache {
             'router' => property_exists($ia, 'has_processed_router_region') ? (bool) self::prop($ia, 'has_processed_router_region') : false,
             'loop' => self::loop_trackers(),
             'inline' => [],
+            'registered' => ['styles' => array_flip(array_keys(wp_styles()->registered)), 'scripts' => array_flip(array_keys(wp_scripts()->registered))],
         ];
         // Inline CSS added during a render (block style variations use wp_add_inline_style).
         foreach (wp_styles()->registered as $handle => $dep) {
@@ -955,6 +998,16 @@ class BlockCache {
     }
 
     private function replay(array $entry) {
+        foreach ((array) ($entry['reg'] ?? []) as $kind => $handles) {
+            $wp_deps = $kind === 'scripts' ? wp_scripts() : wp_styles();
+            foreach ((array) $handles as $h => $r) {
+                if (!isset($wp_deps->registered[$h]) && $wp_deps->add($h, $r[0], $r[1], $r[2], $r[3])) {
+                    foreach ((array) $r[4] as $k => $v) {
+                        $wp_deps->add_data($h, $k, $v);
+                    }
+                }
+            }
+        }
         foreach ((array) ($entry['styles'] ?? []) as $h) {
             wp_enqueue_style($h);
         }

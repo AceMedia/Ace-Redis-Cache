@@ -4240,8 +4240,10 @@ class AceRedisCache {
         // Reinitialize components with new settings.
         $this->init_components();
 
-        // Clear cache when settings change.
-        if ($this->cache_manager) {
+        // Clear the cache when settings that shape cached output change. A save that only
+        // touches block_cache_* settings leaves the page cache alone (a full clear on a busy
+        // site is a cold-cache stampede); BlockCache retires its own entries for those.
+        if ($this->cache_manager && BlockCache::settings_change_scope($old_value, $new_value) === 'full') {
             $this->cache_manager->clear_all_cache();
         }
 

@@ -553,6 +553,7 @@ class AdminInterface {
                 })();
                 </script>
                 
+                <p class="description">Saving only Block Cache options retires the cached blocks and leaves the page cache alone. Changing any other setting clears the whole cache.</p>
                 <?php submit_button(); ?>
             </form>
         </div>

@@ -122,8 +122,18 @@ class BlockCache {
 
         // A full cache clear also retires every block entry (no SCAN: the generation moves on).
         add_action('ace_rc_cache_cleared', static function () use ($self) { $self->flush(false); }, 5, 0);
-        add_action('update_option_' . SettingsStore::SETTINGS_OPTION, static function () use ($self) { $self->flush(false); }, 20, 0);
-        add_action('update_site_option_' . SettingsStore::SETTINGS_OPTION, static function () use ($self) { $self->flush(false); }, 20, 0);
+        // Saving the settings retires block entries only when a block cache setting changed
+        // (a full clear, for other settings, retires them through ace_rc_cache_cleared).
+        add_action('update_option_' . SettingsStore::SETTINGS_OPTION, static function ($old, $new) use ($self) {
+            if (self::settings_change_scope($old, $new) === 'block') {
+                $self->flush(false);
+            }
+        }, 20, 2);
+        add_action('update_site_option_' . SettingsStore::SETTINGS_OPTION, static function ($option, $new, $old) use ($self) {
+            if (self::settings_change_scope($old, $new) === 'block') {
+                $self->flush(false);
+            }
+        }, 20, 3);
 
         if (!self::is_enabled($self->settings)) {
             return;
@@ -1325,7 +1335,66 @@ class BlockCache {
     }
 
     private function post_profiles() {
-        return array_values(array_diff(array_keys(self::profiles()), ['woo']));
+        $out = [];
+        foreach (self::profiles() as $name => $def) {
+            if ($name !== 'woo' && self::retires_on_publish((array) $def)) {
+                $out[] = $name;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Whether publish, unpublish, trash, term and order changes retire a profile. A profile with
+     * 'retire_on_publish' => false relies on its TTL, the per-post reverse index and its own
+     * bump() calls instead (for busy sites where the listing changes every few minutes).
+     */
+    public static function retires_on_publish(array $def) {
+        return !array_key_exists('retire_on_publish', $def) || !empty($def['retire_on_publish']);
+    }
+
+    /** Setting keys whose values differ between two saved copies (arrays or JSON strings). */
+    public static function changed_setting_keys($old, $new) {
+        $norm = static function ($v) {
+            if (is_string($v)) {
+                $v = json_decode($v, true);
+            }
+            return is_array($v) ? $v : [];
+        };
+        $old = $norm($old);
+        $new = $norm($new);
+        $changed = [];
+        foreach (array_unique(array_merge(array_keys($old), array_keys($new))) as $k) {
+            $a = $old[$k] ?? null;
+            $b = $new[$k] ?? null;
+            if (is_scalar($a) || $a === null) {
+                $a = (string) $a;
+            }
+            if (is_scalar($b) || $b === null) {
+                $b = (string) $b;
+            }
+            if ($a !== $b) {
+                $changed[] = (string) $k;
+            }
+        }
+        return $changed;
+    }
+
+    /**
+     * What a settings save has to clear: 'none' (nothing changed), 'block' (only block_cache_*
+     * settings changed: retire block entries, leave the page cache alone) or 'full'.
+     */
+    public static function settings_change_scope($old, $new) {
+        $changed = self::changed_setting_keys($old, $new);
+        if (!$changed) {
+            return 'none';
+        }
+        foreach ($changed as $k) {
+            if (strpos($k, 'block_cache_') !== 0) {
+                return 'full';
+            }
+        }
+        return 'block';
     }
 
     private static function is_product($post_id) {

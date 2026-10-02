@@ -177,4 +177,23 @@ class BlockCacheTest extends TestCase {
         $this->assertSame('.wp-elements-bcabc123-4 a:where(:not(.wp-element-button))', $entry['rules'][0]['selector']);
         $this->assertSame('.is-style-section-1--bcabc123-9{color:red}', $entry['inline']['block-style-variation-styles'][0]);
     }
+
+    public function testSettingsSaveScope() {
+        $base = ['host' => '127.0.0.1', 'mode' => 'full', 'block_cache_enabled' => 0, 'block_cache_ttl' => 43200];
+        $this->assertSame('none', BlockCache::settings_change_scope($base, $base));
+        $this->assertSame('none', BlockCache::settings_change_scope($base, array_merge($base, ['block_cache_enabled' => '0'])));
+        $this->assertSame('block', BlockCache::settings_change_scope($base, array_merge($base, ['block_cache_enabled' => 1])));
+        $this->assertSame('block', BlockCache::settings_change_scope($base, array_merge($base, ['block_cache_ttl' => 600, 'block_cache_custom' => 1])));
+        $this->assertSame('full', BlockCache::settings_change_scope($base, array_merge($base, ['block_cache_enabled' => 1, 'mode' => 'object'])));
+        $this->assertSame('full', BlockCache::settings_change_scope($base, array_merge($base, ['host' => 'redis'])));
+        $this->assertSame('block', BlockCache::settings_change_scope(json_encode($base), json_encode(array_merge($base, ['block_cache_woo' => 0]))));
+        $this->assertSame('full', BlockCache::settings_change_scope(false, $base));
+    }
+
+    public function testRetireOnPublishDefaultsOn() {
+        $this->assertTrue(BlockCache::retires_on_publish([]));
+        $this->assertTrue(BlockCache::retires_on_publish(['retire_on_publish' => true]));
+        $this->assertFalse(BlockCache::retires_on_publish(['retire_on_publish' => false]));
+        $this->assertFalse(BlockCache::retires_on_publish(['retire_on_publish' => 0]));
+    }
 }

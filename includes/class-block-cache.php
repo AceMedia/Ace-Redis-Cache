@@ -39,7 +39,8 @@ if (!defined('ABSPATH')) {
 
 class BlockCache {
 
-    const VER = 1;
+    // Part of every key: bump when the stored entry format changes, so old entries are never read.
+    const VER = 2;
     const CLOSURE = '__ace_bc_closure__';
     const DEFAULT_TTL = 43200;
 

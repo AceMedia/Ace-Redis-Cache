@@ -163,4 +163,18 @@ class BlockCacheTest extends TestCase {
         $d = BlockCache::delta($after, $before);
         $this->assertSame($after, BlockCache::apply_delta($before, $d));
     }
+
+    public function testSequentialClassesAreNamespaced() {
+        $html = '<div class="wp-elements-12 wp-container-3 is-style-section-1--7 wp-container-core-group-is-layout-ab12cd"><a class="wp-elements-12">x</a></div>';
+        $out = BlockCache::namespace_classes($html, 'f00ba7');
+        $this->assertSame('<div class="wp-elements-bcf00ba7-12 wp-container-bcf00ba7-3 is-style-section-1--bcf00ba7-7 wp-container-core-group-is-layout-ab12cd"><a class="wp-elements-bcf00ba7-12">x</a></div>', $out);
+        $this->assertSame($out, BlockCache::namespace_classes($out, 'f00ba7'));
+        $entry = BlockCache::namespace_entry([
+            'html' => '<p class="wp-elements-4">', 'rules' => [['selector' => '.wp-elements-4 a:where(:not(.wp-element-button))', 'store' => 'block-supports']],
+            'inline' => ['block-style-variation-styles' => ['.is-style-section-1--9{color:red}']],
+        ], 'abc123');
+        $this->assertSame('<p class="wp-elements-bcabc123-4">', $entry['html']);
+        $this->assertSame('.wp-elements-bcabc123-4 a:where(:not(.wp-element-button))', $entry['rules'][0]['selector']);
+        $this->assertSame('.is-style-section-1--bcabc123-9{color:red}', $entry['inline']['block-style-variation-styles'][0]);
+    }
 }

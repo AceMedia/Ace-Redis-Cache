@@ -582,6 +582,7 @@ class BlockCache {
             'modules' => array_values(array_diff($after['modules'], $before['modules'])),
             'wcdata' => array_diff_key($after['wcdata'], $before['wcdata']),
             'rules' => array_values(array_diff_key($after['rules'], $before['rules'])),
+            'inline' => [],
             'router' => $after['router'] && !$before['router'],
             'loop' => [],
             'uid' => max(0, $uid1 - $uid0 - 1),
@@ -622,6 +623,16 @@ class BlockCache {
             return $html;
         }
 
+        foreach ($after['inline'] as $handle => $css) {
+            $added = array_slice($css, count($before['inline'][$handle] ?? []));
+            if ($added) {
+                $entry['inline'][$handle] = $added;
+            }
+        }
+        // Stored copies get their own wp-elements-/wp-container-/is-style-*-- numbers, so a hit can never
+        // collide with the numbers the rest of the page gets on that request. This render keeps its originals.
+        $entry = self::namespace_entry($entry, substr(md5($key), 0, 6));
+
         $deps = $this->filter_deps(array_keys($deps), self::profiles()[$profile]['dep_types'] ?? null);
         $this->store($key, $entry, $deps, $profile, $started);
         $this->count($profile, $name, 'm', 1);
@@ -629,6 +640,32 @@ class BlockCache {
         $this->count($profile, $name, 'q', $queries);
         $this->note('miss', $name);
         return $html;
+    }
+
+    /**
+     * Give the per-request sequential class numbers (wp-elements-N, wp-container-N and
+     * is-style-<variation>--N, all from wp_unique_id) a namespace. Pure, for tests.
+     */
+    public static function namespace_classes($text, $ns) {
+        return preg_replace(
+            ['/\bwp-elements-(\d+)\b/', '/\bwp-container-(\d+)\b/', '/\b(is-style-[a-z0-9_-]+?--)(\d+)\b/'],
+            ['wp-elements-bc' . $ns . '-$1', 'wp-container-bc' . $ns . '-$1', '${1}bc' . $ns . '-$2'],
+            (string) $text
+        );
+    }
+
+    /** Namespace the classes in a cache entry's HTML, block-supports CSS selectors and inline CSS. */
+    public static function namespace_entry(array $entry, $ns) {
+        $entry['html'] = self::namespace_classes($entry['html'], $ns);
+        foreach ((array) ($entry['rules'] ?? []) as $i => $rule) {
+            $entry['rules'][$i]['selector'] = self::namespace_classes($rule['selector'], $ns);
+        }
+        foreach ((array) ($entry['inline'] ?? []) as $handle => $css) {
+            foreach ((array) $css as $j => $chunk) {
+                $entry['inline'][$handle][$j] = self::namespace_classes($chunk, $ns);
+            }
+        }
+        return $entry;
     }
 
     /** A per-request token in the HTML or the state that goes with it. Pure, for tests. */
@@ -756,7 +793,14 @@ class BlockCache {
             'rules' => [],
             'router' => property_exists($ia, 'has_processed_router_region') ? (bool) self::prop($ia, 'has_processed_router_region') : false,
             'loop' => self::loop_trackers(),
+            'inline' => [],
         ];
+        // Inline CSS added during a render (block style variations use wp_add_inline_style).
+        foreach (wp_styles()->registered as $handle => $dep) {
+            if (!empty($dep->extra['after'])) {
+                $snap['inline'][$handle] = array_values((array) $dep->extra['after']);
+            }
+        }
         $reg = self::wc_registry();
         if ($reg) {
             $snap['wcdata'] = self::prop($reg, 'data');
@@ -968,6 +1012,14 @@ class BlockCache {
             }
             if (method_exists($ia, 'print_router_markup')) {
                 add_action('wp_footer', [$ia, 'print_router_markup']);
+            }
+        }
+        foreach ((array) ($entry['inline'] ?? []) as $handle => $css) {
+            if (!wp_style_is($handle, 'registered')) {
+                wp_register_style($handle, false);
+            }
+            foreach ((array) $css as $chunk) {
+                wp_add_inline_style($handle, $chunk);
             }
         }
         foreach ((array) ($entry['rules'] ?? []) as $rule) {

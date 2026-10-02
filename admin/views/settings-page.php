@@ -744,6 +744,60 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                             <?php endif; ?>
                         </div>
                     </div>
+                    <?php
+                    $ace_bc_on_constant = defined('ACE_RC_BLOCK_CACHE');
+                    $ace_bc_legacy = \AceMedia\RedisCache\BlockCache::legacy_module_active();
+                    $ace_bc_woo = class_exists('WooCommerce');
+                    $ace_bc = \AceMedia\RedisCache\BlockCache::instance();
+                    $ace_bc_stats = $ace_bc ? $ace_bc->get_stats(7) : null;
+                    $ace_bc_today = $ace_bc_stats ? reset($ace_bc_stats['days']) : null;
+                    ?>
+                    <div class="setting-row" id="ace-block-cache-row">
+                        <div class="setting-label">
+                            <label for="block_cache_enabled">Block Cache</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[block_cache_enabled]" id="block_cache_enabled" value="1" <?php checked($settings['block_cache_enabled'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo ace_rc_scope_traffic_light('green', empty($settings['block_cache_logged_in']) ? 'red' : 'amber', 'Visitors with items in the cart always get a live render.'); ?>
+                            <p class="description">Keeps the rendered HTML of expensive dynamic blocks in Redis and replays it, with the scripts, styles and Interactivity API state the block needs, so add to cart and other interactions keep working. Each block is refreshed when a product or post it shows changes, and the pages showing it are purged (including Varnish).</p>
+                            <?php if ($ace_bc_on_constant): ?>
+                                <p class="description" style="color:#d63638;">ACE_RC_BLOCK_CACHE is set to <?php echo ACE_RC_BLOCK_CACHE ? 'true' : 'false'; ?> in wp-config.php and overrides this toggle.</p>
+                            <?php endif; ?>
+                            <?php if ($ace_bc_legacy): ?>
+                                <p class="description" style="color:#d63638;">The ace-block-html-cache mu-plugin is active, so this module stands aside. Remove the mu-plugin to use this instead.</p>
+                            <?php endif; ?>
+                            <div class="ace-block-cache-options" style="margin-top:8px;">
+                                <?php if ($ace_bc_woo): ?>
+                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_woo]" value="1" <?php checked($settings['block_cache_woo'] ?? 1); ?> /> WooCommerce product blocks (Product Collection, Handpicked, Newest, On Sale, Best Sellers, Top Rated, Products by Category)</label>
+                                <?php if (!\AceMedia\RedisCache\BlockCache::woo_role_safe()): ?><br /><span class="description">Role, B2B or membership pricing (or tax by customer address) detected: signed-in users always get a live render of these.</span><?php endif; ?></p>
+                                <?php endif; ?>
+                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_query]" value="1" <?php checked($settings['block_cache_query'] ?? 1); ?> /> Query Loop blocks (not ones that inherit the page query)</label></p>
+                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_latest_posts]" value="1" <?php checked($settings['block_cache_latest_posts'] ?? 1); ?> /> Latest Posts</label></p>
+                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_custom]" value="1" <?php checked($settings['block_cache_custom'] ?? 1); ?> /> Custom blocks added with the <code>ace_rc_block_cache_custom_blocks</code> filter</label></p>
+                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_logged_in]" value="1" <?php checked($settings['block_cache_logged_in'] ?? 0); ?> /> Cache for logged-in users too (per role, role-safe blocks only)</label></p>
+                                <p><label for="block_cache_ttl" style="width:140px; display:inline-block;">Block cache TTL</label>
+                                <input type="number" name="ace_redis_cache_settings[block_cache_ttl]" id="block_cache_ttl" value="<?php echo esc_attr($settings['block_cache_ttl'] ?? 43200); ?>" min="300" max="604800" class="small-text" style="width:90px;" /> seconds</p>
+                            </div>
+                            <div class="ace-block-cache-stats" style="margin-top:8px; font-size:12px; line-height:1.5;">
+                                <?php if ($ace_bc_stats): $t = $ace_bc_stats['totals']; ?>
+                                    <p><strong>Today:</strong> <?php echo (int) ($ace_bc_today['hits'] ?? 0); ?> hits, <?php echo esc_html(number_format(($ace_bc_today['saved_ms'] ?? 0) / 1000, 1)); ?> s render time saved, <?php echo (int) ($ace_bc_today['saved_queries'] ?? 0); ?> queries saved.
+                                    <br /><strong>Last 7 days:</strong> <?php echo (int) $t['hits']; ?> hits, <?php echo (int) $t['misses']; ?> misses, <?php echo esc_html(number_format($t['saved_ms'] / 1000, 1)); ?> s saved, <?php echo (int) $t['saved_queries']; ?> queries saved.</p>
+                                    <?php if ($ace_bc_stats['blocks']): ?>
+                                    <table class="widefat striped" style="max-width:640px;"><thead><tr><th>Profile / block</th><th>Hits</th><th>Misses</th><th>Avg render</th><th>Time saved</th><th>Queries saved</th></tr></thead><tbody>
+                                    <?php foreach ($ace_bc_stats['blocks'] as $b => $row): ?>
+                                        <tr><td><code><?php echo esc_html(str_replace('|', ' / ', $b)); ?></code></td><td><?php echo (int) $row['hits']; ?></td><td><?php echo (int) $row['misses']; ?></td><td><?php echo esc_html($row['avg_ms']); ?> ms</td><td><?php echo esc_html(number_format($row['saved_ms'] / 1000, 1)); ?> s</td><td><?php echo (int) $row['saved_queries']; ?></td></tr>
+                                    <?php endforeach; ?>
+                                    </tbody></table>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                                <?php if (get_transient('ace_rc_varnish_present') === 'yes'): ?><p>Varnish detected: block refreshes also ban the affected pages there.</p><?php endif; ?>
+                                <p><button type="button" class="button button-secondary" id="ace-block-cache-flush-btn" <?php disabled(!$ace_bc); ?>>Flush block cache</button> <span id="ace-block-cache-flush-status" aria-live="polite"></span></p>
+                            </div>
+                        </div>
+                    </div>
                     <div class="setting-row">
                         <div class="setting-label">
                             <label for="enable_dynamic_microcache">Dynamic Microcache</label>
@@ -1153,6 +1207,21 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         alert('Cache cleared');
                     } else { alert('Failed to clear cache'); }
                 }).catch(function(){ alert('Error clearing cache'); });
+        });
+    }
+
+    // Block cache flush
+    var bcFlush = document.getElementById('ace-block-cache-flush-btn');
+    if (bcFlush) {
+        bcFlush.addEventListener('click', function(){
+            var status = document.getElementById('ace-block-cache-flush-status');
+            var restBase = (window.ace_redis_admin && ace_redis_admin.rest_url) ? ace_redis_admin.rest_url : (window.location.origin + '/wp-json/');
+            bcFlush.disabled = true;
+            fetch(restBase.replace(/\/$/, '') + '/ace-redis-cache/v1/block-cache/flush', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-WP-Nonce': (window.ace_redis_admin ? ace_redis_admin.rest_nonce : '')}, body:'nonce=' + (window.ace_redis_admin ? encodeURIComponent(ace_redis_admin.nonce) : '') })
+                .then(function(r){ return r.json(); })
+                .then(function(json){ status.textContent = (json && json.success) ? 'Block cache flushed.' : ((json && json.message) || 'Flush failed.'); })
+                .catch(function(){ status.textContent = 'Flush failed.'; })
+                .then(function(){ bcFlush.disabled = false; });
         });
     }
 

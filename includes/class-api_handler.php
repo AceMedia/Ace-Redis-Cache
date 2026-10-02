@@ -167,6 +167,17 @@ class API_Handler {
             ]
         ]);
 
+        register_rest_route($this->namespace, '/block-cache/stats', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_block_cache_stats'],
+            'permission_callback' => [$this, 'check_permissions'],
+        ]);
+        register_rest_route($this->namespace, '/block-cache/flush', [
+            'methods' => 'POST',
+            'callback' => [$this, 'flush_block_cache'],
+            'permission_callback' => [$this, 'check_permissions'],
+        ]);
+
         register_rest_route($this->namespace, '/flush-cache/status', [
             'methods' => 'GET',
             'callback' => [$this, 'get_flush_cache_status'],
@@ -1376,6 +1387,33 @@ class API_Handler {
     }
     
     /**
+     * Block cache counters for the last N days (default 7).
+     */
+    public function get_block_cache_stats($request) {
+        $bc = BlockCache::instance();
+        $days = max(1, min(8, (int) ($request->get_param('days') ?: 7)));
+        return rest_ensure_response([
+            'success' => true,
+            'enabled' => $bc !== null && BlockCache::is_enabled(SettingsStore::get_settings([]) ?: []),
+            'legacy_module' => BlockCache::legacy_module_active(),
+            'stats' => $bc ? $bc->get_stats($days) : null,
+        ]);
+    }
+
+    /**
+     * Retire every cached block and purge the pages that showed them.
+     */
+    public function flush_block_cache($request) {
+        $bc = BlockCache::instance();
+        if (!$bc) {
+            return new \WP_Error('block_cache_unavailable', 'Block cache is not running (Redis unavailable or the legacy mu-plugin is active).', ['status' => 409]);
+        }
+        $ok = $bc->flush(true);
+        $bc->on_shutdown();
+        return rest_ensure_response(['success' => (bool) $ok, 'message' => $ok ? 'Block cache flushed' : 'Block cache flush failed']);
+    }
+
+    /**
      * Simple metrics endpoint handler for admin dashboard
      *
      * @param \WP_REST_Request $request
@@ -1770,6 +1808,7 @@ class API_Handler {
     $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
     $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
     $sanitized['optimize_lazy_images'] = !empty($input['optimize_lazy_images']) ? 1 : 0;
+    $sanitized = array_merge($sanitized, BlockCache::sanitize_settings($input));
 
         // Optional compression level overrides
         if (isset($input['brotli_level_object'])) $sanitized['brotli_level_object'] = intval($input['brotli_level_object']);

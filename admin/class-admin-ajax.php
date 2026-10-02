@@ -324,6 +324,7 @@ class AdminAjax {
         $validated['exclude_sitemaps'] = !empty($settings['exclude_sitemaps']) ? 1 : 0;
         $validated['debug_mode'] = !empty($settings['debug_mode']) ? 1 : 0;
         $validated['exclude_basic_blocks'] = !empty($settings['exclude_basic_blocks']) ? 1 : 0;
+        $validated = array_merge($validated, BlockCache::sanitize_settings($settings));
 
         $method = sanitize_text_field($settings['compression_method'] ?? 'brotli');
         $validated['compression_method'] = in_array($method, ['brotli','gzip'], true) ? $method : 'brotli';

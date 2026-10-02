@@ -148,6 +148,7 @@ class AceRedisCache {
             'send_cache_meta_headers' => 0,
             'enable_dynamic_microcache' => 0,
             'dynamic_microcache_ttl' => 10,
+            'block_cache_enabled' => 0, 'block_cache_ttl' => 43200, 'block_cache_woo' => 1, 'block_cache_query' => 1, 'block_cache_latest_posts' => 1, 'block_cache_custom' => 1, 'block_cache_logged_in' => 0,
             'enable_opcache_helpers' => 0,
             'enable_static_asset_cache' => 0,
             'static_asset_cache_ttl' => 604800,
@@ -222,6 +223,7 @@ class AceRedisCache {
             'send_cache_meta_headers' => 0,
             'enable_dynamic_microcache' => 0,
             'dynamic_microcache_ttl' => 10,
+            'block_cache_enabled' => 0, 'block_cache_ttl' => 43200, 'block_cache_woo' => 1, 'block_cache_query' => 1, 'block_cache_latest_posts' => 1, 'block_cache_custom' => 1, 'block_cache_logged_in' => 0,
             'enable_opcache_helpers' => 0,
             'enable_static_asset_cache' => 0,
             'static_asset_cache_ttl' => 604800,
@@ -360,6 +362,8 @@ class AceRedisCache {
     private function setup_hooks() {
         // Keep a Varnish in front of the site in step with page-cache purges (no-op without one).
         VarnishBridge::boot();
+        // Block HTML cache (off unless enabled in settings or by ACE_RC_BLOCK_CACHE).
+        BlockCache::boot($this, $this->cache_manager, (array) $this->settings);
 
         // Settings update hooks (single-site + network mode).
         add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
@@ -4151,6 +4155,7 @@ class AceRedisCache {
                 'send_cache_meta_headers' => 0,
                 'enable_dynamic_microcache' => 0,
                 'dynamic_microcache_ttl' => 10,
+            'block_cache_enabled' => 0, 'block_cache_ttl' => 43200, 'block_cache_woo' => 1, 'block_cache_query' => 1, 'block_cache_latest_posts' => 1, 'block_cache_custom' => 1, 'block_cache_logged_in' => 0,
                 'enable_opcache_helpers' => 0,
                 'enable_static_asset_cache' => 0,
                 'static_asset_cache_ttl' => 604800,

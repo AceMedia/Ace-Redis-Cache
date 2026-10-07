@@ -171,7 +171,7 @@ class BlockCache {
                     'woocommerce/product-best-sellers',
                     'woocommerce/product-top-rated',
                     'woocommerce/product-category',
-                    // AceMedia's A.C.E. Checkout Engine product block (uni-carts): one fixed product, nonces live in enqueued script data.
+                    // AceMedia's A.C.E. Checkout Engine product block: one fixed product, nonces live in enqueued script data.
                     'ace/product-variations',
                 ]),
                 'dep_types' => ['product', 'product_variation'],

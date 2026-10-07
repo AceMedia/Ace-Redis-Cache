@@ -3270,7 +3270,7 @@ class AceRedisCache {
      * Whether an edit's pages are re-rendered straight away or only marked stale (refreshed when
      * next visited). Asked when the post is saved, not when cron gets to it, because sites turn
      * priming off for bulk imports and cron/CLI saves through ace_rc_enable_cache_priming
-     * (Sheff.Events: an import queued 919 primes and put the box under load 17).
+     * (one site: an import queued 919 primes and put the box under load 17).
      */
     private function recache_priming_allowed($post_id) {
         return (bool) apply_filters('ace_rc_enable_cache_priming', true, (int) $post_id, $this->settings);

@@ -268,7 +268,7 @@ try {
     // The declared length also cannot exceed the bytes we are holding, and that
     // is worth checking before unserialize() is asked to allocate for it: a
     // corrupt s:4294967296:"... header is an allocation request, not a cache
-    // value. It took sheff.events down for eighty seconds on 4 Sept 2026.
+    // value. It took a production site down for eighty seconds.
     if (preg_match('/^s:(\d{1,10}):"/', $payload, $ace_rc_len) === 1
         && (int) $ace_rc_len[1] <= strlen($payload)) {
         $decoded = @unserialize($payload);

@@ -6,7 +6,7 @@
  * (Interactivity API state/config, enqueued styles/scripts/script modules, wcSettings data,
  * block-supports CSS, unique id counters, analytics loop trackers).
  *
- * Generalised from the iegemea.com mu-plugin (EgbertTaylor#38).
+ * Generalised from a site-level mu-plugin that proved the approach in production.
  *
  * Safety rules
  * - Only GET front-end renders, never admin/AJAX/REST/previews or URLs with paging/filter/sort args.
@@ -98,7 +98,7 @@ class BlockCache {
         return (bool) apply_filters('ace_rc_block_cache_enabled', $on);
     }
 
-    /** The iegemea.com mu-plugin does the same job; stay out of its way while it is loaded. */
+    /** A site-level block cache mu-plugin may already do this job; stay out of its way while it is loaded. */
     public static function legacy_module_active() {
         return function_exists('ace_bhc_pre_render');
     }

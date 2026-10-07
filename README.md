@@ -198,7 +198,7 @@ add_filter('ace_rc_block_cache_profiles', function ($profiles) {
     $profiles['hub'] = [
         'label' => 'News hub',
         'setting' => 'block_cache_custom',
-        'blocks' => ['talkfuse/hub'],
+        'blocks' => ['my-plugin/news-hub'],
         'dep_types' => null,
         'role_safe' => true,
         'vary_page' => true,

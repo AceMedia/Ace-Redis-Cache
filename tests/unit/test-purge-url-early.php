@@ -20,11 +20,11 @@ class PurgeUrlEarlyTest extends TestCase {
     }
 
     public function testCoversEverySchemeDeviceAndCandidate() {
-        $keys = AceRedisCache::early_serve_keys(['/topic/culture/', '/topic/culture'], 'talkfuse.com', 7, 'ace-te-3:ace-pc-hl-2');
+        $keys = AceRedisCache::early_serve_keys(['/topic/culture/', '/topic/culture'], 'example.com', 7, 'ace-te-3:ace-pc-hl-2');
         foreach (['/topic/culture/', '/topic/culture'] as $uri) {
             foreach (['http', 'https'] as $scheme) {
                 foreach (['desktop', 'mobile'] as $device) {
-                    foreach ($this->dropin_candidates($uri, $scheme, $device, 'talkfuse.com', 7, 'ace-te-3:ace-pc-hl-2') as $k) {
+                    foreach ($this->dropin_candidates($uri, $scheme, $device, 'example.com', 7, 'ace-te-3:ace-pc-hl-2') as $k) {
                         $this->assertTrue(in_array($k, $keys, true), $k);
                     }
                 }

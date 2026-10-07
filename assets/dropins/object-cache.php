@@ -57,7 +57,7 @@ if (!function_exists('ace_oc_is_member_front_ajax')) {
      *
      * admin-ajax.php sits under /wp-admin/, so these were treated as editorial and ran with no
      * Redis at all: every option, post and term the guests already cached was re-read from the
-     * database on every poll (~1-3s each on sheff.events). They are reads of shared data, so
+     * database on every poll (1-3 s each on a busy production site). They are reads of shared data, so
      * they get member read mode like a signed-in page view: read Redis, never persist. A call
      * made from a wp-admin screen (Referer under /wp-admin/) keeps the strict behaviour.
      */
@@ -141,7 +141,7 @@ if (!class_exists('WP_Object_Cache')) {
             'ace_events' => 8388608, // 8MB
             'ace_te'     => 1048576, // 1MB
             // 'alloptions' is the only options-group key that persists (see is_excluded_key)
-            // and on any real site it is well over 64KB (sheff.events: 351 autoloaded rows,
+            // and on any real site it is well over 64KB (one production site: 351 autoloaded rows,
             // ~150KB), so the general cap silently dropped it on every request and every
             // request re-read the whole options table from MySQL. Found 11 Sept 2026.
             'options'    => 1048576, // 1MB
@@ -815,7 +815,7 @@ if (!class_exists('WP_Object_Cache')) {
          * memory only (admin, logged-in, AJAX, REST, cron). With a persistent object cache
          * WordPress keeps transients nowhere else: before this, every transient set during an
          * admin request was forgotten when the request ended, so every admin page re-ran every
-         * transient-cached remote call it touched. On IEG that was Jetpack's brute-force and HTTPS
+         * transient-cached remote call it touched. On one WooCommerce site that was Jetpack's brute-force and HTTPS
          * checks, a plugin SDK's five-day rollback lookup, the cookie banner's API calls and core's
          * own update checks, each a blocking HTTP request on every admin page, 3-10 s in all.
          * Excluded keys, oversize values and ACE_OC_SHARED_TRANSIENTS=false keep the old behaviour.
@@ -969,8 +969,8 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($key === 'notoptions') {
                     return true;
                 }
-                // Every other option persists. Non-autoloaded options (600 of them on
-                // sheff.events) were runtime-only "to prevent cache pollution", which meant
+                // Every other option persists. Non-autoloaded options (600 of them on one
+                // production site) were runtime-only "to prevent cache pollution", which meant
                 // each one read on a page was a MySQL query on every uncached request. They are
                 // plain DB rows like alloptions: update_option and delete_option keep the key
                 // current, admin and cron writes invalidate it, and the backstop TTL bounds it.

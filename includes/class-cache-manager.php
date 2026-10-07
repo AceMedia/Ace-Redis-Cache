@@ -1113,7 +1113,7 @@ class CacheManager {
      * A serialised string, array or object states its length or element count up
      * front, and unserialize() trusts that number enough to allocate for it. A
      * corrupt or truncated payload can therefore ask PHP for far more memory than
-     * the data could ever contain - sheff.events, 4 Sept 2026: a garbled cache
+     * the data could ever contain - seen on a production site: a garbled cache
      * value producing "tried to allocate 4295229440 bytes", eighty seconds of
      * fatals, and no memory_limit short of 4GB that would have helped.
      *

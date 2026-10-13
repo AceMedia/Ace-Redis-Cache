@@ -629,6 +629,34 @@ class AceRedisCache {
      *
      * @return bool True if request should be cached
      */
+    /**
+     * The crawler bypass rule: a user-agent pattern and the path prefixes it applies to, both from
+     * the 'ace_rc_crawler_bypass' filter (['agents' => regex body, 'paths' => ['/civic/', ...]]).
+     * Empty by default, so nothing changes for a site that never filters it.
+     */
+    public function crawler_bypass_rule() {
+        $rule = apply_filters('ace_rc_crawler_bypass', ['agents' => '', 'paths' => []]);
+        $agents = is_array($rule) ? trim((string) ($rule['agents'] ?? '')) : '';
+        $paths = [];
+        foreach (is_array($rule) ? (array) ($rule['paths'] ?? []) : [] as $p) {
+            $p = '/' . trim((string) $p, '/');
+            if ($p !== '/') { $paths[] = $p; } // never the whole site
+        }
+        return ['agents' => $agents, 'paths' => array_values(array_unique($paths))];
+    }
+
+    private function is_crawler_bypass_request($path) {
+        $rule = $this->crawler_bypass_rule();
+        if ($rule['agents'] === '' || !$rule['paths']) { return false; }
+        $ua = (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
+        if ($ua === '' || @preg_match('~' . str_replace('~', '\\~', $rule['agents']) . '~i', $ua) !== 1) { return false; }
+        $req = '/' . trim((string) $path, '/');
+        foreach ($rule['paths'] as $bp) {
+            if ($req === $bp || strpos($req . '/', rtrim($bp, '/') . '/') === 0) { return true; }
+        }
+        return false;
+    }
+
     private function should_cache_request() {
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
         $path = (string) wp_parse_url($request_uri, PHP_URL_PATH);
@@ -655,6 +683,15 @@ class AceRedisCache {
         
         // Don't cache REST API requests
         if ($this->is_rest_request()) {
+            return false;
+        }
+
+        // A search crawler on a route that renders differently for it (a plugin's inline-everything
+        // page for bots) is served live: neither a stored copy nor stored itself, so the reader's copy is
+        // never a crawler rendering and the crawler never gets the reader's placeholders. The drop-in
+        // honours the same rule from the tokens published in maybe_publish_page_key_inputs().
+        if ($this->is_crawler_bypass_request($path)) {
+            if (!headers_sent()) { header('X-AceRedisCache: BYPASS crawler'); }
             return false;
         }
         
@@ -1969,6 +2006,16 @@ class AceRedisCache {
                 $redis->rawCommand('SET', $ns . 'bypass_paths', implode("\n", $bypass), 'EX', (string) DAY_IN_SECONDS);
             } else {
                 $redis->rawCommand('DEL', $ns . 'bypass_paths');
+            }
+            // The crawler rule (see crawler_bypass_rule()), so the drop-in can send a bot on a
+            // bypassed route through to WordPress rather than handing it the reader's copy.
+            $crawler = $this->crawler_bypass_rule();
+            if ($crawler['agents'] !== '' && $crawler['paths']) {
+                $redis->rawCommand('SET', $ns . 'crawler_agents', $crawler['agents'], 'EX', (string) DAY_IN_SECONDS);
+                $redis->rawCommand('SET', $ns . 'crawler_paths', implode("\n", $crawler['paths']), 'EX', (string) DAY_IN_SECONDS);
+            } else {
+                $redis->rawCommand('DEL', $ns . 'crawler_agents');
+                $redis->rawCommand('DEL', $ns . 'crawler_paths');
             }
         } catch (\Throwable $t) {
             // Non-fatal: advanced-cache just stays in dark-launch MISS until the keys exist.

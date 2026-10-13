@@ -209,6 +209,21 @@ try {
         }
     }
 
+    // A search crawler on a route the site renders differently for bots goes through to WordPress
+    // (which will not serve or store it either): the reader's copy is never the right page for it.
+    $crawler_agents = $redis->get($token_ns . 'crawler_agents');
+    $crawler_paths = $redis->get($token_ns . 'crawler_paths');
+    if (is_string($crawler_agents) && $crawler_agents !== '' && is_string($crawler_paths) && $crawler_paths !== ''
+        && (string) $ua !== '' && @preg_match('~' . str_replace('~', '\\~', $crawler_agents) . '~i', (string) $ua) === 1) {
+        $req_path = '/' . trim((string) parse_url($request_uri, PHP_URL_PATH), '/');
+        foreach (explode("\n", $crawler_paths) as $bp) {
+            if ($bp !== '' && ($req_path === $bp || strpos($req_path . '/', rtrim($bp, '/') . '/') === 0)) {
+                $emit('BYPASS crawler');
+                return;
+            }
+        }
+    }
+
     $core_key = 'page_cache:' . $key_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version;
     if ($suffix !== '') {
         $core_key .= ':' . $suffix;

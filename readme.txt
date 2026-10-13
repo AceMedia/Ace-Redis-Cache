@@ -30,5 +30,8 @@ Open an issue on the plugin's GitHub repository.
 
 == Changelog ==
 
+= 0.8.6 =
+* Crawler bypass: the `ace_rc_crawler_bypass` filter names search crawler user agents and the path prefixes where they are served live rather than from the page cache, in WordPress and in the pre-boot drop-in alike. Empty by default.
+
 = 0.8.5 =
 * Initial public release.

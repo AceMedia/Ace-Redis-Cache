@@ -344,6 +344,24 @@ try {
         return;
     }
 
+    // WordPress must expand dynamic blocks before the page reaches a visitor. The
+    // early cache has no block renderer, so never send its stored placeholders.
+    $inspect_body = $body;
+    if ($encoding === 'gzip') {
+        $inspect_body = @gzdecode($body);
+    } elseif ($encoding === 'br') {
+        $inspect_body = function_exists('brotli_uncompress') ? @brotli_uncompress($body) : false;
+    }
+    if (!is_string($inspect_body)) {
+        $emit('MISS uninspectable');
+        return;
+    }
+    if (strpos($inspect_body, '<!--ACE_DYNAMIC blk:') !== false
+        || strpos($inspect_body, '<!--ACE_BLOCK_DYNAMIC:') !== false) {
+        $emit('MISS dynamic');
+        return;
+    }
+
     if ($stale !== '') {
         // First stale hit for this page in 45s queues its refresh (same lock window the plugin uses).
         // Best effort: a failure here only means the page is refreshed on a later hit.

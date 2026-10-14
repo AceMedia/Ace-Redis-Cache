@@ -1706,7 +1706,9 @@ class AceRedisCache {
             $payload['full'] = $full;
         }
         $ttl = isset($this->settings['ttl_object']) ? (int)$this->settings['ttl_object'] : 3600;
-        $ttl = max(300, min($ttl, 3600));
+        // The descriptor must outlive the page containing its placeholder, including
+        // the stale-while-revalidate window, or a cache HIT renders an empty block.
+        $ttl = max(300, $ttl, $this->page_cache_physical_ttl() + MINUTE_IN_SECONDS);
         $this->cache_manager->set($redis_key, $payload, $ttl);
         $this->dynamic_placeholder_hashes[$hash] = true;
         $this->dynamic_placeholder_stats['count']++;

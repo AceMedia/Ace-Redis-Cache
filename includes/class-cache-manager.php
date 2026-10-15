@@ -17,6 +17,8 @@ class CacheManager {
     
     private $redis_connection;
     private $settings;
+    // Stop page-cache I/O after a failed read for the rest of this request.
+    private $page_cache_read_failed = false;
     private $cache_prefix = 'page_cache:';
     private $minified_cache_prefix = 'page_cache_min:';
     private $compression_marker_prefixes = ['br:' => 'brotli', 'gz:' => 'gzip', 'raw:' => 'raw'];
@@ -911,6 +913,7 @@ class CacheManager {
      * @return bool Success status
      */
     public function set_with_minification($key, $content, $minifier = null, $ttl = null) {
+        if ($this->page_cache_read_failed) return false;
         $ttl = $ttl !== null ? max(1, (int) $ttl) : $this->get_cache_expiry();
         if (empty($content)) {
             return false;
@@ -960,39 +963,46 @@ class CacheManager {
      * @return string|null Cached content or null if not found
      */
     public function get_with_minification($key, $serve_compressed = true) {
-        $redis = $this->redis_connection->get_connection();
-        if (!$redis) {
-            return null;
-        }
-        
-        $should_exclude = $this->should_exclude_from_minification();
-        $minification_enabled = ($this->settings['enable_minification'] ?? 0);
-        
-        if (!$should_exclude && $minification_enabled) {
-            // Try to get minified version first
-            $minified_key = $this->minified_cache_prefix . $key;
-            $content = $redis->get($minified_key);
-            
+        if ($this->page_cache_read_failed) return null;
+        try {
+            $redis = $this->redis_connection->get_connection();
+            if (!$redis) {
+                return null;
+            }
+
+            $should_exclude = $this->should_exclude_from_minification();
+            $minification_enabled = ($this->settings['enable_minification'] ?? 0);
+
+            if (!$should_exclude && $minification_enabled) {
+                // Try to get minified version first
+                $minified_key = $this->minified_cache_prefix . $key;
+                $content = $redis->get($minified_key);
+
+                if ($content !== false) {
+                    // Force plain HTML when caller wants to manipulate (e.g. dynamic placeholders)
+                    return $this->maybe_decompress($content, $serve_compressed);
+                }
+            }
+
+            // Fall back to original version stored under the page prefix
+            $original_key = $this->cache_prefix . $key;
+            $content = $redis->get($original_key);
             if ($content !== false) {
-                // Force plain HTML when caller wants to manipulate (e.g. dynamic placeholders)
                 return $this->maybe_decompress($content, $serve_compressed);
             }
+            // Back-compat: try legacy unprefixed key
+            $legacy = $redis->get($key);
+            if ($legacy !== false) {
+                return $this->maybe_decompress($legacy, $serve_compressed);
+            }
+            return null;
+        } catch (\RedisException $e) {
+            $this->page_cache_read_failed = true;
+            error_log('Ace Redis Cache: page-cache read unavailable; rendering uncached for this request.');
+            return null;
         }
-        
-        // Fall back to original version stored under the page prefix
-        $original_key = $this->cache_prefix . $key;
-        $content = $redis->get($original_key);
-        if ($content !== false) {
-            return $this->maybe_decompress($content, $serve_compressed);
-        }
-        // Back-compat: try legacy unprefixed key
-        $legacy = $redis->get($key);
-        if ($legacy !== false) {
-            return $this->maybe_decompress($legacy, $serve_compressed);
-        }
-        return null;
     }
-    
+
     /**
      * Get cache expiry time in seconds
      *

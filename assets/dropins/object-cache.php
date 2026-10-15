@@ -466,7 +466,7 @@ if (!class_exists('WP_Object_Cache')) {
             return in_array($g, (array) $this->persistent_groups, true);
         }
 
-        protected function exceeds_max_value_size($data, $group = null) {
+        protected function exceeds_max_value_size($data, $group = null, $key = '') {
             if ($data === null) {
                 return false;
             }
@@ -486,6 +486,12 @@ if (!class_exists('WP_Object_Cache')) {
             $limit = ($group !== null && isset(self::MAX_VALUE_BYTES_BY_GROUP[$group]))
                 ? self::MAX_VALUE_BYTES_BY_GROUP[$group]
                 : (int) $this->max_value_bytes;
+
+            // Public map snapshots retain their existing transient keys so provider
+            // invalidation keeps working. Do not raise limits for arbitrary WP objects.
+            if ($group === 'transient' && preg_match('/^(?:ace_lm_(?:L_[a-z0-9_]+|(?:hot_)?[a-f0-9]{32})|tfn_ad_pool_(?:feed|sidebar))$/D', (string) $key)) {
+                $limit = 2 * 1024 * 1024;
+            }
 
             return strlen($payload) > $limit;
         }
@@ -854,7 +860,7 @@ if (!class_exists('WP_Object_Cache')) {
 
         protected function shared_transient_write($group, $key, $data, $expire, $only_if_absent = false) {
             $this->runtime_set($group, $key, $data);
-            if ($this->exceeds_max_value_size($data, $group)) {
+            if ($this->exceeds_max_value_size($data, $group, $key)) {
                 $this->invalidate_persistent($group, $key, $data, true);
                 return true;
             }
@@ -1064,7 +1070,7 @@ if (!class_exists('WP_Object_Cache')) {
                 return false;
             }
 
-            if ($this->exceeds_max_value_size($data, $group)) {
+            if ($this->exceeds_max_value_size($data, $group, $key)) {
                 $this->stat_inc('oversize_skips');
                 if (!isset($this->runtime[$group][$key])) { $this->runtime_set($group, $key, $data); return true; }
                 return false;
@@ -1111,7 +1117,7 @@ if (!class_exists('WP_Object_Cache')) {
             }
 
             $is_bypass_group = $this->is_bypass_group($group);
-            $is_oversize = $this->exceeds_max_value_size($data, $group);
+            $is_oversize = $this->exceeds_max_value_size($data, $group, $key);
 
             if ($is_bypass_group || $is_oversize) {
                 if ($this->is_bypass_group($group)) {

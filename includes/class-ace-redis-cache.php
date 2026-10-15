@@ -3068,6 +3068,17 @@ class AceRedisCache {
         $queue = $this->get_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
         if (empty($queue)) return;
 
+        // Share a host-wide warming budget when the operator has installed the
+        // lock file. No waiting in PHP: visitors and live feeds get first use.
+        $host_lock = null;
+        if (is_readable('/run/lock/acehost-background.lock') && !getenv('ACEHOST_BACKGROUND_LEASE')) {
+            $host_lock = fopen('/run/lock/acehost-background.lock', 'r');
+            if (!$host_lock || !flock($host_lock, LOCK_EX | LOCK_NB)) {
+                $this->schedule_sitemap_prime_runner(120);
+                return;
+            }
+        }
+
         $lock_key = 'ace_rc:prime_runner';
         if ($this->cache_manager && method_exists($this->cache_manager, 'add') && !$this->cache_manager->add($lock_key, 1, 120)) {
             $this->schedule_sitemap_prime_runner(60);
@@ -3099,11 +3110,13 @@ class AceRedisCache {
         $cpus = $this->cpu_count();
         $load = function_exists('sys_getloadavg') ? (float) (sys_getloadavg()[0] ?? 0) : 0.0;
         $busy = $load >= $cpus;
+        if ($busy) {
+            $this->schedule_sitemap_prime_runner(120);
+            if ($this->cache_manager) $this->cache_manager->delete($lock_key);
+            return;
+        }
         $parallel = ($is_cli && $load < $cpus / 2 && class_exists('WpOrg\\Requests\\Requests'))
             ? max(1, (int) apply_filters('ace_rc_prime_parallel', 3, $this->settings)) : 1;
-        if ($busy) {
-            $budget = min($budget, 30.0);
-        }
 
         foreach (array_chunk($batch, $parallel) as $chunk) {
             if ($done && (microtime(true) - $started) > $budget) {
@@ -3137,9 +3150,6 @@ class AceRedisCache {
             }
             foreach ($chunk as $url) {
                 $done[] = $url;
-            }
-            if ($busy) {
-                usleep(500000);
             }
         }
 

@@ -21,7 +21,9 @@ class CacheKeyHostTest extends TestCase {
         $instance = $reflection->newInstanceWithoutConstructor();
 
         $method = $reflection->getMethod('build_page_cache_core_key');
-        $method->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
 
         $key = $method->invoke($instance, '/shop/', 'https', 'desktop', 7, 'Example.COM:8443');
 

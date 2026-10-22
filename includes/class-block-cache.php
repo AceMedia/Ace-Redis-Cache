@@ -812,13 +812,17 @@ class BlockCache {
 
     private static function prop($object, $prop) {
         $r = new \ReflectionProperty($object, $prop);
-        $r->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $r->setAccessible(true);
+        }
         return $r->getValue($object);
     }
 
     private static function set_prop($object, $prop, $value) {
         $r = new \ReflectionProperty($object, $prop);
-        $r->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $r->setAccessible(true);
+        }
         $r->setValue($object, $value);
     }
 
@@ -1049,7 +1053,9 @@ class BlockCache {
         if (class_exists('\Automattic\WooCommerce\Blocks\Utils\BlocksSharedState')) {
             try {
                 $r = new \ReflectionProperty('\Automattic\WooCommerce\Blocks\Utils\BlocksSharedState', 'consent_statement');
-                $r->setAccessible(true);
+                if (PHP_VERSION_ID < 80100) {
+                    $r->setAccessible(true);
+                }
                 $consent = $r->getValue();
                 \Automattic\WooCommerce\Blocks\Utils\BlocksSharedState::load_store_config($consent);
                 \Automattic\WooCommerce\Blocks\Utils\BlocksSharedState::load_cart_state($consent);
@@ -1069,7 +1075,9 @@ class BlockCache {
             wp_interactivity_state('core/router', ['url' => get_self_link()]);
             if (method_exists($ia, 'get_router_animation_styles')) {
                 $styles = new \ReflectionMethod($ia, 'get_router_animation_styles');
-                $styles->setAccessible(true);
+                if (PHP_VERSION_ID < 80100) {
+                    $styles->setAccessible(true);
+                }
                 wp_register_style('wp-interactivity-router-animations', false);
                 wp_add_inline_style('wp-interactivity-router-animations', $styles->invoke($ia));
                 wp_enqueue_style('wp-interactivity-router-animations');

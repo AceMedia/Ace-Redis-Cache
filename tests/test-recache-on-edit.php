@@ -36,7 +36,9 @@ $check = function ($label, $actual, $expected) use (&$passed, &$failed) {
 $reflection = new ReflectionClass($plugin);
 $call = function ($method, array $args = []) use ($reflection, $plugin) {
     $m = $reflection->getMethod($method);
-    $m->setAccessible(true);
+    if (PHP_VERSION_ID < 80100) {
+        $m->setAccessible(true);
+    }
     return $m->invokeArgs($plugin, $args);
 };
 $redis = $plugin->get_cache_manager()->get_redis_connection()->get_connection();
@@ -104,7 +106,9 @@ $redis->rawCommand('DEL', 'page_cache:' . $core, 'ace:1:fresh:' . $core);
 
 // Clean up (and keep the CLI shutdown fallback from running the queue these deletes add).
 $busy = $reflection->getProperty('deferred_processing');
-$busy->setAccessible(true);
+if (PHP_VERSION_ID < 80100) {
+    $busy->setAccessible(true);
+}
 $busy->setValue($plugin, true);
 foreach ([$page, $pattern, $part, $draft] as $id) {
     wp_delete_post($id, true);

@@ -41,7 +41,9 @@ class RedisConnectionTest extends TestCase {
     public function testMemoryLimitParsing() {
         $reflection = new ReflectionClass($this->connection);
         $method = $reflection->getMethod('parse_memory_limit');
-        $method->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
         
         $this->assertEquals(268435456, $method->invokeArgs($this->connection, ['256M']));
         $this->assertEquals(1073741824, $method->invokeArgs($this->connection, ['1G']));

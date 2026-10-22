@@ -41,12 +41,16 @@ $instance = $reflection->newInstanceWithoutConstructor();
 
 $set_settings = function (array $settings) use ($reflection, $instance) {
     $prop = $reflection->getProperty('settings');
-    $prop->setAccessible(true);
+    if (PHP_VERSION_ID < 80100) {
+        $prop->setAccessible(true);
+    }
     $prop->setValue($instance, $settings);
 };
 $call = function ($method, array $args) use ($reflection, $instance) {
     $m = $reflection->getMethod($method);
-    $m->setAccessible(true);
+    if (PHP_VERSION_ID < 80100) {
+        $m->setAccessible(true);
+    }
     return $m->invokeArgs($instance, $args);
 };
 

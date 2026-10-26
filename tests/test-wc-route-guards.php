@@ -4,6 +4,11 @@
  * Run: php -n tests/test-wc-route-guards.php
  */
 
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 define('ABSPATH', __DIR__ . '/');
 define('ACE_OC_BYPASS', true);
 define('ACE_OC_WC_READ', true);

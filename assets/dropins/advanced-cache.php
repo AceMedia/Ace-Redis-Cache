@@ -24,6 +24,14 @@ if ($request_uri === '') {
     $request_uri = '/';
 }
 
+// The opt-in assistant preview includes a short-lived signed grant in the
+// rendered page. It must reach WordPress, never an early Redis page-cache hit.
+// The plugin separately limits the preview to the main site's homepage.
+$beta_path = parse_url($request_uri, PHP_URL_PATH);
+if ($beta_path === '/' && array_key_exists('beta', $_GET) && is_scalar($_GET['beta']) && in_array((string) $_GET['beta'], ['', '1'], true)) {
+    return;
+}
+
 if (preg_match('#/(wp-login\.php|wp-admin(?:/|$)|xmlrpc\.php|wp-cron\.php)#i', $request_uri)) {
     return;
 }

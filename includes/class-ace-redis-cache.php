@@ -766,7 +766,7 @@ class AceRedisCache {
             }
         }
 
-        if ($path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $path)) {
+        if ($path !== '' && preg_match('#(^|/)(basket|cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $path)) {
             return true;
         }
 

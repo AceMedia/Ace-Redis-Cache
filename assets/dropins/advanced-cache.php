@@ -100,7 +100,7 @@ $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route'
 if ($rest_route !== '' || ($request_path !== '' && preg_match('#^/wp-json(/|$)#i', $request_path))) {
     return;
 }
-if ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path)) {
+if ($request_path !== '' && preg_match('#(^|/)(basket|cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path)) {
     return;
 }
 

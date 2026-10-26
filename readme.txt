@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.8
+Stable tag: 0.8.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,6 +29,9 @@ Includes a Redis object cache drop-in, an advanced-cache page cache drop-in, a b
 Open an issue on the plugin's GitHub repository.
 
 == Changelog ==
+
+= 0.8.9 =
+* Recognise a basket page as a WooCommerce cart route in the page and object cache guards.
 
 = 0.8.8 =
 * Render normally when a Redis page-cache read fails, and avoid further page-cache reads or writes during that request.

@@ -287,7 +287,7 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
-            $is_wc_cart_endpoint = ($request_path !== '' && preg_match('#(^|/)(cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path) === 1);
+            $is_wc_cart_endpoint = ($request_path !== '' && preg_match('#(^|/)(basket|cart|checkout|my-account|register|lost-password|customer-logout|order-pay|order-received|view-order|edit-account|add-payment-method|payment-methods|set-default-payment-method|delete-payment-method)(/|$)#i', $request_path) === 1);
             $is_wc_store_api_request = (
                 ($request_path !== '' && preg_match('#/(?:wp-json/)?wc/store/v1/(cart|checkout)(?:/|$)#i', $request_path) === 1) ||
                 ($rest_route !== '' && preg_match('#^/wc/store/v1/(cart|checkout)(?:/|$)#i', $rest_route) === 1) ||

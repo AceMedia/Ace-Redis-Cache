@@ -161,6 +161,17 @@ if (!class_exists('WP_Object_Cache')) {
         // are all DB-derived, so expiry just forces a cheap regeneration on the next miss.
         private const DEFAULT_TTL = 604800; // 7 days
 
+        // Generation counter (#27). Every object-cache key carries the site's current
+        // generation (`<namespace>v<gen>:...`), held in Redis at `<namespace>gen` and
+        // memoised per process. flush() is then one INCR: keys of the old generation
+        // become unreachable at once and expire by their TTL (every write carries one,
+        // DEFAULT_TTL at most when the caller gave none). A daily cron UNLINKs stale
+        // generations early. If the generation key cannot be read, the drop-in uses the
+        // legacy key format and the SCAN-and-UNLINK flush, as before.
+        protected $use_generations = true;
+        protected $generation = null;      // int once loaded, false when unavailable
+        protected static $generation_memo = []; // namespace => int (per process)
+
         private const BYPASS_GROUPS_DEFAULT = [
             'woocommerce_sessions',
             'wc_session_id',
@@ -448,6 +459,10 @@ if (!class_exists('WP_Object_Cache')) {
             // Post changes: flush on edits of public posts and on visibility flips (public <-> non-public)
             add_action('save_post',              [$this, 'maybe_flush_on_save'], 10, 3);
             add_action('transition_post_status', [$this, 'maybe_flush_on_visibility_change'], 10, 3);
+
+            // Lazy clean-up of keys from superseded generations (#27).
+            add_action('ace_rc_purge_stale_generations', [$this, 'purge_stale_generations']);
+            add_action('init', [$this, 'schedule_generation_purge']);
         }
 
         public function apply_woocommerce_profile() {
@@ -784,7 +799,97 @@ if (!class_exists('WP_Object_Cache')) {
         protected function k($key, $group) {
             $g     = $group ?: 'default';
             $scope = $this->is_global_group($g) ? 'g:' : $this->blog_prefix;
-            return $this->namespace . $scope . $g . ':' . $key;
+            return $this->key_base() . $scope . $g . ':' . $key;
+        }
+
+        /** Namespace plus the current generation segment (legacy namespace when unavailable). */
+        protected function key_base() {
+            $gen = $this->current_generation();
+            return $gen === false ? $this->namespace : $this->namespace . 'v' . $gen . ':';
+        }
+
+        protected function generation_key() {
+            return $this->namespace . 'gen';
+        }
+
+        /**
+         * The site's generation: one GET per process, memoised. Raw commands keep the
+         * value a plain integer whatever serializer the connection uses. A missing key is seeded
+         * with the current time (SET NX), so a counter lost to eviction never restarts at
+         * a number an older generation already used. Returns false when it cannot be read.
+         */
+        protected function current_generation() {
+            if ($this->generation !== null) { return $this->generation; }
+            if (!$this->use_generations || !$this->redis) { return false; }
+            if (isset(self::$generation_memo[$this->namespace])) {
+                return $this->generation = self::$generation_memo[$this->namespace];
+            }
+            try {
+                $raw = $this->redis->rawCommand('GET', $this->generation_key());
+                if ($raw === false || $raw === null) {
+                    $seed = time();
+                    $this->redis->rawCommand('SET', $this->generation_key(), (string) $seed, 'NX');
+                    $raw = $this->redis->rawCommand('GET', $this->generation_key());
+                }
+                if (!is_numeric($raw)) { return $this->generation = false; }
+                $gen = (int) $raw;
+            } catch (\Throwable $e) {
+                return $this->generation = false;
+            }
+            self::$generation_memo[$this->namespace] = $gen;
+            return $this->generation = $gen;
+        }
+
+        /** Move to a new generation with one INCR. Returns false if that was not possible. */
+        protected function bump_generation() {
+            if ($this->current_generation() === false) { return false; }
+            try {
+                $gen = $this->redis->rawCommand('INCR', $this->generation_key());
+            } catch (\Throwable $e) {
+                $gen = false;
+            }
+            if (!is_int($gen) && !is_numeric($gen)) { return false; }
+            $this->generation = (int) $gen;
+            self::$generation_memo[$this->namespace] = (int) $gen;
+            return true;
+        }
+
+        /**
+         * Maintenance: UNLINK keys left behind by older generations (and legacy keys
+         * without one). They would expire by TTL anyway; this just frees memory sooner.
+         * Runs on the daily `ace_rc_purge_stale_generations` cron, never on a request path.
+         */
+        public function purge_stale_generations() {
+            $gen = $this->current_generation();
+            if ($gen === false) { return 0; }
+            $keep = $this->namespace . 'v' . $gen . ':';
+            $gen_key = $this->generation_key();
+            $it = null;
+            $stale = [];
+            $count = 0;
+            try {
+                do {
+                    $keys = $this->redis->scan($it, $this->namespace . '*', 1000);
+                    foreach ((array) $keys as $k) {
+                        if ($k === $gen_key || strpos($k, $keep) === 0) { continue; }
+                        $stale[] = $k;
+                        if (count($stale) >= self::UNLINK_BATCH) {
+                            $this->unlink_batch($stale);
+                            $count += count($stale);
+                            $stale = [];
+                        }
+                    }
+                } while ($it > 0);
+                $this->unlink_batch($stale);
+                $count += count($stale);
+            } catch (\Throwable $e) {}
+            return $count;
+        }
+
+        public function schedule_generation_purge() {
+            if (function_exists('wp_next_scheduled') && !wp_next_scheduled('ace_rc_purge_stale_generations')) {
+                wp_schedule_event(time() + 3600, 'daily', 'ace_rc_purge_stale_generations');
+            }
         }
 
         protected function prof_log($type, $key, $ms, $extra = '') {
@@ -1466,7 +1571,12 @@ if (!class_exists('WP_Object_Cache')) {
                 return true;
             }
 
-            // Namespace-only flush (default, safer): SCAN, then UNLINK in pipelined batches.
+            // Generation flush (#27): one INCR; old keys expire by TTL or the daily purge.
+            if ($this->bump_generation()) {
+                return true;
+            }
+
+            // Fallback (generation unreadable): SCAN the namespace, UNLINK in pipelined batches.
             try {
                 $this->scan_and_unlink($this->namespace . '*');
             } catch (\Throwable $e) { if (!$force) $this->bypass = true; }
@@ -1567,9 +1677,9 @@ if (!class_exists('WP_Object_Cache')) {
             // Clear from Redis - scan for both global and blog-scoped keys
             $patterns = [];
             if ($this->is_global_group($group)) {
-                $patterns[] = $this->namespace . 'g:' . $group . ':*';
+                $patterns[] = $this->key_base() . 'g:' . $group . ':*';
             } else {
-                $patterns[] = $this->namespace . $this->blog_prefix . $group . ':*';
+                $patterns[] = $this->key_base() . $this->blog_prefix . $group . ':*';
             }
             
             try {
@@ -1675,6 +1785,10 @@ if (!class_exists('WP_Object_Cache')) {
             $k = $this->k($key, $group);
             try {
                 $result = $this->redis->incrBy($k, $offset);
+                // INCRBY/DECRBY create keys without a TTL; give them the backstop (#27).
+                if ($result !== false) {
+                    try { if ((int) $this->redis->ttl($k) < 0) { $this->redis->expire($k, self::DEFAULT_TTL); } } catch (\Throwable $e) {}
+                }
                 if ($result !== false) {
                     $this->runtime_set($group, $key, $result);
                 }
@@ -1723,6 +1837,10 @@ if (!class_exists('WP_Object_Cache')) {
             $k = $this->k($key, $group);
             try {
                 $result = $this->redis->decrBy($k, $offset);
+                // INCRBY/DECRBY create keys without a TTL; give them the backstop (#27).
+                if ($result !== false) {
+                    try { if ((int) $this->redis->ttl($k) < 0) { $this->redis->expire($k, self::DEFAULT_TTL); } } catch (\Throwable $e) {}
+                }
                 if ($result !== false) {
                     $this->runtime_set($group, $key, $result);
                 }

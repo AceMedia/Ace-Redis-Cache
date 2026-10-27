@@ -147,7 +147,7 @@ class RedisInvalidationTest extends TestCase {
 
         $ref = new \ReflectionClass('WP_Object_Cache');
         $cache = $ref->newInstanceWithoutConstructor();
-        foreach (['redis' => $r, 'namespace' => 'acetest:ns:', 'bypass' => false, 'suspend_persistent_writes' => false, 'runtime' => []] as $prop => $value) {
+        foreach (['redis' => $r, 'namespace' => 'acetest:ns:', 'bypass' => false, 'suspend_persistent_writes' => false, 'runtime' => [], 'use_generations' => false] as $prop => $value) {
             $p = $ref->getProperty($prop);
             if (PHP_VERSION_ID < 80100) { $p->setAccessible(true); }
             $p->setValue($cache, $value);

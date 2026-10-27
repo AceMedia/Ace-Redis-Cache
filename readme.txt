@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.9
+Stable tag: 0.8.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,6 +29,9 @@ Includes a Redis object cache drop-in, an advanced-cache page cache drop-in, a b
 Open an issue on the plugin's GitHub repository.
 
 == Changelog ==
+
+= 0.8.10 =
+* Page invalidation builds each path's keys once (the legacy unversioned keys were listed twice) and sends them as single-key UNLINKs in one pipelined round trip. The object cache flush and group flush UNLINK what SCAN finds in pipelined batches of 500. Servers older than Redis 4 get DEL instead. Every command still names one key, so cluster endpoints never see CROSSSLOT.
 
 = 0.8.9 =
 * Recognise a basket page as a WooCommerce cart route in the page and object cache guards.

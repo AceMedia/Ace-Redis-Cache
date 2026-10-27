@@ -240,13 +240,13 @@ class CacheManager {
      */
     public function scan_keys($pattern) {
         return $this->redis_connection->retry_operation(function($redis) use ($pattern) {
-            $keys = [];
+            $pages = [];
             $iterator = null;
             
-            // Use SCAN for better performance with large datasets
+            // Use SCAN for better performance with large datasets; merge the pages once at the end.
             while (($scan_keys = $redis->scan($iterator, $pattern, 1000)) !== false) {
                 if (!empty($scan_keys)) {
-                    $keys = array_merge($keys, $scan_keys);
+                    $pages[] = $scan_keys;
                 }
                 
                 if ($iterator === 0) {
@@ -254,7 +254,7 @@ class CacheManager {
                 }
             }
             
-            return array_unique($keys);
+            return $pages ? array_unique(array_merge(...$pages)) : [];
         }) ?: [];
     }
     

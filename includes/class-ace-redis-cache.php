@@ -2116,38 +2116,68 @@ class AceRedisCache {
      * Delete the page-cache keys for a set of request paths. Returns keys deleted.
      */
     private function invalidate_paths(array $paths) {
-        $schemes = ['http','https'];
-        $devices = ['desktop','mobile'];
-        $versions = [];
-        try { $cv = (int) wp_cache_get('site_version', 'version'); if ($cv >= 0) { $versions[] = $cv; if ($cv > 0) { $versions[] = $cv-1; } } } catch (\Throwable $t) { $versions[] = 0; }
         $redis = null;
         if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
             $redis = $this->cache_manager->get_raw_client();
         }
-        $deleted = 0;
+        $deleted = $this->delete_page_keys($this->page_invalidation_keys($paths), $redis, 'path invalidation');
+        $deleted += $this->invalidate_early_serve_paths($paths, $redis);
+        do_action('ace_rc_paths_invalidated', $paths, $deleted);
+        return $deleted;
+    }
+
+    /**
+     * Every page-cache key stored for these paths: each scheme and device, the current and
+     * previous site_version, the raw and minified copies, and the legacy unversioned keys.
+     * The legacy keys are the same for both versions, so they are listed once.
+     */
+    private function page_invalidation_keys(array $paths) {
+        $versions = [];
+        try { $cv = (int) wp_cache_get('site_version', 'version'); if ($cv >= 0) { $versions[] = $cv; if ($cv > 0) { $versions[] = $cv-1; } } } catch (\Throwable $t) { $versions[] = 0; }
+        $cores = [];
         foreach ($paths as $p) {
-            foreach ($schemes as $scheme) {
-                foreach ($devices as $device) {
+            foreach (['http', 'https'] as $scheme) {
+                foreach (['desktop', 'mobile'] as $device) {
                     foreach ($versions as $ver) {
-                        $core = $this->build_page_cache_core_key($p, $scheme, $device, $ver);
-                        $legacy_core = str_replace(':v' . $ver, '', $core);
-                        $keys = ['page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core];
-                        try {
-                            if ($redis && method_exists($redis, 'del')) {
-                                foreach ($keys as $k) { $deleted += (int) $redis->del($k); }
-                            } elseif ($this->cache_manager) {
-                                foreach ($keys as $k) { $this->cache_manager->delete($k); }
-                            }
-                        } catch (\Throwable $t) {
-                            if (defined('WP_DEBUG') && WP_DEBUG) { error_log('AceRedisCache path invalidation error: ' . $t->getMessage()); }
-                        }
+                        $cores[] = [$this->build_page_cache_core_key($p, $scheme, $device, $ver), $ver];
                     }
                 }
             }
         }
-        $deleted += $this->invalidate_early_serve_paths($paths, $redis);
-        do_action('ace_rc_paths_invalidated', $paths, $deleted);
-        return $deleted;
+        return self::page_keys_for_cores($cores);
+    }
+
+    /**
+     * Keys to delete for a list of [core key, version] pairs, de-duplicated in a stable order.
+     */
+    public static function page_keys_for_cores(array $cores) {
+        $keys = [];
+        foreach ($cores as $pair) {
+            list($core, $ver) = $pair;
+            $legacy_core = str_replace(':v' . (int) $ver, '', $core);
+            foreach (['page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core] as $k) {
+                $keys[$k] = true;
+            }
+        }
+        return array_keys($keys);
+    }
+
+    /**
+     * Delete page keys in one pipelined round trip (see RedisBatch), or one by one through the
+     * cache manager when no raw client is available. Returns keys deleted.
+     */
+    private function delete_page_keys(array $keys, $redis, $context) {
+        try {
+            if ($redis && (method_exists($redis, 'del') || method_exists($redis, 'unlink'))) {
+                return RedisBatch::delete_keys($redis, $keys);
+            }
+            if ($this->cache_manager) {
+                foreach ($keys as $k) { $this->cache_manager->delete($k); }
+            }
+        } catch (\Throwable $t) {
+            if (defined('WP_DEBUG') && WP_DEBUG) { error_log('AceRedisCache ' . $context . ' error: ' . $t->getMessage()); }
+        }
+        return 0;
     }
 
     /**
@@ -2229,54 +2259,11 @@ class AceRedisCache {
         }
         // Allow 3rd parties to add related URIs (archives, feeds, etc.)
         $paths = apply_filters('ace_rc_post_invalidation_paths', array_unique($paths), $post_id, $permalink, $this->settings);
-    $schemes = ['http','https'];
-    $devices = ['desktop','mobile'];
-    // Collect current & previous version numbers (previous = version-1) to aggressively purge both
-    $versions = [];
-    try { $cv = (int) wp_cache_get('site_version', 'version'); if ($cv >= 0) { $versions[] = $cv; if ($cv > 0) { $versions[] = $cv-1; } } } catch (\Throwable $t) { $versions[] = 0; }
         $redis = null;
         if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
             $redis = $this->cache_manager->get_raw_client();
         }
-        $deleted = 0;
-        foreach ($paths as $p) {
-            foreach ($schemes as $scheme) {
-                foreach ($devices as $device) {
-                    foreach ($versions as $ver) {
-                        $core = $this->build_page_cache_core_key($p, $scheme, $device, $ver);
-                        // Stored keys: page_cache:<core> and page_cache_min:<core>
-                        $raw_key = 'page_cache:' . $core;
-                        $min_key = 'page_cache_min:' . $core;
-                        // Legacy (unversioned) variants (fallback purge)
-                        $legacy_core = str_replace(':v' . $ver, '', $core);
-                        $legacy_key = $legacy_core;
-                        $legacy_raw = 'page_cache:' . $legacy_core;
-                        $legacy_min = 'page_cache_min:' . $legacy_core;
-                        try {
-                            if ($redis) {
-                                if (method_exists($redis, 'del')) {
-                                    $deleted += (int)$redis->del($raw_key);
-                                    $deleted += (int)$redis->del($min_key);
-                                    $deleted += (int)$redis->del($legacy_key);
-                                    $deleted += (int)$redis->del($legacy_raw);
-                                    $deleted += (int)$redis->del($legacy_min);
-                                } elseif (method_exists($redis, 'unlink')) {
-                                    $deleted += (int)$redis->unlink($raw_key);
-                                    $deleted += (int)$redis->unlink($min_key);
-                                    $deleted += (int)$redis->unlink($legacy_key);
-                                    $deleted += (int)$redis->unlink($legacy_raw);
-                                    $deleted += (int)$redis->unlink($legacy_min);
-                                }
-                            }
-                        } catch (\Throwable $t) {
-                            if (defined('WP_DEBUG') && WP_DEBUG) {
-                                error_log('AceRedisCache post cache invalidation error: ' . $t->getMessage());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        $deleted = $redis ? $this->delete_page_keys($this->page_invalidation_keys($paths), $redis, 'post cache invalidation') : 0;
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log("AceRedisCache invalidated page cache for post $post_id (deleted_keys=$deleted paths=" . count($paths) . ")");
         }
@@ -3601,41 +3588,54 @@ class AceRedisCache {
         }
         $max = max(1, (int) apply_filters('ace_rc_recache_max_urls', 100, $this->settings));
         $queue = [];
+        $entries = [];
         foreach (array_values(array_unique(array_filter(array_map('strval', $urls)))) as $url) {
             if (!preg_match('#^https?://#i', $url)) {
                 continue;
             }
             foreach (['desktop' => $url, 'mobile' => $url . '#mobile'] as $device => $queued) {
                 $core = $this->page_core_key_for_url($queued);
-                if ($core === '') {
-                    continue;
+                if ($core !== '') {
+                    $entries[] = [$url, $device, $queued, $core];
                 }
-                $ttl = -2;
-                try {
-                    foreach (['page_cache_min:' . $core, 'page_cache:' . $core, $core] as $k) {
-                        $ttl = (int) $redis->ttl($k);
-                        if ($ttl !== -2) {
-                            break;
-                        }
-                    }
-                    if ($ttl !== -2) {
-                        // "0:0": stale for advanced-cache.php and maybe_trigger_swr_refresh().
-                        $args = ['SET', 'ace:1:fresh:' . $core, '0:0'];
-                        if ($ttl > 0) {
-                            array_push($args, 'EX', (string) $ttl);
-                        }
-                        $redis->rawCommand(...$args);
-                    }
-                } catch (\Throwable $t) {
-                    continue;
+            }
+        }
+        // Probe every candidate key's TTL in one pipelined round trip.
+        $probe = [];
+        foreach ($entries as $entry) {
+            array_push($probe, 'page_cache_min:' . $entry[3], 'page_cache:' . $entry[3], $entry[3]);
+        }
+        $ttls = $this->pipelined_ttls($redis, $probe);
+        foreach ($entries as $i => $entry) {
+            list($url, $device, $queued, $core) = $entry;
+            if ($ttls === null) {
+                continue;
+            }
+            $ttl = -2;
+            foreach ([0, 1, 2] as $j) {
+                $ttl = (int) ($ttls[$i * 3 + $j] ?? -2);
+                if ($ttl !== -2) {
+                    break;
                 }
-                if (in_array($url, $stale_only, true)) {
-                    continue;
-                }
-                if ($ttl !== -2 || ($device === 'desktop' && in_array($url, $always_desktop, true))) {
-                    if (count($queue) < $max) {
-                        $queue[] = $queued;
+            }
+            try {
+                if ($ttl !== -2) {
+                    // "0:0": stale for advanced-cache.php and maybe_trigger_swr_refresh().
+                    $args = ['SET', 'ace:1:fresh:' . $core, '0:0'];
+                    if ($ttl > 0) {
+                        array_push($args, 'EX', (string) $ttl);
                     }
+                    $redis->rawCommand(...$args);
+                }
+            } catch (\Throwable $t) {
+                continue;
+            }
+            if (in_array($url, $stale_only, true)) {
+                continue;
+            }
+            if ($ttl !== -2 || ($device === 'desktop' && in_array($url, $always_desktop, true))) {
+                if (count($queue) < $max) {
+                    $queue[] = $queued;
                 }
             }
         }
@@ -3643,6 +3643,36 @@ class AceRedisCache {
             $this->enqueue_prime_urls($queue, true);
         }
         return count($queue);
+    }
+
+    /**
+     * TTL of each key, in order, from one pipeline (one by one when the client cannot pipeline).
+     * Returns null when Redis fails, so the caller skips the batch as it skipped single failures.
+     */
+    private function pipelined_ttls($redis, array $keys) {
+        if (!$keys) {
+            return [];
+        }
+        try {
+            if (method_exists($redis, 'pipeline')) {
+                $pipe = $redis->pipeline();
+                foreach ($keys as $k) {
+                    $pipe->ttl($k);
+                }
+                $replies = $pipe->exec();
+                if (is_array($replies) && count($replies) === count($keys)) {
+                    return array_values($replies);
+                }
+                return null;
+            }
+            $out = [];
+            foreach ($keys as $k) {
+                $out[] = $redis->ttl($k);
+            }
+            return $out;
+        } catch (\Throwable $t) {
+            return null;
+        }
     }
 
     /* ============================= Smart WooCommerce warming ============================= */

@@ -1452,18 +1452,66 @@ if (!class_exists('WP_Object_Cache')) {
                 return true;
             }
 
-            // Namespace-only flush (default, safer). Loop keys for older phpredis.
-            $pattern = $this->namespace . '*';
-            $it = null;
+            // Namespace-only flush (default, safer): SCAN, then UNLINK in pipelined batches.
             try {
-                do {
-                    $keys = $this->redis->scan($it, $pattern, 1000);
-                    if ($keys && is_array($keys) && !empty($keys)) {
-                        foreach ($keys as $k) { $this->redis->del($k); }
-                    }
-                } while ($it > 0);
+                $this->scan_and_unlink($this->namespace . '*');
             } catch (\Throwable $e) { if (!$force) $this->bypass = true; }
             return true;
+        }
+
+        /** @var bool|null Whether the server knows UNLINK (Redis 4+); probed once per process. */
+        protected static $supports_unlink = null;
+
+        /** Keys per pipelined UNLINK batch. */
+        const UNLINK_BATCH = 500;
+
+        protected function supports_unlink() {
+            if (self::$supports_unlink === null) {
+                try {
+                    $reply = $this->redis->rawCommand('UNLINK', 'ace_rc:unlink_probe');
+                    self::$supports_unlink = ($reply !== false && $reply !== null);
+                } catch (\Throwable $e) {
+                    self::$supports_unlink = false;
+                }
+            }
+            return self::$supports_unlink;
+        }
+
+        /**
+         * Delete keys as single-key UNLINKs (DEL before Redis 4) in one pipeline. Single-key
+         * commands keep a cluster endpoint from rejecting the batch with CROSSSLOT.
+         */
+        protected function unlink_batch(array $keys) {
+            if (!$keys) { return; }
+            $cmd = $this->supports_unlink() ? 'unlink' : 'del';
+            try {
+                $pipe = $this->redis->pipeline();
+                foreach ($keys as $k) { $pipe->$cmd($k); }
+                $pipe->exec();
+                return;
+            } catch (\Throwable $e) {
+                try { $this->redis->discard(); } catch (\Throwable $e2) {}
+            }
+            foreach ($keys as $k) { $this->redis->$cmd($k); }
+        }
+
+        /** SCAN a pattern and delete what it finds in batches of UNLINK_BATCH keys. */
+        protected function scan_and_unlink($pattern) {
+            $it = null;
+            $buffer = [];
+            do {
+                $keys = $this->redis->scan($it, $pattern, 1000);
+                if ($keys && is_array($keys)) {
+                    foreach ($keys as $k) {
+                        $buffer[$k] = true;
+                        if (count($buffer) >= self::UNLINK_BATCH) {
+                            $this->unlink_batch(array_keys($buffer));
+                            $buffer = [];
+                        }
+                    }
+                }
+            } while ($it > 0);
+            $this->unlink_batch(array_keys($buffer));
         }
 
         /**
@@ -1512,13 +1560,7 @@ if (!class_exists('WP_Object_Cache')) {
             
             try {
                 foreach ($patterns as $pattern) {
-                    $it = null;
-                    do {
-                        $keys = $this->redis->scan($it, $pattern, 1000);
-                        if ($keys && is_array($keys) && !empty($keys)) {
-                            foreach ($keys as $k) { $this->redis->del($k); }
-                        }
-                    } while ($it > 0);
+                    $this->scan_and_unlink($pattern);
                 }
             } catch (\Throwable $e) { $this->bypass = true; }
             

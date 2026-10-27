@@ -877,13 +877,27 @@ if (!class_exists('WP_Object_Cache')) {
             }
         }
 
+        /** @var string|null Hash used for change detection: xxh128 where PHP has it (8.1+), else md5. */
+        protected static $change_hash_algo = null;
+
+        /**
+         * Fingerprint a value to tell whether a write changes what Redis holds. Only ever compared
+         * with another fingerprint from this process, so the algorithm can differ between hosts.
+         */
+        public static function change_hash($value) {
+            if (self::$change_hash_algo === null) {
+                self::$change_hash_algo = in_array('xxh128', hash_algos(), true) ? 'xxh128' : 'md5';
+            }
+            return hash(self::$change_hash_algo, serialize($value));
+        }
+
         protected function invalidate_persistent($group, $key, $data = null, $is_write = false) {
             $group = $group ?: 'default';
             if (!$this->is_persistent_group($group) || $this->is_bypass_group($group) || $this->is_excluded_group($group)) return;
             // A cache fill that re-sets exactly what Redis handed this request is not a change:
             // deleting the key would only make the next guest rebuild it. Only a different value
             // (a real update) or a delete invalidates.
-            if ($is_write && isset($this->redis_loaded[$group][$key]) && $this->redis_loaded[$group][$key] === md5(serialize($data))) {
+            if ($is_write && isset($this->redis_loaded[$group][$key]) && $this->redis_loaded[$group][$key] === self::change_hash($data)) {
                 $this->stat_inc('runtime_only_fills_kept');
                 return;
             }
@@ -934,7 +948,7 @@ if (!class_exists('WP_Object_Cache')) {
             if ($val === $this->decode_miss_token()) { $this->stat_inc('foreign_format_misses'); return false; }
             if ($this->should_block_post_object_persistence($group, $val)) { return false; }
             $this->runtime_set($group, $key, $val);
-            $this->redis_loaded[$group][$key] = md5(serialize($val));
+            $this->redis_loaded[$group][$key] = self::change_hash($val);
             $this->stat_inc('member_read_hits');
             $found = true;
             return $val;

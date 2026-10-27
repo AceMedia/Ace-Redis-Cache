@@ -1807,6 +1807,7 @@ class API_Handler {
     $sanitized['wc_smart_cache'] = !empty($input['wc_smart_cache']) ? 1 : 0;
     $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
     $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
+    $sanitized['page_cache_ttl_jitter'] = max(0, min(50, (int) ($input['page_cache_ttl_jitter'] ?? 0)));
     $sanitized['optimize_lazy_images'] = !empty($input['optimize_lazy_images']) ? 1 : 0;
     $sanitized = array_merge($sanitized, BlockCache::sanitize_settings($input));
 

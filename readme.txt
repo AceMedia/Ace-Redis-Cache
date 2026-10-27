@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.10
+Stable tag: 0.8.11
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,6 +29,11 @@ Includes a Redis object cache drop-in, an advanced-cache page cache drop-in, a b
 Open an issue on the plugin's GitHub repository.
 
 == Changelog ==
+
+= 0.8.11 =
+* The stale-while-revalidate check on a cached page hit reads the stored time, the freshness marker and the soft-purge epoch in one MGET (it falls back to separate reads if a cluster endpoint refuses MGET across slots).
+* New `page_cache_ttl_jitter` setting (percent, 0 to 50, off by default) and `ace_rc_page_ttl_jitter` filter: each stored page's fresh lifetime is cut by a random amount up to that percentage, so pages warmed together do not all refresh at once.
+* The object cache drop-in fingerprints values for change detection with xxh128 where PHP has it, md5 otherwise.
 
 = 0.8.10 =
 * Page invalidation builds each path's keys once (the legacy unversioned keys were listed twice) and sends them as single-key UNLINKs in one pipelined round trip. The object cache flush and group flush UNLINK what SCAN finds in pipelined batches of 500. Servers older than Redis 4 get DEL instead. Every command still names one key, so cluster endpoints never see CROSSSLOT.

@@ -142,6 +142,7 @@ class AceRedisCache {
             'wc_smart_cache' => 1,      // master toggle for warm-on-flush + stale-while-revalidate
             'wc_warm_count' => 20,      // how many best-selling products to background-warm
             'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
+            'page_cache_ttl_jitter' => 0, // percent of the fresh TTL cut at random per page (0 = off)
             'optimize_lazy_images' => 1, // add loading="lazy" to <img> at page-cache store time
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
@@ -216,6 +217,7 @@ class AceRedisCache {
             'wc_smart_cache' => 1,      // master toggle for warm-on-flush + stale-while-revalidate
             'wc_warm_count' => 20,      // how many best-selling products to background-warm
             'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
+            'page_cache_ttl_jitter' => 0, // percent of the fresh TTL cut at random per page (0 = off)
             'optimize_lazy_images' => 1, // add loading="lazy" to <img> at page-cache store time
             'dynamic_excluded_blocks' => 1,
             'enable_browser_cache_headers' => 0,
@@ -1958,7 +1960,7 @@ class AceRedisCache {
             $redis = $this->cache_manager->get_redis_connection()->get_connection();
             if ($redis) {
                 $now = time();
-                $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $now . ':' . ($now + $this->page_cache_fresh_ttl()), 'EX', (string) $this->page_cache_physical_ttl());
+                $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $now . ':' . ($now + self::jittered_ttl($this->page_cache_fresh_ttl(), $this->page_cache_ttl_jitter())), 'EX', (string) $this->page_cache_physical_ttl());
             }
         } catch (\Throwable $t) {}
     }
@@ -3861,6 +3863,27 @@ class AceRedisCache {
     }
 
     /**
+     * Percentage (0 to 50) by which a page's fresh lifetime may be cut at random when it is
+     * stored, so pages warmed together do not all soft-expire in the same minute and refill the
+     * prime queue in one burst. Off (0) unless the `page_cache_ttl_jitter` setting or the
+     * `ace_rc_page_ttl_jitter` filter turns it on.
+     */
+    private function page_cache_ttl_jitter() {
+        $pct = (int) ($this->settings['page_cache_ttl_jitter'] ?? 0);
+        return max(0, min(50, (int) apply_filters('ace_rc_page_ttl_jitter', $pct, $this->settings)));
+    }
+
+    /**
+     * A fresh TTL shortened by a uniform random amount of up to $pct percent. Only ever shorter,
+     * so the physical TTL (fresh plus grace) still covers it.
+     */
+    public static function jittered_ttl($ttl, $pct) {
+        $ttl = (int) $ttl;
+        $span = (int) floor($ttl * max(0, min(50, (int) $pct)) / 100);
+        return $span > 0 ? $ttl - mt_rand(0, $span) : $ttl;
+    }
+
+    /**
      * The window after freshness in which a stale copy is still served while one background
      * refresh runs. It used to need WooCommerce's smart cache; any site with `page_cache_grace`
      * set, or the `ace_rc_page_grace` filter, gets it.
@@ -3963,9 +3986,22 @@ class AceRedisCache {
             return;
         }
 
+        // The stored time, the freshness marker and the soft-purge epoch in one MGET.
         $stored_at = 0;
+        $marker = false;
         try {
-            $meta = $this->cache_manager->get($this->page_cache_meta_prefix . $cache_key);
+            if (method_exists($this->cache_manager, 'get_many_with_raw')) {
+                // The soft-purge epoch rides along unless this request already read it.
+                $meta_key = $this->page_cache_meta_prefix . $cache_key;
+                $read = $this->page_epoch === null ? [$meta_key, $this->site_page_epoch_key()] : [$meta_key];
+                list($values, $marker) = $this->cache_manager->get_many_with_raw($read, 'ace:1:fresh:' . $cache_key);
+                $meta = $values[$meta_key] ?? null;
+                if ($this->page_epoch === null) {
+                    $this->page_epoch = (int) ($values[$this->site_page_epoch_key()] ?? 0);
+                }
+            } else {
+                $meta = $this->cache_manager->get($this->page_cache_meta_prefix . $cache_key);
+            }
             if (is_array($meta) && isset($meta['stored_at'])) {
                 $stored_at = (int) $meta['stored_at'];
             }
@@ -3982,12 +4018,11 @@ class AceRedisCache {
         // something it shows), which the stored time alone cannot tell.
         $marked_stale = false;
         try {
-            $redis = $this->cache_manager->get_redis_connection()->get_connection();
-            $marker = $redis ? $redis->rawCommand('GET', 'ace:1:fresh:' . $cache_key) : false;
             if (is_string($marker) && strpos($marker, ':') !== false) {
                 $marked_stale = (int) explode(':', $marker, 2)[1] < time();
             } else {
                 $left = $this->page_cache_physical_ttl() - $age;
+                $redis = $left > 60 ? $this->cache_manager->get_redis_connection()->get_connection() : null;
                 if ($redis && $left > 60) {
                     $redis->rawCommand('SET', 'ace:1:fresh:' . $cache_key, $stored_at . ':' . ($stored_at + $this->page_cache_fresh_ttl()), 'EX', (string) $left, 'NX');
                 }

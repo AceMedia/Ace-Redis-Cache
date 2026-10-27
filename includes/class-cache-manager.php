@@ -798,6 +798,13 @@ class CacheManager {
             return null;
         }
         
+        return $this->decode_value($result);
+    }
+
+    /**
+     * Turn what get() fetched back into the stored value.
+     */
+    private function decode_value($result) {
         $decoded = $this->maybe_decompress($result);
         // If we stored serialized data originally, attempt to unserialize - but
         // only once the header's declared size has been checked against what we
@@ -807,6 +814,60 @@ class CacheManager {
         }
         $unser = @unserialize($decoded);
         return ($unser !== false || $decoded === 'b:0;') ? $unser : $decoded;
+    }
+
+    /** @var bool Set once MGET has been refused (a cluster endpoint answering CROSSSLOT). */
+    private static $mget_refused = false;
+
+    /**
+     * Read values stored through set() plus one plain string key written with rawCommand, in a
+     * single MGET. Returns [[key => value or null, ...], raw string or false]. A cluster endpoint
+     * refuses MGET over keys in different slots; after that this falls back to one read per key
+     * for the rest of the process.
+     */
+    public function get_many_with_raw(array $keys, $raw_key) {
+        $keys = array_values($keys);
+        if (!self::$mget_refused) {
+            $reply = $this->redis_connection->retry_operation(function($redis) use ($keys, $raw_key) {
+                try {
+                    $reply = $redis->rawCommand('MGET', ...array_merge($keys, [$raw_key]));
+                } catch (\Throwable $t) {
+                    return null;
+                }
+                if (!is_array($reply) || count($reply) !== count($keys) + 1) {
+                    return null;
+                }
+                // MGET through rawCommand skips the client serializer that get() applies.
+                foreach ($keys as $i => $key) {
+                    $value = $reply[$i];
+                    if (is_string($value) && method_exists($redis, '_unserialize')) {
+                        $unwrapped = $redis->_unserialize($value);
+                        if ($unwrapped !== false || $value === serialize(false)) {
+                            $reply[$i] = $unwrapped;
+                        }
+                    }
+                }
+                return $reply;
+            });
+            if (is_array($reply)) {
+                $values = [];
+                foreach ($keys as $i => $key) {
+                    $v = $reply[$i];
+                    $values[$key] = ($v === null || $v === false || $this->should_exclude_cache_key($key)) ? null : $this->decode_value($v);
+                }
+                $raw = $reply[count($keys)];
+                return [$values, is_string($raw) ? $raw : false];
+            }
+            self::$mget_refused = true;
+        }
+        $values = [];
+        foreach ($keys as $key) {
+            $values[$key] = $this->get($key);
+        }
+        $raw = $this->redis_connection->retry_operation(function($redis) use ($raw_key) {
+            return $redis->rawCommand('GET', $raw_key);
+        });
+        return [$values, is_string($raw) ? $raw : false];
     }
     
     /**

@@ -494,7 +494,11 @@ class AdminInterface {
                                     Stale-while-revalidate grace (seconds past TTL):
                                     <input type="number" name="ace_redis_cache_settings[page_cache_grace]" value="<?php echo esc_attr($this->settings['page_cache_grace'] ?? 3600); ?>" min="0" max="86400" style="width:100px;" />
                                 </label>
-                                <p class="description" style="margin:6px 0 0;">Grace 0 disables stale-while-revalidate (pages expire hard at TTL). Warm count 0 disables product warming.</p>
+                                <label style="display:block;margin-top:6px;">
+                                    Fresh TTL jitter (percent, 0 to 50):
+                                    <input type="number" name="ace_redis_cache_settings[page_cache_ttl_jitter]" value="<?php echo esc_attr($this->settings['page_cache_ttl_jitter'] ?? 0); ?>" min="0" max="50" style="width:80px;" />
+                                </label>
+                                <p class="description" style="margin:6px 0 0;">Jitter cuts each page's fresh lifetime by a random amount up to this percentage, so pages warmed together refresh spread out instead of all at once. 0 turns it off. Grace 0 disables stale-while-revalidate (pages expire hard at TTL). Warm count 0 disables product warming.</p>
                             </fieldset>
                         </td>
                     </tr>
@@ -711,6 +715,7 @@ class AdminInterface {
         $sanitized['wc_smart_cache'] = !empty($input['wc_smart_cache']) ? 1 : 0;
         $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
         $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
+        $sanitized['page_cache_ttl_jitter'] = max(0, min(50, (int) ($input['page_cache_ttl_jitter'] ?? 0)));
         $sanitized['optimize_lazy_images'] = !empty($input['optimize_lazy_images']) ? 1 : 0;
         $sanitized = array_merge($sanitized, BlockCache::sanitize_settings($input));
         $sanitized['wc_variation_threshold'] = max(1, min(100, (int) ($input['wc_variation_threshold'] ?? 15)));

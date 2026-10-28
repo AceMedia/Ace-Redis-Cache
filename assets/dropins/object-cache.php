@@ -161,6 +161,17 @@ if (!class_exists('WP_Object_Cache')) {
         // are all DB-derived, so expiry just forces a cheap regeneration on the next miss.
         private const DEFAULT_TTL = 86400; // 1 day
 
+        // Maximum TTL (seconds) for any object-cache write, explicit expiries included.
+        // Plugins ask for week-long transients, so on the shared Redis instance keys averaged
+        // six day TTLs and cold entries crowded out the working set. Every write path clamps
+        // its expiry to min(requested or DEFAULT_TTL, max TTL). Configure per site with the
+        // `object_cache_max_ttl` setting (0 turns the cap off) or ACE_OC_MAX_TTL in wp-config,
+        // which wins over the setting. Exempt: the generation counter `<namespace>gen`, which
+        // is written with no TTL on purpose (it must outlive every key it versions).
+        private const MAX_TTL = 86400; // 1 day
+        protected $max_ttl = null;              // resolved cap for this instance (0 = off)
+        protected static $max_ttl_setting = null; // from ace_redis_cache_settings, per process
+
         // Generation counter (#27). Every object-cache key carries the site's current
         // generation (`<namespace>v<gen>:...`), held in Redis at `<namespace>gen` and
         // memoised per process. flush() is then one INCR: keys of the old generation
@@ -692,6 +703,9 @@ if (!class_exists('WP_Object_Cache')) {
             }
             
             // Use plugin settings if available, otherwise fall back to constants and defaults
+            if (is_array($plugin_settings) && isset($plugin_settings['object_cache_max_ttl'])) {
+                self::$max_ttl_setting = max(0, (int) $plugin_settings['object_cache_max_ttl']);
+            }
             if (is_array($plugin_settings)) {
                 $host = $plugin_settings['host'] ?? '127.0.0.1';
                 $port = (int)($plugin_settings['port'] ?? 6379);
@@ -1473,9 +1487,24 @@ if (!class_exists('WP_Object_Cache')) {
 
         // Normalise an expiry: callers passing 0 / no expiry get the bounded DEFAULT_TTL
         // backstop rather than an immortal key.
+        /** The TTL cap in seconds, 0 when off: ACE_OC_MAX_TTL, then the setting, then MAX_TTL. */
+        protected function max_ttl() {
+            if ($this->max_ttl !== null) { return $this->max_ttl; }
+            if (defined('ACE_OC_MAX_TTL')) {
+                $cap = (int) ACE_OC_MAX_TTL;
+            } elseif (self::$max_ttl_setting !== null) {
+                $cap = self::$max_ttl_setting;
+            } else {
+                $cap = self::MAX_TTL;
+            }
+            return $this->max_ttl = max(0, $cap);
+        }
+
         protected function effective_ttl($expire) {
             $expire = (int) $expire;
-            return $expire > 0 ? $expire : self::DEFAULT_TTL;
+            $ttl = $expire > 0 ? $expire : self::DEFAULT_TTL;
+            $cap = $this->max_ttl();
+            return ($cap > 0 && $ttl > $cap) ? $cap : $ttl;
         }
 
         // Unwrap a stored value. Returns the original data for values we wrote,
@@ -1787,7 +1816,11 @@ if (!class_exists('WP_Object_Cache')) {
                 $result = $this->redis->incrBy($k, $offset);
                 // INCRBY/DECRBY create keys without a TTL; give them the backstop (#27).
                 if ($result !== false) {
-                    try { if ((int) $this->redis->ttl($k) < 0) { $this->redis->expire($k, self::DEFAULT_TTL); } } catch (\Throwable $e) {}
+                    try {
+                        $left = (int) $this->redis->ttl($k);
+                        $cap = $this->effective_ttl(0);
+                        if ($left < 0 || $left > $cap) { $this->redis->expire($k, $cap); }
+                    } catch (\Throwable $e) {}
                 }
                 if ($result !== false) {
                     $this->runtime_set($group, $key, $result);
@@ -1839,7 +1872,11 @@ if (!class_exists('WP_Object_Cache')) {
                 $result = $this->redis->decrBy($k, $offset);
                 // INCRBY/DECRBY create keys without a TTL; give them the backstop (#27).
                 if ($result !== false) {
-                    try { if ((int) $this->redis->ttl($k) < 0) { $this->redis->expire($k, self::DEFAULT_TTL); } } catch (\Throwable $e) {}
+                    try {
+                        $left = (int) $this->redis->ttl($k);
+                        $cap = $this->effective_ttl(0);
+                        if ($left < 0 || $left > $cap) { $this->redis->expire($k, $cap); }
+                    } catch (\Throwable $e) {}
                 }
                 if ($result !== false) {
                     $this->runtime_set($group, $key, $result);

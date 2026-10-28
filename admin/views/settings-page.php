@@ -452,6 +452,11 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                     <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
+                                    <br />
+                                    <label for="page_cache_max_ttl" style="width:140px; display:inline-block; margin-top:6px;">Page Cache Max TTL</label>
+                                    <input type="number" name="ace_redis_cache_settings[page_cache_max_ttl]" id="page_cache_max_ttl" value="<?php echo esc_attr($settings['page_cache_max_ttl'] ?? 0); ?>" min="0" max="2592000" class="small-text" />
+                                    <span>seconds</span>
+                                    <p class="description" style="margin-top:4px;">Upper bound on how long a page stays in Redis, TTL plus stale-while-revalidate grace together. 0 turns it off (the default); otherwise 60 to 2592000.</p>
                                     <div id="ace-rc-advanced-dropin-box" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                         <strong>Advanced Cache Drop-in:</strong>
                                         <span class="ace-rc-dropin-status"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['text']); ?></span>
@@ -475,6 +480,11 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                     <label for="ttl_object" style="width:140px; display:inline-block;">Object Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
+                                    <br />
+                                    <label for="object_cache_max_ttl" style="width:140px; display:inline-block; margin-top:6px;">Object Cache Max TTL</label>
+                                    <input type="number" name="ace_redis_cache_settings[object_cache_max_ttl]" id="object_cache_max_ttl" value="<?php echo esc_attr($settings['object_cache_max_ttl'] ?? 86400); ?>" min="0" max="2592000" class="small-text" />
+                                    <span>seconds</span>
+                                    <p class="description" style="margin-top:4px;">Every object cache key, transients included, expires within this many seconds even when a plugin asks for longer (a week-long transient is stored for a day at the default 86400). 0 turns the cap off; otherwise 60 to 2592000. ACE_OC_MAX_TTL in wp-config overrides it.</p>
                                     <p class="description" style="margin-top:6px;">You can enable one or both cache types. Object cache controls transients and optional block caching.</p>
                                 </div>
                             </div>

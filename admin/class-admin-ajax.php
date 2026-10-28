@@ -331,6 +331,10 @@ class AdminAjax {
 
         $validated['ttl_page'] = max(60, absint($settings['ttl_page'] ?? ($validated['ttl_page'] ?? 3600)));
         $validated['ttl_object'] = max(60, absint($settings['ttl_object'] ?? ($validated['ttl_object'] ?? 3600)));
+        foreach (['object_cache_max_ttl' => 86400, 'page_cache_max_ttl' => 0] as $cap_key => $cap_default) {
+            $cap = (int) ($settings[$cap_key] ?? ($validated[$cap_key] ?? $cap_default));
+            $validated[$cap_key] = $cap <= 0 ? 0 : max(60, min(2592000, $cap));
+        }
         $validated['browser_cache_max_age'] = max(60, absint($settings['browser_cache_max_age'] ?? ($validated['browser_cache_max_age'] ?? 3600)));
 
         $static_ttl = absint($settings['static_asset_cache_ttl'] ?? ($validated['static_asset_cache_ttl'] ?? 604800));
@@ -382,7 +386,7 @@ class AdminAjax {
             'host', 'port', 'password', 'enabled', 'enable_compression', 'compression_method',
             'mode', 'enable_block_caching', 'exclude_pages', 'exclude_posts',
             'exclude_urls', 'exclude_user_agents', 'enable_page_cache', 'enable_object_cache',
-            'ttl_page', 'ttl_object', 'enable_minification', 'enable_static_asset_cache',
+            'ttl_page', 'ttl_object', 'page_cache_max_ttl', 'enable_minification', 'enable_static_asset_cache',
             'static_asset_cache_ttl', 'browser_cache_max_age', 'enable_browser_cache_headers',
             'manage_static_cache_via_htaccess', 'prefer_existing_static_cache_headers'
         ];

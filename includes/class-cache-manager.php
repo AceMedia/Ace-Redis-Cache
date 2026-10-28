@@ -1086,7 +1086,9 @@ class CacheManager {
             }
         }
 
-        return (int) apply_filters('ace_redis_cache_ttl', $ttl, $this->settings);
+        $ttl = (int) apply_filters('ace_redis_cache_ttl', $ttl, $this->settings);
+        $cap = max(0, (int) ($this->settings['page_cache_max_ttl'] ?? 0));
+        return ($cap > 0 && $ttl > $cap) ? $cap : $ttl;
     }
 
     /**

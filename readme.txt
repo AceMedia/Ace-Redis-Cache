@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.13
+Stable tag: 0.8.14
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,6 +29,10 @@ Includes a Redis object cache drop-in, an advanced-cache page cache drop-in, a b
 Open an issue on the plugin's GitHub repository.
 
 == Changelog ==
+
+= 0.8.14 =
+* A maximum TTL now caps every object cache write, explicit expiries included: set, add, set_multiple, incr/decr and the shared transient path all store for at most the cap. The default is 86400 seconds, so a plugin's week-long transient lives for a day and cold keys stop crowding the working set out of a shared Redis. Set it per site with the Object Cache Max TTL setting (`object_cache_max_ttl`, 0 turns it off, otherwise 60 to 2592000) or `ACE_OC_MAX_TTL` in wp-config, which wins. The generation counter key is exempt and keeps no TTL.
+* A matching Page Cache Max TTL setting (`page_cache_max_ttl`) caps a page's Redis lifetime, fresh TTL plus stale-while-revalidate grace together. It is off (0) by default, since page TTLs are already short.
 
 = 0.8.13 =
 * Object cache keys written without an expiry now get a one day backstop TTL instead of seven days, so cold entries leave Redis within a day and the shared instance holds a smaller working set under its lower maxmemory.

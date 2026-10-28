@@ -143,6 +143,8 @@ class AceRedisCache {
             'wc_warm_count' => 20,      // how many best-selling products to background-warm
             'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
             'page_cache_ttl_jitter' => 0, // percent of the fresh TTL cut at random per page (0 = off)
+            'page_cache_max_ttl' => 0,  // cap on page TTL plus grace in Redis (0 = off)
+            'object_cache_max_ttl' => 86400, // cap on every object-cache key's TTL (0 = off)
             'optimize_lazy_images' => 1, // add loading="lazy" to <img> at page-cache store time
             'enable_browser_cache_headers' => 0,
             'browser_cache_max_age' => 3600,
@@ -218,6 +220,8 @@ class AceRedisCache {
             'wc_warm_count' => 20,      // how many best-selling products to background-warm
             'page_cache_grace' => 3600, // stale-while-revalidate grace window (seconds past ttl_page)
             'page_cache_ttl_jitter' => 0, // percent of the fresh TTL cut at random per page (0 = off)
+            'page_cache_max_ttl' => 0,
+            'object_cache_max_ttl' => 86400,
             'optimize_lazy_images' => 1, // add loading="lazy" to <img> at page-cache store time
             'dynamic_excluded_blocks' => 1,
             'enable_browser_cache_headers' => 0,
@@ -3847,7 +3851,18 @@ class AceRedisCache {
     private function page_cache_physical_ttl() {
         $ttl = $this->page_cache_fresh_ttl();
         $ttl += $this->page_cache_grace();
+        $cap = self::page_cache_max_ttl($this->settings);
+        if ($cap > 0 && $ttl > $cap) { $ttl = $cap; }
         return max(1, $ttl);
+    }
+
+    /**
+     * Upper bound (seconds) on a page entry's Redis TTL, fresh time plus SWR grace together.
+     * `page_cache_max_ttl` setting, 0 (the default) leaves it off: page TTLs are already short,
+     * so this only matters on a site that sets a long ttl_page or grace on a shared Redis.
+     */
+    public static function page_cache_max_ttl($settings) {
+        return max(0, (int) ($settings['page_cache_max_ttl'] ?? 0));
     }
 
     /**
@@ -3859,6 +3874,8 @@ class AceRedisCache {
     private function page_cache_fresh_ttl() {
         $ttl = (int) ($this->settings['ttl_page'] ?? 3600);
         $ttl = (int) apply_filters('ace_rc_page_ttl', $ttl, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings);
+        $cap = self::page_cache_max_ttl($this->settings);
+        if ($cap > 0 && $ttl > $cap) { $ttl = $cap; }
         return max(60, $ttl);
     }
 

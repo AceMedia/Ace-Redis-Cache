@@ -1698,6 +1698,13 @@ class API_Handler {
      * @param array $input Raw input data
      * @return array Sanitized settings
      */
+    /** A TTL cap in seconds: 0 (off) or 60 to 2592000 (30 days). */
+    public static function sanitize_max_ttl($value) {
+        $v = (int) $value;
+        if ($v <= 0) { return 0; }
+        return max(60, min(2592000, $v));
+    }
+
     private function sanitize_settings($input) {
         $sanitized = [];
         
@@ -1808,6 +1815,8 @@ class API_Handler {
     $sanitized['wc_warm_count'] = max(0, min(100, (int) ($input['wc_warm_count'] ?? 20)));
     $sanitized['page_cache_grace'] = max(0, min(86400, (int) ($input['page_cache_grace'] ?? 3600)));
     $sanitized['page_cache_ttl_jitter'] = max(0, min(50, (int) ($input['page_cache_ttl_jitter'] ?? 0)));
+    $sanitized['object_cache_max_ttl'] = self::sanitize_max_ttl($input['object_cache_max_ttl'] ?? 86400);
+    $sanitized['page_cache_max_ttl'] = self::sanitize_max_ttl($input['page_cache_max_ttl'] ?? 0);
     $sanitized['optimize_lazy_images'] = !empty($input['optimize_lazy_images']) ? 1 : 0;
     $sanitized = array_merge($sanitized, BlockCache::sanitize_settings($input));
 

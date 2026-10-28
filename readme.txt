@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.12
+Stable tag: 0.8.13
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,6 +29,9 @@ Includes a Redis object cache drop-in, an advanced-cache page cache drop-in, a b
 Open an issue on the plugin's GitHub repository.
 
 == Changelog ==
+
+= 0.8.13 =
+* Object cache keys written without an expiry now get a one day backstop TTL instead of seven days, so cold entries leave Redis within a day and the shared instance holds a smaller working set under its lower maxmemory.
 
 = 0.8.12 =
 * The object cache drop-in keys every value under a per-site generation number (`<namespace>v<gen>:`), held in Redis at `<namespace>gen`. A flush, including the one on publish, is now a single INCR instead of a SCAN of the whole Redis database: old keys are unreachable at once and expire by their TTL. Keys written with no expiry get the 7 day backstop, and `wp_cache_incr()`/`wp_cache_decr()` now set it too. A daily `ace_rc_purge_stale_generations` cron UNLINKs superseded keys early. If the generation key cannot be read the drop-in falls back to the old key format and the SCAN flush. The key format changes, so the first request after the update starts from an empty object cache.

@@ -159,7 +159,7 @@ if (!class_exists('WP_Object_Cache')) {
         // corruption above). Invalidation is still event-driven (namespace flush on save);
         // this only bounds how long an untouched key can linger. Persistent-group values
         // are all DB-derived, so expiry just forces a cheap regeneration on the next miss.
-        private const DEFAULT_TTL = 604800; // 7 days
+        private const DEFAULT_TTL = 86400; // 1 day
 
         // Generation counter (#27). Every object-cache key carries the site's current
         // generation (`<namespace>v<gen>:...`), held in Redis at `<namespace>gen` and

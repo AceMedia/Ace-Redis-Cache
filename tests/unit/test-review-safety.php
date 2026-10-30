@@ -63,6 +63,17 @@ class ReviewSafetyTest extends TestCase {
         $this->assertFalse($method->invoke($instance, ['host' => ['bad']]));
         $this->assertTrue($class->hasMethod('get_manage_capability'));
     }
+    public function testVersionUpgradeRefreshesExistingFilesWithoutInstallingMissingFiles() {
+        $plugin = dirname(__DIR__, 2);
+        $target = $this->dir . '/object-cache.php';
+        file_put_contents($target, '<?php /* Ace Redis Cache Drop-In */ // old');
+        $this->assertTrue(DropinManager::refresh_existing($plugin, $this->dir));
+        $this->assertSame(file_get_contents($plugin . '/assets/dropins/object-cache.php'), file_get_contents($target));
+        $this->assertFileDoesNotExist($this->dir . '/advanced-cache.php');
+        file_put_contents($target, '<?php /* other cache */');
+        $this->assertTrue(DropinManager::refresh_existing($plugin, $this->dir));
+        $this->assertSame('<?php /* other cache */', file_get_contents($target));
+    }
     public function testStringHelperMatchesNativeEmptyPrefixBehaviour() {
         $this->assertTrue(StringHelper::starts_with('abc', ''));
         $this->assertTrue(StringHelper::starts_with('abc', 'ab'));

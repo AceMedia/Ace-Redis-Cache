@@ -4,6 +4,20 @@ if (!defined('ABSPATH')) exit;
 
 /** Only replace regular files carrying our signature, using an atomic rename. */
 class DropinManager {
+    public static function refresh_existing($plugin_path, $content_dir) {
+        $ok = true;
+        foreach (['object-cache.php' => 'Ace Redis Cache Drop-In', 'advanced-cache.php' => 'Ace Redis Cache advanced-cache drop-in'] as $name => $signature) {
+            $target = $content_dir . '/' . $name;
+            if (!file_exists($target) && !is_link($target)) continue;
+            // An update does not claim another cache plugin's file or activate a missing one.
+            if (is_link($target)) continue;
+            $contents = is_file($target) ? @file_get_contents($target) : false;
+            if (!is_string($contents) || strpos($contents, $signature) === false) continue;
+            $ok = self::manage($plugin_path . '/assets/dropins/' . $name, $target, $signature, true) && $ok;
+        }
+        return $ok;
+    }
+
     public static function manage($source, $target, $signature, $enabled) {
         clearstatcache(true, $target);
         if (is_link($target) || (file_exists($target) && !is_file($target))) return false;

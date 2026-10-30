@@ -4618,11 +4618,11 @@ class AceRedisCache {
      */
     public function upgrade_managed_dropins() {
         if (!current_user_can(SettingsStore::is_network_mode() ? 'manage_network_options' : 'manage_options')) return;
-        if (empty($this->settings['enabled']) || SettingsStore::get('ace_rc_dropin_version') === ACE_REDIS_CACHE_VERSION) return;
-        $object_ok = $this->maybe_manage_dropin();
-        $page_ok = $this->maybe_manage_advanced_dropin();
+        if (SettingsStore::get('ace_rc_dropin_version') === ACE_REDIS_CACHE_VERSION) return;
+        $ok = DropinManager::refresh_existing($this->plugin_path, WP_CONTENT_DIR);
+        // A version-only update preserves installed state even if old saved flags drifted.
         // Failed writes are retried on the next administrator request.
-        if ($object_ok && $page_ok) SettingsStore::update('ace_rc_dropin_version', ACE_REDIS_CACHE_VERSION);
+        if ($ok) SettingsStore::update('ace_rc_dropin_version', ACE_REDIS_CACHE_VERSION);
     }
 
     private function maybe_manage_dropin() {

@@ -75,7 +75,7 @@ if (isset($_GET['wc-ajax']) || isset($_GET['add-to-cart']) || isset($_GET['remov
 }
 
 if (
-    (isset($_GET['action']) && in_array((string) $_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
+    (isset($_GET['action']) && is_string($_GET['action']) && in_array($_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
     isset($_GET['password-reset']) ||
     isset($_GET['key'])
 ) {
@@ -97,7 +97,7 @@ if (($q = strpos($key_uri, '?')) !== false) {
     ksort($key_params);
     $key_uri = substr($key_uri, 0, $q) . ($key_params ? '?' . http_build_query($key_params) : '');
 }
-$rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
+$rest_route = isset($_GET['rest_route']) && is_string($_GET['rest_route']) ? urldecode($_GET['rest_route']) : '';
 // REST responses are never served as cached pages: they carry their own cache policy
 // and REST_REQUEST is not defined this early, so the path and query var are checked.
 if ($rest_route !== '' || ($request_path !== '' && preg_match('#^/wp-json(/|$)#i', $request_path))) {

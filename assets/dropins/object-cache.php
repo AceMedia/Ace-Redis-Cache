@@ -297,7 +297,7 @@ if (!class_exists('WP_Object_Cache')) {
                 (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest')
             );
             $request_path = (string) parse_url($request_uri, PHP_URL_PATH); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
-            $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
+            $rest_route = isset($_GET['rest_route']) && is_string($_GET['rest_route']) ? urldecode($_GET['rest_route']) : '';
             $has_wc_session_cookie = false;
             $wc_cookie_prefixes = ['woocommerce_cart_hash', 'woocommerce_items_in_cart', 'wp_woocommerce_session_'];
             foreach ($_COOKIE as $ck => $val) {
@@ -320,7 +320,7 @@ if (!class_exists('WP_Object_Cache')) {
                 isset($_GET['add-to-cart']) ||
                 isset($_GET['remove_item']) ||
                 isset($_GET['undo_item']) ||
-                (isset($_GET['action']) && in_array((string) $_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
+                (isset($_GET['action']) && is_string($_GET['action']) && in_array($_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
                 isset($_GET['password-reset']) ||
                 isset($_GET['key']) ||
                 preg_match('#[?&](wc-ajax|add-to-cart|remove_item|undo_item|password-reset|key)=#i', (string) $request_uri) === 1

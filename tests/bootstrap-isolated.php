@@ -16,3 +16,5 @@ spl_autoload_register(function ($class) {
 });
 function plugin_basename($file) { return basename(dirname($file)) . '/' . basename($file); }
 define('ACE_OC_FLUSHDB_ON_SAVE', true);
+
+define('ACE_REDIS_CACHE_VERSION', '0.8.15');

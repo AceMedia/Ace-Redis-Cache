@@ -235,7 +235,7 @@ class AdminAjax {
 
         try {
             // Get current settings for comparison
-            $old_settings = get_option('ace_redis_cache_settings', []);
+            $old_settings = SettingsStore::get_settings([]);
             
             // Parse form data
             parse_str(isset($_POST['form_data']) && is_string($_POST['form_data']) ? wp_unslash($_POST['form_data']) : '', $form_data);
@@ -250,7 +250,7 @@ class AdminAjax {
             }
             
             // Save the settings
-            $saved = update_option('ace_redis_cache_settings', $validated_settings);
+            $saved = SettingsStore::update_settings($validated_settings);
             
             if (!$saved && $old_settings === $validated_settings) {
                 // Settings are the same, still success
@@ -292,7 +292,11 @@ class AdminAjax {
      * @return array|false Validated settings or false on error
      */
     private function validate_settings($settings) {
-        $validated = get_option('ace_redis_cache_settings', []);
+        if (!is_array($settings)) return false;
+        foreach ($settings as $value) {
+            if (!is_scalar($value) && $value !== null) return false;
+        }
+        $validated = SettingsStore::get_settings([]);
         if (!is_array($validated)) {
             $validated = [];
         }

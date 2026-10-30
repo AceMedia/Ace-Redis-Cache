@@ -28,7 +28,7 @@ class AceRedisCache {
     
     private $plugin_url;
     private $plugin_path; // define to avoid dynamic property deprecation
-    private $plugin_version = '0.7.15';
+    private $plugin_version = '0.8.15';
     // Debug tracking for transient flag mutation during save
     private $debug_pre_update_transient_early = null;
     
@@ -404,6 +404,7 @@ class AceRedisCache {
         // Surface a persistent admin notice if a drop-in deploy/remove failed (e.g. wp-content
         // not writable). Without this the object cache silently never activates.
         add_action('admin_notices', [$this, 'show_dropin_error_notice']);
+        add_action('admin_init', [$this, 'upgrade_managed_dropins']);
 
         // Setup component hooks (only if components are initialized)
         if (is_admin()) {
@@ -756,7 +757,7 @@ class AceRedisCache {
      * Detect WooCommerce request patterns that must never be page-cached.
      */
     private function is_woocommerce_uncacheable_request($request_uri, $path) {
-        $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
+        $rest_route = isset($_GET['rest_route']) && is_string($_GET['rest_route']) ? sanitize_text_field(wp_unslash($_GET['rest_route'])) : '';
 
         $session_cookies = [
             'woocommerce_cart_hash',
@@ -789,7 +790,7 @@ class AceRedisCache {
         }
 
         if (
-            (isset($_GET['action']) && in_array((string) $_GET['action'], ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
+            (isset($_GET['action']) && is_string($_GET['action']) && in_array(sanitize_key(wp_unslash($_GET['action'])), ['register', 'lostpassword', 'resetpass', 'logout'], true)) ||
             isset($_GET['password-reset']) ||
             isset($_GET['key'])
         ) {
@@ -4615,11 +4616,21 @@ class AceRedisCache {
     /**
      * Deploy or remove object-cache.php drop-in in WP_CONTENT_DIR based on settings
      */
+    public function upgrade_managed_dropins() {
+        if (!current_user_can(SettingsStore::is_network_mode() ? 'manage_network_options' : 'manage_options')) return;
+        if (empty($this->settings['enabled']) || SettingsStore::get('ace_rc_dropin_version') === ACE_REDIS_CACHE_VERSION) return;
+        $object_ok = $this->maybe_manage_dropin();
+        $page_ok = $this->maybe_manage_advanced_dropin();
+        // Failed writes are retried on the next administrator request.
+        if ($object_ok && $page_ok) SettingsStore::update('ace_rc_dropin_version', ACE_REDIS_CACHE_VERSION);
+    }
+
     private function maybe_manage_dropin() {
         $enabled = (bool)($this->settings['enable_object_cache_dropin'] ?? 0);
         $ok = DropinManager::manage($this->plugin_path . '/assets/dropins/object-cache.php', WP_CONTENT_DIR . '/object-cache.php', 'Ace Redis Cache Drop-In', $enabled);
         if ($ok) delete_transient('ace_redis_dropin_error');
         else set_transient('ace_redis_dropin_error', 'The object-cache.php file could not be updated. Check directory permissions and remove another cache plugin through its own settings first. Symlinks and foreign drop-ins are preserved.', DAY_IN_SECONDS);
+        return $ok;
     }
 
     /**
@@ -4644,7 +4655,7 @@ class AceRedisCache {
      */
     private function maybe_manage_advanced_dropin() {
         $enabled = !empty($this->settings['enable_page_cache']);
-        DropinManager::manage($this->plugin_path . '/assets/dropins/advanced-cache.php', WP_CONTENT_DIR . '/advanced-cache.php', 'Ace Redis Cache advanced-cache drop-in', $enabled);
+        return DropinManager::manage($this->plugin_path . '/assets/dropins/advanced-cache.php', WP_CONTENT_DIR . '/advanced-cache.php', 'Ace Redis Cache advanced-cache drop-in', $enabled);
     }
 
     /**
@@ -4794,7 +4805,7 @@ class AceRedisCache {
     }
 
     public function maybe_serve_asset_proxy_request() {
-        $asset = isset($_GET['ace_rc_asset']) ? wp_unslash((string) $_GET['ace_rc_asset']) : '';
+        $asset = isset($_GET['ace_rc_asset']) && is_string($_GET['ace_rc_asset']) ? sanitize_text_field(wp_unslash($_GET['ace_rc_asset'])) : '';
         if ($asset === '') {
             return;
         }

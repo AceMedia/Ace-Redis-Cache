@@ -314,9 +314,9 @@ class API_Handler {
 
         $def = $defs[$type];
         $source_exists = file_exists($def['source']);
-        $target_exists = file_exists($def['target']);
+        $target_exists = file_exists($def['target']) || is_link($def['target']);
         $target_contents = $target_exists ? @file_get_contents($def['target']) : false;
-        $managed = is_string($target_contents) && strpos($target_contents, $def['signature']) !== false;
+        $managed = !is_link($def['target']) && is_string($target_contents) && strpos($target_contents, $def['signature']) !== false;
         $target_dir = dirname($def['target']);
         $target_writable = $target_exists ? is_writable($def['target']) : is_dir($target_dir) && is_writable($target_dir);
 
@@ -737,6 +737,12 @@ class API_Handler {
             // Clear potential negative cache (poison map) before any reads this request
             if (function_exists('wp_cache_delete')) { @wp_cache_delete('notoptions', 'options'); }
             $settings = $request->get_param('settings');
+            if (!is_array($settings)) return new \WP_Error('ace_rc_invalid_settings', 'Settings must be an object.', ['status' => 400]);
+            foreach ($settings as $key => $value) {
+                if ($key !== '__managed_plugins' && !is_scalar($value) && $value !== null) {
+                    return new \WP_Error('ace_rc_invalid_settings', 'Settings values must be scalar.', ['status' => 400]);
+                }
+            }
             // Optional flags outside settings for auxiliary actions
             $reset_slow = $request->get_param('reset_slow_ops');
             if ($reset_slow) { delete_transient('ace_rc_slow_op_count'); }

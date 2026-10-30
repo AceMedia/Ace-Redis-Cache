@@ -1,0 +1,22 @@
+.ace-redis-settings .notice {
+            margin: 20px 0;
+            padding: 15px;
+            border-left: 4px solid #0073aa;
+            background: #f7f7f7;
+        }
+        
+        .ace-redis-settings .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .ace-redis-settings .status-success {
+            color: #46b450;
+            font-weight: bold;
+        }
+        
+        .ace-redis-settings .status-error {
+            color: #dc3232;
+            font-weight: bold;
+        }

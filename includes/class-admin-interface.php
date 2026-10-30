@@ -226,42 +226,7 @@ class AdminInterface {
      */
     public function inline_admin_scripts() {
         ?>
-        <script>
-        jQuery(function($) {
-            // Show/hide rows based on dual toggles (fallback when compiled JS not present)
-            function toggleBasedOnToggles() {
-                const objectOn = $('#enable_object_cache').is(':checked');
-                const $blockCachingRow = $('#block-caching-row');
-                const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
-                const $transientRow = $('#transient-cache-row');
-                $blockCachingRow.toggle(!!objectOn);
-                $transientRow.toggle(!!objectOn);
-                if (!objectOn) { $blockCachingCheckbox.prop('checked', false); }
-            }
-
-            toggleBasedOnToggles();
-            $(document).on('change', '#enable_object_cache', toggleBasedOnToggles);
-
-            // Compression sub-options visibility (fallback)
-            function toggleCompressionSubOptions() {
-                const enabled = $('#enable_compression').is(':checked');
-                const $field = $('#enable_compression').closest('.setting-field');
-                if ($field.length) {
-                    $field.find('.compression-methods').toggle(!!enabled);
-                    $field.find('.compression-methods').next('p.description').toggle(!!enabled);
-                }
-            }
-            toggleCompressionSubOptions();
-            $(document).on('change', '#enable_compression', toggleCompressionSubOptions);
-
-            // Basic TTL validation fallback
-            function validateTTLField($field) {
-                const v = parseInt($field.val(), 10);
-                if (!v || v < 60) { $field.addClass('error'); } else { $field.removeClass('error'); }
-            }
-            $('#ttl_page, #ttl_object').on('blur', function(){ validateTTLField($(this)); });
-        });
-        </script>
+        <?php \AceMedia\RedisCache\AdminAssets::script_file('admin-fallback'); ?>
         <?php
     }
 
@@ -539,53 +504,14 @@ class AdminInterface {
                         </td>
                     </tr>
                 </table>
-                <script>
-                (function(){
-                    var enableInputs = document.querySelectorAll('input[name="ace_redis_cache_settings[enabled]"]');
-                    var actions = document.getElementById('ace-redis-inline-cache-actions');
-                    if (enableInputs.length && actions) {
-                        var update = function(){
-                            var checked = false;
-                            enableInputs.forEach(function(el){ if (el.checked) checked = true; });
-                            actions.style.display = checked ? '' : 'none';
-                            var testBtn = document.getElementById('ace-redis-cache-test-btn');
-                            if (testBtn) testBtn.disabled = !checked;
-                        };
-                        enableInputs.forEach(function(el){ el.addEventListener('change', update); });
-                        update();
-                    }
-                })();
-                </script>
+                <?php \AceMedia\RedisCache\AdminAssets::script_file('legacy-settings-toggle'); ?>
                 
                 <p class="description">Saving only Block Cache options retires the cached blocks and leaves the page cache alone. Changing any other setting clears the whole cache.</p>
                 <?php submit_button(); ?>
             </form>
         </div>
         
-        <style>
-        .ace-redis-settings .notice {
-            margin: 20px 0;
-            padding: 15px;
-            border-left: 4px solid #0073aa;
-            background: #f7f7f7;
-        }
-        
-        .ace-redis-settings .button-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 10px;
-        }
-        
-        .ace-redis-settings .status-success {
-            color: #46b450;
-            font-weight: bold;
-        }
-        
-        .ace-redis-settings .status-error {
-            color: #dc3232;
-            font-weight: bold;
-        }
-        </style>
+        <?php \AceMedia\RedisCache\AdminAssets::style_file('legacy-settings-style'); ?>
         <?php
     }
     
@@ -616,22 +542,21 @@ class AdminInterface {
         ?>
         <div class="notice notice-info is-dismissible ace-redis-update-notice" data-notice="ace-redis-version">
             <p>
-                <strong>🚀 Plugin Refactored!</strong> Welcome to Ace Redis Cache v<?php echo $this->plugin_version; ?> with modern modular architecture, improved performance monitoring, and professional development workflow.
+                <strong>🚀 Plugin Refactored!</strong> Welcome to Ace Redis Cache v<?php echo esc_html($this->plugin_version); ?> with modern modular architecture, improved performance monitoring, and professional development workflow.
             </p>
             <p><strong>New in this version:</strong> Modular codebase, asset compilation, better error handling, and enhanced diagnostics.</p>
         </div>
 
-        <script>
-        jQuery(document).ready(function($) {
+        <?php ob_start(); ?>jQuery(document).ready(function($) {
             $('.ace-redis-update-notice .notice-dismiss').on('click', function() {
                 $.post(ajaxurl, {
                     action: 'ace_redis_dismiss_notice',
-                    version: '<?php echo $this->plugin_version; ?>',
-                    nonce: '<?php echo wp_create_nonce("ace_redis_dismiss"); ?>'
+                    version: <?php echo wp_json_encode($this->plugin_version); ?>,
+                    nonce: <?php echo wp_json_encode(wp_create_nonce("ace_redis_dismiss")); ?>
                 });
             });
         });
-        </script>
+        <?php \AceMedia\RedisCache\AdminAssets::script(ob_get_clean()); ?>
         <?php
     }
     

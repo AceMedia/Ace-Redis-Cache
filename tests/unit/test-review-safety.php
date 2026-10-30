@@ -102,6 +102,18 @@ class ReviewSafetyTest extends TestCase {
         $this->assertFalse(\AceMedia\RedisCache\AceRedisCache::post_allows_shared_cache((object) ['post_status' => 'publish', 'post_password' => 'secret']));
         $this->assertFalse(\AceMedia\RedisCache\AceRedisCache::post_allows_shared_cache((object) ['post_status' => 'private', 'post_password' => '']));
     }
+    public function testPrivacyIndexSeparatesSubdirectorySites() {
+        $class = new ReflectionClass(\AceMedia\RedisCache\AceRedisCache::class);
+        $plugin = $class->newInstanceWithoutConstructor();
+        $method = $class->getMethod('singular_path_index_key');
+        $method->setAccessible(true);
+        $GLOBALS['arc_test_home'] = 'https://example.com/first';
+        $first = $method->invoke($plugin, 7);
+        $GLOBALS['arc_test_home'] = 'https://example.com/second';
+        $second = $method->invoke($plugin, 7);
+        unset($GLOBALS['arc_test_home']);
+        $this->assertNotSame($first, $second);
+    }
     public function testStringHelperMatchesNativeEmptyPrefixBehaviour() {
         $this->assertTrue(StringHelper::starts_with('abc', ''));
         $this->assertTrue(StringHelper::starts_with('abc', 'ab'));

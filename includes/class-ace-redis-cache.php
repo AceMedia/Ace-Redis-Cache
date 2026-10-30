@@ -1399,8 +1399,7 @@ class AceRedisCache {
      * @return string|null Reason slug, or null to allow the store.
      */
     private function singular_path_index_key($post_id) {
-        $host = $this->normalize_cache_host(wp_parse_url(home_url(), PHP_URL_HOST) ?: '');
-        return 'ace_rc:post_page_paths:' . $host . ':' . (int) $post_id;
+        return $this->site_scoped_key('ace_rc:post_page_paths') . ':' . (int) $post_id;
     }
 
     private function register_singular_cache_path() {
@@ -1417,7 +1416,8 @@ class AceRedisCache {
             if ((int) $redis->rawCommand('SCARD', $key) >= 256 && !$redis->rawCommand('SISMEMBER', $key, $path)) return false;
             if ($redis->rawCommand('SADD', $key, $path) === false) return false;
             $index_ttl = max((int) $redis->rawCommand('TTL', $key), $this->page_cache_physical_ttl() + 60);
-            return $redis->rawCommand('EXPIRE', $key, (string) $index_ttl) !== false;
+            $expiry_set = $redis->rawCommand('EXPIRE', $key, (string) $index_ttl);
+            return $expiry_set === true || $expiry_set === 1;
         } catch (\Throwable $error) { return false; }
     }
 

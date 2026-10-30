@@ -30,7 +30,7 @@ if ($request_uri === '') {
 // The opt-in assistant preview includes a short-lived signed grant in the
 // rendered page. It must reach WordPress, never an early Redis page-cache hit.
 // The plugin separately limits the preview to the main site's homepage.
-$beta_path = parse_url($request_uri, PHP_URL_PATH);
+$beta_path = parse_url($request_uri, PHP_URL_PATH); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
 if ($beta_path === '/' && array_key_exists('beta', $_GET) && is_scalar($_GET['beta']) && in_array((string) $_GET['beta'], ['', '1'], true)) {
     return;
 }
@@ -86,7 +86,7 @@ if ($request_uri !== '' && preg_match('#[?&](wc-ajax|add-to-cart|remove_item|und
     return;
 }
 
-$request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+$request_path = (string) parse_url($request_uri, PHP_URL_PATH); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
 // Same normalisation as Ace_Redis_Cache::normalize_request_uri(): drop tracking parameters, sort the rest.
 $key_uri = $request_uri;
 if (($q = strpos($key_uri, '?')) !== false) {
@@ -211,7 +211,7 @@ try {
     // this site's own slugs; see maybe_publish_page_key_inputs()). Prefix match on the path.
     $bypass_paths = $redis->get($token_ns . 'bypass_paths');
     if (is_string($bypass_paths) && $bypass_paths !== '') {
-        $req_path = '/' . trim((string) parse_url($request_uri, PHP_URL_PATH), '/');
+        $req_path = '/' . trim((string) parse_url($request_uri, PHP_URL_PATH), '/'); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
         foreach (explode("\n", $bypass_paths) as $bp) {
             if ($bp !== '' && ($req_path === $bp || strpos($req_path . '/', rtrim($bp, '/') . '/') === 0)) {
                 $emit('BYPASS path');
@@ -226,7 +226,7 @@ try {
     $crawler_paths = $redis->get($token_ns . 'crawler_paths');
     if (is_string($crawler_agents) && $crawler_agents !== '' && is_string($crawler_paths) && $crawler_paths !== ''
         && (string) $ua !== '' && @preg_match('~' . str_replace('~', '\\~', $crawler_agents) . '~i', (string) $ua) === 1) {
-        $req_path = '/' . trim((string) parse_url($request_uri, PHP_URL_PATH), '/');
+        $req_path = '/' . trim((string) parse_url($request_uri, PHP_URL_PATH), '/'); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
         foreach (explode("\n", $crawler_paths) as $bp) {
             if ($bp !== '' && ($req_path === $bp || strpos($req_path . '/', rtrim($bp, '/') . '/') === 0)) {
                 $emit('BYPASS crawler');
@@ -340,7 +340,7 @@ try {
                 $body = $plain;
             }
         }
-    } elseif (str_starts_with($payload, 'raw:')) {
+    } elseif (strpos($payload, 'raw:') === 0) {
         $body = substr($payload, 4);
     }
 
@@ -398,7 +398,7 @@ try {
         }
         header('Content-Length: ' . strlen($body));
     }
-    echo $body;
+    echo $body; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated HTML or compressed response; escaping corrupts the page.
     exit;
 } catch (Throwable $e) {
     return;

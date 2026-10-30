@@ -89,7 +89,7 @@ if (!function_exists('ace_rc_dropin_status_bootstrap')) {
             ? (function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache())
             : (defined('WP_CACHE') && WP_CACHE && $target_exists);
         $target_dir = dirname($def['target']);
-        $target_writable = $target_exists ? is_writable($def['target']) : (is_dir($target_dir) && is_writable($target_dir));
+        $target_writable = $target_exists ? wp_is_writable($def['target']) : (is_dir($target_dir) && wp_is_writable($target_dir));
         $needs_install = $enabled_setting && !$target_exists;
         $can_update = $source_exists && $target_writable && ($needs_install || ($target_exists && $managed && $outdated));
 
@@ -322,7 +322,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                     <span><strong>Enable Full Page Cache</strong></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
-                                    <?php echo ace_rc_scope_traffic_light('green', 'red', 'Full page cache is guest/frontend only.'); ?>
+                                    <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Full page cache is guest/frontend only.')); ?>
                                     <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
@@ -350,7 +350,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                     <span><strong>Enable Object Cache</strong> <span class="description">(transients, blocks)</span></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
-                                    <?php echo ace_rc_scope_traffic_light('green', 'amber', 'Logged-in/admin requests still use per-request runtime cache, but not Redis persistence.'); ?>
+                                    <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'Logged-in/admin requests still use per-request runtime cache, but not Redis persistence.')); ?>
                                     <label for="ttl_object" style="width:140px; display:inline-block;">Object Cache TTL</label>
                                     <input type="number" name="ace_redis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
@@ -373,7 +373,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_transient_cache]" id="enable_transient_cache" value="1" <?php checked(!empty($settings['enable_transient_cache'])); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Transient persistence is only for guest/frontend traffic.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Transient persistence is only for guest/frontend traffic.')); ?>
                             <p class="description">Persist WordPress transients (including site transients) in Redis. Respects your transient exclusions. When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
                             <div id="ace-rc-transient-tips" class="ace-rc-tips" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                 <!-- Dynamic health tips injected here -->
@@ -400,7 +400,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_minification]" id="enable_minification" value="1" <?php checked($settings['enable_minification'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'green'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green')); ?>
                             <p class="description">Enable HTML, CSS, and JavaScript minification where this plugin processes the response.</p>
                         </div>
                     </div>
@@ -414,7 +414,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_compression]" id="enable_compression" value="1" <?php checked($settings['enable_compression'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'amber', 'Compression mainly affects cached guest responses and any shared output processing.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'Compression mainly affects cached guest responses and any shared output processing.')); ?>
                             <p class="description">Compress cached content to reduce size and bandwidth.</p>
                             <?php
                                 $brotli_available = function_exists('brotli_compress');
@@ -476,7 +476,7 @@ php -m | grep -i zlib</pre>
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_browser_cache_headers]" id="enable_browser_cache_headers" value="1" <?php checked($settings['enable_browser_cache_headers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'This only applies on guest page-cache hits.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'This only applies on guest page-cache hits.')); ?>
                             <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse.</p>
                             <div style="margin-top:8px;">
                                 <label for="browser_cache_max_age" style="width:140px; display:inline-block;">Max-Age</label>
@@ -498,7 +498,7 @@ php -m | grep -i zlib</pre>
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'green'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green')); ?>
                             <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs.</p>
                             <div style="margin-top:8px;">
                                 <label for="static_asset_cache_ttl" style="width:140px; display:inline-block;">Static TTL</label>
@@ -556,7 +556,7 @@ php -m | grep -i zlib</pre>
                                         <p class="ace-snippet-label">Apache — add to <code><?php echo esc_html($site_root); ?>/.htaccess</code></p>
                                         <div class="ace-snippet-wrap">
                                             <pre id="ace-htaccess-rules"><?php
-echo htmlspecialchars(
+echo esc_html(
 '# BEGIN Ace Redis Cache - Static Asset Headers
 <IfModule mod_expires.c>
     ExpiresActive On
@@ -600,7 +600,7 @@ echo htmlspecialchars(
                                         <p class="ace-snippet-label">Nginx — add inside your <code>server {}</code> block</p>
                                         <div class="ace-snippet-wrap">
                                             <pre id="ace-nginx-rules"><?php
-echo htmlspecialchars(
+echo esc_html(
 '# Ace Redis Cache - Static Asset Headers (Nginx)
 location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|mp4|pdf)$ {
     expires ' . $htaccess_ttl . 's;
@@ -645,7 +645,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[block_cache_enabled]" id="block_cache_enabled" value="1" <?php checked($settings['block_cache_enabled'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', empty($settings['block_cache_logged_in']) ? 'red' : 'amber', 'Visitors with items in the cart always get a live render.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', empty($settings['block_cache_logged_in']) ? 'red' : 'amber', 'Visitors with items in the cart always get a live render.')); ?>
                             <p class="description">Keeps the rendered HTML of expensive dynamic blocks in Redis and replays it, with the scripts, styles and Interactivity API state the block needs, so add to cart and other interactions keep working. Each block is refreshed when a product or post it shows changes, and the pages showing it are purged (including Varnish).</p>
                             <?php if ($ace_bc_on_constant): ?>
                                 <p class="description" style="color:#d63638;">ACE_RC_BLOCK_CACHE is set to <?php echo ACE_RC_BLOCK_CACHE ? 'true' : 'false'; ?> in wp-config.php and overrides this toggle.</p>
@@ -691,7 +691,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_dynamic_microcache]" id="enable_dynamic_microcache" value="1" <?php checked($settings['enable_dynamic_microcache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Dynamic microcache only applies inside guest page-cache flows.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Dynamic microcache only applies inside guest page-cache flows.')); ?>
                             <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic.</p>
                             <div style="margin-top:8px;">
                                 <label for="dynamic_microcache_ttl" style="width:140px; display:inline-block;">Microcache TTL</label>
@@ -708,8 +708,8 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[enable_opcache_helpers]" id="enable_opcache_helpers" value="1" <?php checked($settings['enable_opcache_helpers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'green', 'These helpers act on server-level PHP OPcache, not per-user page/object cache state.'); ?>
-                            <p class="description">Expose buttons to reset and lightly prime PHP OPcache for hot files after deploy or settings changes.</p>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green', 'These helpers act on server-level PHP OPcache, not per-user page/object cache state.')); ?>
+                            <p class="description">Refresh this site's private PHP files in OPcache and lightly prime hot files after deployment or settings changes. Shared code is preserved.</p>
                         </div>
                     </div>
                 </div>
@@ -823,7 +823,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_skip_cart_cookies]" id="wc_skip_cart_cookies" value="1" <?php checked(1, $settings['wc_skip_cart_cookies'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'This only affects guest/cacheable storefront requests.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'This only affects guest/cacheable storefront requests.')); ?>
                             <p class="description">Suppress the WooCommerce cart cookie on product, shop, and category pages so full-page cache can treat guests as shared traffic.</p>
                         </div>
                     </div>
@@ -837,7 +837,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_disable_persistent_cart]" id="wc_disable_persistent_cart" value="1" <?php checked(1, $settings['wc_disable_persistent_cart'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('red', 'green', 'This mainly affects logged-in customers with persistent carts.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'green', 'This mainly affects logged-in customers with persistent carts.')); ?>
                             <p class="description">Disable WooCommerce persistent cart writes. Session carts still work; they just do not survive a browser restart.</p>
                         </div>
                     </div>
@@ -848,7 +848,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <input type="number" min="1" max="100" step="1" name="ace_redis_cache_settings[wc_variation_threshold]" id="wc_variation_threshold" value="<?php echo esc_attr($settings['wc_variation_threshold'] ?? 15); ?>" class="small-text" />
-                            <?php echo ace_rc_scope_traffic_light('green', 'amber', 'This reduces large variation payloads on storefront product pages.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'This reduces large variation payloads on storefront product pages.')); ?>
                             <p class="description">WooCommerce defaults to 30. Lower values push large variation sets onto AJAX sooner and keep product pages lighter. Recommended: 15.</p>
                         </div>
                     </div>
@@ -875,7 +875,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_skip_children_on_archives]" id="wc_skip_children_on_archives" value="1" <?php checked(1, $settings['wc_skip_children_on_archives'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Archive and home pages benefit most from this.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Archive and home pages benefit most from this.')); ?>
                             <p class="description">Return empty variation-child lists on non-product pages so WooCommerce blocks and templates do not expand every variation just to render a product grid.</p>
                         </div>
                     </div>
@@ -889,7 +889,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_skip_composite_sync_on_archives]" id="wc_skip_composite_sync_on_archives" value="1" <?php checked(1, $settings['wc_skip_composite_sync_on_archives'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red', 'Single product pages are left untouched.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Single product pages are left untouched.')); ?>
                             <p class="description">Marks composite products as pre-synced on archive/shop pages so the Composite Products plugin does not recalculate and write prices for every grid item.</p>
                         </div>
                     </div>
@@ -903,7 +903,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_cache_url_exclusions]" id="wc_cache_url_exclusions" value="1" <?php checked(1, $settings['wc_cache_url_exclusions'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'red'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red')); ?>
                             <p class="description">Automatically exclude standard WooCommerce endpoints from page caching: <code>/cart</code>, <code>/checkout</code>, <code>/my-account</code>, <code>?wc-ajax=</code>, and <code>?add-to-cart=</code>.</p>
                         </div>
                     </div>
@@ -917,7 +917,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_gla_disable_notification_pill]" id="wc_gla_disable_notification_pill" value="1" <?php checked(1, $settings['wc_gla_disable_notification_pill'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('red', 'green', 'This only affects wp-admin requests.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'green', 'This only affects wp-admin requests.')); ?>
                             <p class="description">Disable the Google for WooCommerce admin notification badge that triggers synchronous Google Ads lookups on routine admin page loads.</p>
                         </div>
                     </div>
@@ -931,7 +931,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                                 <input type="checkbox" name="ace_redis_cache_settings[wc_disable_blocks_animation_translate]" id="wc_disable_blocks_animation_translate" value="1" <?php checked(1, $settings['wc_disable_blocks_animation_translate'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo ace_rc_scope_traffic_light('green', 'green', 'This removes a third-party translate.wordpress.org check on every page type.'); ?>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green', 'This removes a third-party translate.wordpress.org check on every page type.')); ?>
                             <p class="description">Disable the ThemeIsle SDK translation prompt in <code>blocks-animation</code> so it stops making synchronous translation API checks on page loads.</p>
                         </div>
                     </div>
@@ -963,7 +963,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                 <div class="diagnostics-panel">
                     <button type="button" id="ace-redis-cache-diagnostics-btn" class="button button-primary">Run Diagnostics</button>
                     <span id="opcache-helper-buttons" style="margin-left:12px; <?php echo empty($settings['enable_opcache_helpers']) ? 'display:none;' : ''; ?>">
-                        <button type="button" id="ace-redis-opcache-reset" class="button">OPcache Reset</button>
+                        <button type="button" id="ace-redis-opcache-reset" class="button">Refresh site OPcache</button>
                         <button type="button" id="ace-redis-opcache-prime" class="button">OPcache Prime</button>
                     </span>
                     <div id="diagnostics-results" class="diagnostics-output">

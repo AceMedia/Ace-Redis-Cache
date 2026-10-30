@@ -109,6 +109,13 @@ class BlockCache {
 
     /* ------------------------------------------------------------ boot */
 
+    public static function runtime_available() {
+        foreach (['wp_interactivity', 'wp_interactivity_config', 'wp_interactivity_state', 'wp_enqueue_script_module', 'wp_unique_id', 'wp_unique_prefixed_id', 'get_self_link'] as $function) {
+            if (!function_exists($function)) return false;
+        }
+        return class_exists('WP_Style_Engine_CSS_Rules_Store');
+    }
+
     public static function boot($plugin, $cache_manager, array $settings) {
         if (self::$instance || !$cache_manager || self::legacy_module_active()) {
             return;
@@ -135,7 +142,7 @@ class BlockCache {
             }
         }, 20, 3);
 
-        if (!self::is_enabled($self->settings)) {
+        if (!self::is_enabled($self->settings) || !self::runtime_available()) {
             return;
         }
         $self->register_invalidation_hooks();
@@ -391,7 +398,7 @@ class BlockCache {
     /* ------------------------------------------------------------ keys */
 
     private function prefix() {
-        $host = strtolower((string) (parse_url(home_url('/'), PHP_URL_HOST) ?: ''));
+        $host = strtolower((string) (wp_parse_url(home_url('/'), PHP_URL_HOST) ?: ''));
         return 'ace_bc:' . get_current_blog_id() . ':' . $host . ':';
     }
 
@@ -539,6 +546,7 @@ class BlockCache {
     }
 
     public function pre_render($pre_render, $parsed_block, $parent_block = null) {
+        if (!self::runtime_available()) return $pre_render;
         if (null !== $pre_render || $this->depth > 0 || !is_array($parsed_block)) {
             return $pre_render;
         }

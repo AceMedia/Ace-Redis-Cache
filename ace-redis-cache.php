@@ -97,7 +97,7 @@ class AceRedisCacheBootstrap {
             add_action('admin_notices', function() {
                 echo '<div class="notice notice-error"><p>';
                 echo '<strong>Ace Redis Cache:</strong> This plugin requires WordPress 5.0 or higher. ';
-                echo 'You are running WordPress ' . $GLOBALS['wp_version'] . '.';
+                echo 'You are running WordPress ' . esc_html($GLOBALS['wp_version']) . '.';
                 echo '</p></div>';
             });
             $requirements_met = false;

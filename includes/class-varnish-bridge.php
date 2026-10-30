@@ -62,7 +62,7 @@ class VarnishBridge {
      * Returns null for anything that could not be sent safely as a request-target.
      */
     public static function path_regex($path) {
-        $path = (string) parse_url($path, PHP_URL_PATH);
+        $path = (string) wp_parse_url($path, PHP_URL_PATH);
         if ($path === '' || $path[0] !== '/' || preg_match('/[\s\x00-\x1f\x7f]/', $path)) {
             return null;
         }
@@ -112,10 +112,10 @@ class VarnishBridge {
             return self::$available = ($cached === 'yes');
         }
         [$addr, $port] = self::endpoint();
-        $sock = @fsockopen($addr, $port, $errno, $errstr, 0.1);
+        $sock = @fsockopen($addr, $port, $errno, $errstr, 0.1); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fsockopen -- Varnish PURGE uses a raw regex request-target which the WordPress URL transport would normalise.
         self::$available = (bool) $sock;
         if ($sock) {
-            fclose($sock);
+            fclose($sock); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Varnish PURGE uses a raw regex request-target which the WordPress URL transport would normalise.
         }
         set_transient('ace_rc_varnish_present', self::$available ? 'yes' : 'no', 10 * MINUTE_IN_SECONDS);
         return self::$available;
@@ -132,7 +132,7 @@ class VarnishBridge {
     }
 
     private static function hosts() {
-        $host = strtolower((string) parse_url(home_url(), PHP_URL_HOST));
+        $host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
         $hosts = $host !== '' ? [$host] : [];
         if ($host !== '' && strpos($host, 'www.') !== 0) {
             $hosts[] = 'www.' . $host;
@@ -145,14 +145,14 @@ class VarnishBridge {
             return false;
         }
         [$addr, $port] = self::endpoint();
-        $sock = @fsockopen($addr, $port, $errno, $errstr, 0.5);
+        $sock = @fsockopen($addr, $port, $errno, $errstr, 0.5); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fsockopen -- Varnish PURGE uses a raw regex request-target which the WordPress URL transport would normalise.
         if (!$sock) {
             return false;
         }
         stream_set_timeout($sock, 1);
-        fwrite($sock, "PURGE {$regex} HTTP/1.1\r\nHost: {$host}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        fwrite($sock, "PURGE {$regex} HTTP/1.1\r\nHost: {$host}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Varnish PURGE uses a raw regex request-target which the WordPress URL transport would normalise.
         $status = (string) fgets($sock, 64);
-        fclose($sock);
+        fclose($sock); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Varnish PURGE uses a raw regex request-target which the WordPress URL transport would normalise.
         $ok = (bool) preg_match('#^HTTP/\S+ 200#', $status);
         if (!$ok && defined('WP_DEBUG') && WP_DEBUG) {
             error_log('AceRedisCache Varnish ban failed for ' . $host . ' ' . $regex . ': ' . trim($status));

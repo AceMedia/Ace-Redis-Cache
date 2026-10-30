@@ -318,7 +318,7 @@ class API_Handler {
         $target_contents = $target_exists ? @file_get_contents($def['target']) : false;
         $managed = !is_link($def['target']) && is_string($target_contents) && strpos($target_contents, $def['signature']) !== false;
         $target_dir = dirname($def['target']);
-        $target_writable = $target_exists ? is_writable($def['target']) : is_dir($target_dir) && is_writable($target_dir);
+        $target_writable = $target_exists ? wp_is_writable($def['target']) : is_dir($target_dir) && wp_is_writable($target_dir);
 
         $source_hash = $source_exists ? @md5_file($def['source']) : null;
         $target_hash = is_string($target_contents) ? md5($target_contents) : null;
@@ -425,11 +425,11 @@ class API_Handler {
                 continue;
             }
 
-            if (file_exists($target) && !is_writable($target)) {
+            if (file_exists($target) && !wp_is_writable($target)) {
                 $errors[] = sprintf('%s is not writable: %s', $status['label'], $target);
                 continue;
             }
-            if (!file_exists($target) && !is_writable(dirname($target))) {
+            if (!file_exists($target) && !wp_is_writable(dirname($target))) {
                 $errors[] = sprintf('%s target directory is not writable: %s', $status['label'], dirname($target));
                 continue;
             }

@@ -253,7 +253,7 @@ class AdminInterface {
      */
     public function render_settings_page() {
         if (!$this->current_user_can_manage()) {
-            wp_die(__('You do not have sufficient permissions to access this page.'));
+            wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'ace-redis-cache'));
         }
 
         $template_file = dirname(__DIR__) . '/admin/views/settings-page.php';
@@ -345,7 +345,7 @@ class AdminInterface {
      */
     private function render_inline_settings_page() {
         if (!$this->current_user_can_manage()) {
-            wp_die(__('You do not have sufficient permissions to access this page.'));
+            wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'ace-redis-cache'));
         }
         
         ?>

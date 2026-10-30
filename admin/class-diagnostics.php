@@ -160,7 +160,7 @@ class Diagnostics {
             $diagnostics[] = "=== Recent Issues ===";
             $diagnostics[] = "Issue Count (last 10 minutes): " . count($recent_issues);
             foreach (array_slice($recent_issues, -5) as $issue_time) {
-                $diagnostics[] = "  - Issue at " . date('Y-m-d H:i:s', $issue_time);
+                $diagnostics[] = "  - Issue at " . gmdate('Y-m-d H:i:s', $issue_time);
             }
             $diagnostics[] = "";
         }

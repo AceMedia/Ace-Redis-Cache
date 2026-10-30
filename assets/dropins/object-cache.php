@@ -296,7 +296,7 @@ if (!class_exists('WP_Object_Cache')) {
                 strpos($request_uri, '/wp-admin/admin-ajax.php') !== false ||
                 (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest')
             );
-            $request_path = (string) parse_url($request_uri, PHP_URL_PATH);
+            $request_path = (string) parse_url($request_uri, PHP_URL_PATH); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
             $rest_route = isset($_GET['rest_route']) ? urldecode((string) $_GET['rest_route']) : '';
             $has_wc_session_cookie = false;
             $wc_cookie_prefixes = ['woocommerce_cart_hash', 'woocommerce_items_in_cart', 'wp_woocommerce_session_'];
@@ -543,7 +543,7 @@ if (!class_exists('WP_Object_Cache')) {
                 : ($this->wc_read_mode ? 'wc-read'
                 : ($this->runtime_only_mode || $this->bypass ? 'no-redis'
                 : ($this->redis !== null && $this->connected ? 'redis' : 'no-conn')));
-            $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+            $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Drop-in runs before wp_parse_url is available.
             if (isset($_REQUEST['action']) && is_string($_REQUEST['action'])) { $path .= '?action=' . substr($_REQUEST['action'], 0, 60); }
             global $wpdb;
             $line = sprintf("%s\t%d\t%s\t%s\t%s\tq=%d\thit=%d\tmiss=%d\tmr=%d\tmem=%dM\t%d\t%s\n",
@@ -737,7 +737,7 @@ if (!class_exists('WP_Object_Cache')) {
                 }
 
                 if ($this->connect_via === null) {
-                    $attempt_tls_first = $use_tls_config || (strpos($host, '.cache.amazonaws.com') !== false);
+                    $attempt_tls_first = $use_tls_config || (strpos($host, '.cache.amazonaws.com') !== false); // phpcs:ignore PluginCheck.CodeAnalysis.Offloading.OffloadedContent -- Recognise the administrator-configured Redis endpoint for TLS; this does not select or contact a service.
                     $plain_host        = $host;
                     $tls_host          = (strpos($host, 'tls://') === 0) ? $host : ('tls://' . $host);
                     $connected         = false;

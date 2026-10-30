@@ -1065,7 +1065,7 @@ class AceRedisCache {
                 $this->emit_browser_cache_headers('hit', $cache_key);
             }
             $this->maybe_trigger_swr_refresh($cache_key);
-            echo $direct_compressed;
+            echo $direct_compressed; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated response; escaping corrupts HTML and compressed bytes.
             if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
             return;
         }
@@ -1103,7 +1103,7 @@ class AceRedisCache {
             // Re-apply compression for delivery if enabled and client accepts it
             $cached_content = $this->maybe_recompress_for_output($cached_content);
             $this->maybe_trigger_swr_refresh($cache_key);
-            echo $cached_content;
+            echo $cached_content; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated response; escaping corrupts HTML and compressed bytes.
             if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
             return;
         }
@@ -1120,10 +1120,11 @@ class AceRedisCache {
         // Start output buffering
         add_filter('wp_template_enhancement_output_buffer', function($content) use ($cache_key) {
             // Canonical host enforcement & poison prevention
-            $home_host = parse_url(home_url(), PHP_URL_HOST);
-            $req_host = $_SERVER['HTTP_HOST'] ?? $home_host;
-            $is_ip = preg_match('/^\d+\.\d+\.\d+\.\d+$/', $req_host);
-            $host_mismatch = ($home_host && strcasecmp($home_host, $req_host) !== 0);
+            $home_host = wp_parse_url(home_url(), PHP_URL_HOST);
+            $req_host = isset($_SERVER['HTTP_HOST']) && is_string($_SERVER['HTTP_HOST']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])) : '';
+            $host_mismatch = !self::request_matches_home_authority(home_url(), $req_host);
+            // An IP configured as the site's own address is valid (local/test installs).
+            $is_ip = $host_mismatch && filter_var($req_host, FILTER_VALIDATE_IP) !== false;
             $skip_cache_reason = null;
             if ($is_ip) { $skip_cache_reason = 'ip_host'; }
             // The standard "never cache this response" signal: WooCommerce sets it on the basket,
@@ -1308,9 +1309,19 @@ class AceRedisCache {
      * store, so a /wp-json/ response used to be cached as a page and stamped with
      * the page TTL. The path and the rest_route query var are checked as well.
      */
+    public static function request_matches_home_authority($home, $request_host) {
+        if (!is_string($request_host) || $request_host === '' || preg_match('~[\s/@?#\\\\]~', $request_host)) return false;
+        $home_parts = wp_parse_url($home);
+        $request_parts = wp_parse_url('http://' . $request_host);
+        if (!is_array($home_parts) || !is_array($request_parts) || empty($home_parts['host']) || empty($request_parts['host'])) return false;
+        $default_port = ($home_parts['scheme'] ?? 'http') === 'https' ? 443 : 80;
+        return strtolower($home_parts['host']) === strtolower($request_parts['host'])
+            && (int) ($home_parts['port'] ?? $default_port) === (int) ($request_parts['port'] ?? $default_port);
+    }
+
     private function is_rest_request() {
         if (defined('REST_REQUEST') && REST_REQUEST) return true;
-        $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+        $path = (string) wp_parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
         $prefix = function_exists('rest_get_url_prefix') ? rest_get_url_prefix() : 'wp-json';
         if ($path !== '' && preg_match('#^/' . preg_quote($prefix, '#') . '(/|$)#', $path)) return true;
         return isset($_GET['rest_route']);
@@ -1490,7 +1501,7 @@ class AceRedisCache {
         // shipped only its loading spinner and a JSON blob must still count as empty.
         $inner = preg_replace('#<(script|style|svg|template|noscript)\b[^>]*>.*?</\1>#is', ' ', $inner);
         $inner = preg_replace('#<!--.*?-->#s', ' ', (string) $inner);
-        $text = trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags((string) $inner), ENT_QUOTES, 'UTF-8')));
+        $text = trim(preg_replace('/\s+/u', ' ', html_entity_decode(wp_strip_all_tags((string) $inner), ENT_QUOTES, 'UTF-8')));
 
         return strlen($text) >= $min_bytes;
     }
@@ -1812,7 +1823,7 @@ class AceRedisCache {
             return $block_content;
         }
         // Generate stable id for this block instance based on attributes + name + index
-        $id = 'b' . substr(md5($block_name . wp_json_encode($block['attrs'] ?? []) . microtime(true) . rand()), 0, 12);
+        $id = 'b' . substr(md5($block_name . wp_json_encode($block['attrs'] ?? []) . microtime(true) . wp_rand()), 0, 12);
         $this->placeholder_blocks[$id] = [
             'block' => $block,
         ];
@@ -2005,7 +2016,7 @@ class AceRedisCache {
             $bypass = [];
             if (function_exists('wc_get_page_permalink')) {
                 foreach (['cart', 'checkout', 'myaccount'] as $wc_page) {
-                    $bypass[] = (string) parse_url((string) wc_get_page_permalink($wc_page), PHP_URL_PATH);
+                    $bypass[] = (string) wp_parse_url((string) wc_get_page_permalink($wc_page), PHP_URL_PATH);
                 }
             }
             $bypass = array_values(array_unique(array_filter(array_map(function ($p) {
@@ -2074,7 +2085,7 @@ class AceRedisCache {
      */
     private function build_page_cache_core_key($path, $scheme, $device, $version = null, $host = null) {
         if ($version === null) { $version = $this->get_site_cache_version(); }
-        if ($host === null) { $host = parse_url(home_url(), PHP_URL_HOST) ?: ''; }
+        if ($host === null) { $host = wp_parse_url(home_url(), PHP_URL_HOST) ?: ''; }
         $host = $this->normalize_cache_host($host);
 
         $key_parts = [
@@ -2110,7 +2121,7 @@ class AceRedisCache {
      * URL without knowing how keys are built.
      */
     public function purge_url($url) {
-        $path = parse_url((string) $url, PHP_URL_PATH) ?: '/';
+        $path = wp_parse_url((string) $url, PHP_URL_PATH) ?: '/';
         if ($path === '') { $path = '/'; }
         if ($path[0] !== '/') { $path = '/' . $path; }
         $paths = [$path];
@@ -2199,7 +2210,7 @@ class AceRedisCache {
         if (!$redis || !method_exists($redis, 'rawCommand')) {
             return 0;
         }
-        $host = $this->normalize_cache_host(parse_url(home_url(), PHP_URL_HOST) ?: '');
+        $host = $this->normalize_cache_host(wp_parse_url(home_url(), PHP_URL_HOST) ?: '');
         try {
             $ns = 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '');
             $version = $redis->rawCommand('GET', $ns . 'site_version');
@@ -2253,7 +2264,7 @@ class AceRedisCache {
         }
         $permalink = get_permalink($post_id);
         if (!$permalink) return;
-        $path = parse_url($permalink, PHP_URL_PATH) ?: '/';
+        $path = wp_parse_url($permalink, PHP_URL_PATH) ?: '/';
         if ($path === '') { $path = '/'; }
         if ($path[0] !== '/') { $path = '/' . $path; }
         $paths = [$path];
@@ -2438,14 +2449,14 @@ class AceRedisCache {
         $paths = [];
         // Home/front
         $home_url = home_url('/');
-        $home_path = parse_url($home_url, PHP_URL_PATH) ?: '/';
+        $home_path = wp_parse_url($home_url, PHP_URL_PATH) ?: '/';
         $paths[] = $home_path;
         // If front page is static and different from posts page
         $page_for_posts = (int) get_option('page_for_posts');
         if ($page_for_posts) {
             $blog_link = get_permalink($page_for_posts);
             if ($blog_link) {
-                $blog_path = parse_url($blog_link, PHP_URL_PATH) ?: '/';
+                $blog_path = wp_parse_url($blog_link, PHP_URL_PATH) ?: '/';
                 $paths[] = $blog_path;
             }
         }
@@ -2455,7 +2466,7 @@ class AceRedisCache {
             if ($ptype_obj && !empty($ptype_obj->has_archive)) {
                 $archive_link = get_post_type_archive_link($post->post_type);
                 if ($archive_link) {
-                    $archive_path = parse_url($archive_link, PHP_URL_PATH) ?: '/';
+                    $archive_path = wp_parse_url($archive_link, PHP_URL_PATH) ?: '/';
                     $paths[] = $archive_path;
                 }
             }
@@ -2470,7 +2481,7 @@ class AceRedisCache {
                 foreach ($terms as $term) {
                     $tlink = get_term_link($term);
                     if (!is_wp_error($tlink) && $tlink) {
-                        $tpath = parse_url($tlink, PHP_URL_PATH) ?: '/';
+                        $tpath = wp_parse_url($tlink, PHP_URL_PATH) ?: '/';
                         $paths[] = $tpath;
                     }
                 }
@@ -2479,7 +2490,7 @@ class AceRedisCache {
         // Author archive
         $author_link = get_author_posts_url($post->post_author);
         if ($author_link) {
-            $apath = parse_url($author_link, PHP_URL_PATH) ?: '/';
+            $apath = wp_parse_url($author_link, PHP_URL_PATH) ?: '/';
             $paths[] = $apath;
         }
         // Date archives (year/month) - only if published
@@ -2770,7 +2781,7 @@ class AceRedisCache {
     }
 
     private function get_path_first_pass_marker_key($path) {
-        $normalized_path = parse_url((string) $path, PHP_URL_PATH) ?: '/';
+        $normalized_path = wp_parse_url((string) $path, PHP_URL_PATH) ?: '/';
         return $this->path_first_pass_marker_prefix . md5($normalized_path);
     }
 
@@ -2896,8 +2907,8 @@ class AceRedisCache {
      */
     private function site_scoped_key($key) {
         $home = (string) home_url();
-        $host = $this->normalize_cache_host((string) parse_url($home, PHP_URL_HOST));
-        $path = rtrim((string) parse_url($home, PHP_URL_PATH), '/');
+        $host = $this->normalize_cache_host((string) wp_parse_url($home, PHP_URL_HOST));
+        $path = rtrim((string) wp_parse_url($home, PHP_URL_PATH), '/');
         return $key . ':' . $host . $path;
     }
 
@@ -3064,7 +3075,7 @@ class AceRedisCache {
         // lock file. No waiting in PHP: visitors and live feeds get first use.
         $host_lock = null;
         if (is_readable('/run/lock/acehost-background.lock') && !getenv('ACEHOST_BACKGROUND_LEASE')) {
-            $host_lock = fopen('/run/lock/acehost-background.lock', 'r');
+            $host_lock = fopen('/run/lock/acehost-background.lock', 'r'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- flock needs a local file handle for the optional operator-installed host budget lock.
             if (!$host_lock || !flock($host_lock, LOCK_EX | LOCK_NB)) {
                 $this->schedule_sitemap_prime_runner(120);
                 return;
@@ -3193,8 +3204,8 @@ class AceRedisCache {
             if (empty($args['sslverify'])) {
                 $hooks = new \WpOrg\Requests\Hooks();
                 $hooks->register('curl.before_multi_add', function (&$handle) {
-                    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, 0);
-                    curl_setopt($handle, CURLOPT_SSL_VERIFYHOST, 0);
+                    curl_setopt($handle, CURLOPT_SSL_VERIFYPEER, 0); // phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt -- Configure the existing WordPress Requests transport hook for administrator-selected primer settings.
+                    curl_setopt($handle, CURLOPT_SSL_VERIFYHOST, 0); // phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt -- Configure the existing WordPress Requests transport hook for administrator-selected primer settings.
                 });
                 $multi_options['hooks'] = $hooks;
             }
@@ -3707,7 +3718,7 @@ class AceRedisCache {
             return;
         }
         $hosts = array_unique(array_filter([
-            $this->normalize_cache_host((string) parse_url(home_url(), PHP_URL_HOST)),
+            $this->normalize_cache_host((string) wp_parse_url(home_url(), PHP_URL_HOST)),
             $this->normalize_cache_host((string) ($_SERVER['HTTP_HOST'] ?? '')),
         ]));
         $urls = [];
@@ -3719,7 +3730,7 @@ class AceRedisCache {
             }
             foreach ((array) $got as $url) {
                 $url = (string) $url;
-                $url_host = $this->normalize_cache_host((string) parse_url($url, PHP_URL_HOST));
+                $url_host = $this->normalize_cache_host((string) wp_parse_url($url, PHP_URL_HOST));
                 if ($url_host === $host && preg_match('#^https?://#', $url)) {
                     $urls[] = $url;
                 }
@@ -3896,7 +3907,7 @@ class AceRedisCache {
     public static function jittered_ttl($ttl, $pct) {
         $ttl = (int) $ttl;
         $span = (int) floor($ttl * max(0, min(50, (int) $pct)) / 100);
-        return $span > 0 ? $ttl - mt_rand(0, $span) : $ttl;
+        return $span > 0 ? $ttl - wp_rand(0, $span) : $ttl;
     }
 
     /**
@@ -3948,7 +3959,7 @@ class AceRedisCache {
         // so the pre-boot path stops serving pages stored before this moment as if fresh.
         try {
             $redis = $this->cache_manager->get_redis_connection()->get_connection();
-            $host  = $this->normalize_cache_host((string) parse_url(home_url(), PHP_URL_HOST));
+            $host  = $this->normalize_cache_host((string) wp_parse_url(home_url(), PHP_URL_HOST));
             if ($redis) {
                 $redis->rawCommand('SET', 'ace:1:pagekey:' . ($host !== '' ? $host . ':' : '') . 'epoch', (string) time(), 'EX', (string) (30 * DAY_IN_SECONDS));
             }
@@ -3976,7 +3987,7 @@ class AceRedisCache {
      * Reconstruct the absolute URL of the current request (for background re-warming).
      */
     private function current_request_url() {
-        $host = $_SERVER['HTTP_HOST'] ?? parse_url(home_url(), PHP_URL_HOST);
+        $host = $_SERVER['HTTP_HOST'] ?? wp_parse_url(home_url(), PHP_URL_HOST);
         if (!$host) {
             return '';
         }
@@ -4534,7 +4545,7 @@ class AceRedisCache {
     }
 
     private function remove_managed_static_cache_block($htaccess_path) {
-        if (!file_exists($htaccess_path) || !is_readable($htaccess_path) || !is_writable($htaccess_path)) {
+        if (!file_exists($htaccess_path) || !is_readable($htaccess_path) || !wp_is_writable($htaccess_path)) {
             return;
         }
 
@@ -4550,14 +4561,14 @@ class AceRedisCache {
 
         if (!file_exists($htaccess_path)) {
             $dir = dirname($htaccess_path);
-            if (!is_dir($dir) || !is_writable($dir)) {
+            if (!is_dir($dir) || !wp_is_writable($dir)) {
                 return;
             }
             file_put_contents($htaccess_path, $block . "\n", LOCK_EX);
             return;
         }
 
-        if (!is_readable($htaccess_path) || !is_writable($htaccess_path)) {
+        if (!is_readable($htaccess_path) || !wp_is_writable($htaccess_path)) {
             return;
         }
 
@@ -4900,7 +4911,7 @@ class AceRedisCache {
             return null;
         }
 
-        $path = (string) parse_url($url, PHP_URL_PATH);
+        $path = (string) wp_parse_url($url, PHP_URL_PATH);
         if ($path === '' || !preg_match('/\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i', $path)) {
             return null;
         }
@@ -4917,16 +4928,16 @@ class AceRedisCache {
 
         static $home_host_cache = null;
         if ($home_host_cache === null) {
-            $home_host_cache = (string) parse_url(home_url('/'), PHP_URL_HOST);
+            $home_host_cache = (string) wp_parse_url(home_url('/'), PHP_URL_HOST);
         }
         $home_host = $home_host_cache;
-        $path = (string) parse_url($asset, PHP_URL_PATH);
+        $path = (string) wp_parse_url($asset, PHP_URL_PATH);
         if ($path === '') {
             return null;
         }
 
         if (preg_match('#^https?://#i', $asset)) {
-            $asset_host = (string) parse_url($asset, PHP_URL_HOST);
+            $asset_host = (string) wp_parse_url($asset, PHP_URL_HOST);
             if ($asset_host === '' || strcasecmp($asset_host, $home_host) !== 0) {
                 return null;
             }
@@ -4942,7 +4953,7 @@ class AceRedisCache {
 
     private function resolve_asset_proxy_file($asset) {
         $asset = rawurldecode(trim($asset));
-        $path = (string) parse_url($asset, PHP_URL_PATH);
+        $path = (string) wp_parse_url($asset, PHP_URL_PATH);
         if ($path === '') {
             return null;
         }
@@ -4955,12 +4966,12 @@ class AceRedisCache {
 
         static $home_host_cache = null;
         if ($home_host_cache === null) {
-            $home_host_cache = (string) parse_url(home_url('/'), PHP_URL_HOST);
+            $home_host_cache = (string) wp_parse_url(home_url('/'), PHP_URL_HOST);
         }
         $home_host = $home_host_cache;
 
         if (preg_match('#^https?://#i', $asset)) {
-            $asset_host = (string) parse_url($asset, PHP_URL_HOST);
+            $asset_host = (string) wp_parse_url($asset, PHP_URL_HOST);
             if ($asset_host === '' || strcasecmp($asset_host, $home_host) !== 0) {
                 return $resolve_cache[$asset] = null;
             }
@@ -5050,7 +5061,7 @@ class AceRedisCache {
         if (preg_match('#/(wp-admin/load-(?:styles|scripts)\.php|wp-login\.php)#i', $uri)) {
             return $headers;
         }
-        $path = parse_url($uri, PHP_URL_PATH);
+        $path = wp_parse_url($uri, PHP_URL_PATH);
         if (!$path) { return $headers; }
         // Match common static file extensions (allow .gz/.br suffixes)
         if (!preg_match('/\.(?:png|jpe?g|gif|webp|avif|svg|css|js|mjs|woff2?|ttf|eot|otf|ico|json|map)(?:\.(?:gz|br))?$/i', $path)) {
@@ -5222,7 +5233,7 @@ class AceRedisCache {
         }
 
         // Check if redirect destination is a numeric ?p=ID URL (could be draft)
-        $parsed_redirect = parse_url($redirect_url);
+        $parsed_redirect = wp_parse_url($redirect_url);
         if (isset($parsed_redirect['query'])) {
             parse_str($parsed_redirect['query'], $query_params);
             if (isset($query_params['p']) && is_numeric($query_params['p'])) {
@@ -5241,8 +5252,8 @@ class AceRedisCache {
 
         // Check if redirect is from an old slug to current slug
         // If the requested URL contains a different slug than current, it might be outdated
-        $current_url_parts = parse_url($requested_url);
-        $redirect_url_parts = parse_url($redirect_url);
+        $current_url_parts = wp_parse_url($requested_url);
+        $redirect_url_parts = wp_parse_url($redirect_url);
         
         if (isset($current_url_parts['path']) && isset($redirect_url_parts['path'])) {
             $current_path = trim($current_url_parts['path'], '/');

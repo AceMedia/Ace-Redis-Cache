@@ -265,7 +265,7 @@ This project is licensed under the GPLv2 or later - see the [LICENSE](LICENSE) f
 
 Fresh installations start with caching disabled. Configure a Redis/Valkey service and enable caching explicitly; activation does not require a running server. Existing enabled settings are retained.
 
-Page caching and standalone HTML minification require WordPress 6.9's template enhancement output buffer. Older WordPress versions render pages live while object, transient and block caches remain available. Custom routes that exit before WordPress renders a template also render live. Fresh response compression is delegated to the web server so the core HTML filter always receives HTML.
+Page caching and standalone HTML minification require WordPress 6.9's template enhancement output buffer. Older WordPress versions render pages live while object and transient caches remain available. Block HTML caching requires the WordPress 6.5 Interactivity API; earlier versions render blocks live. Custom routes that exit before WordPress renders a template also render live. Fresh response compression is delegated to the web server so the core HTML filter always receives HTML.
 
 Automatic drop-in upgrades only replace ARC-owned regular files. Foreign files and symlinks are left untouched; a failed write can be retried after correcting directory permissions. OPcache controls invalidate only real files inside this site's content directory; symlinks resolving to shared code are excluded. The legacy ACE_OC_FLUSHDB_ON_SAVE constant no longer enables a database-wide flush.
 

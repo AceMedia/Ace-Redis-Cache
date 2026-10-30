@@ -74,6 +74,25 @@ class ReviewSafetyTest extends TestCase {
         $this->assertTrue(DropinManager::refresh_existing($plugin, $this->dir));
         $this->assertSame('<?php /* other cache */', file_get_contents($target));
     }
+    public function testCanonicalAuthorityIncludesPortAndRejectsPoisonedHosts() {
+        foreach ([
+            ['http://127.0.0.1:9484', '127.0.0.1:9484', true],
+            ['https://example.test', 'EXAMPLE.TEST:443', true],
+            ['https://example.test', 'example.test:444', false],
+            ['https://example.test', 'attacker.test', false],
+            ['https://example.test', 'example.test@attacker.test', false],
+            ['https://example.test', 'example.test/path', false],
+            ['http://[::1]:9484', '[::1]:9484', true],
+        ] as $case) {
+            $this->assertSame($case[2], \AceMedia\RedisCache\AceRedisCache::request_matches_home_authority($case[0], $case[1]));
+        }
+    }
+    public function testMissingModernBlockApisRenderLive() {
+        $this->assertFalse(\AceMedia\RedisCache\BlockCache::runtime_available());
+        $reflection = new ReflectionClass(\AceMedia\RedisCache\BlockCache::class);
+        $block = $reflection->newInstanceWithoutConstructor();
+        $this->assertNull($block->pre_render(null, ['blockName' => 'core/query']));
+    }
     public function testStringHelperMatchesNativeEmptyPrefixBehaviour() {
         $this->assertTrue(StringHelper::starts_with('abc', ''));
         $this->assertTrue(StringHelper::starts_with('abc', 'ab'));

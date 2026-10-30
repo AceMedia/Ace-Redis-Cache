@@ -47,7 +47,7 @@ class CacheManager {
      * AceRedisCache::normalize_cache_host(): lowercase, port stripped.
      */
     private function site_page_host() {
-        $host = strtolower(trim((string) (parse_url(home_url('/'), PHP_URL_HOST) ?: '')));
+        $host = strtolower(trim((string) (wp_parse_url(home_url('/'), PHP_URL_HOST) ?: '')));
         return $host === '' ? '' : (preg_replace('/:\d+$/', '', $host) ?: '');
     }
 

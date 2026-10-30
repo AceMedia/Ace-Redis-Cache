@@ -47,6 +47,22 @@ class ReviewSafetyTest extends TestCase {
         $this->assertFalse(DropinManager::manage('missing-source', $target, 'signature', true));
         $this->assertTrue(is_link($target));
     }
+    public function testFailedInstallCanBeRetried() {
+        $source = $this->dir . '/source.php';
+        $target = $this->dir . '/object-cache.php';
+        $this->assertFalse(DropinManager::manage($source, $target, 'Ace Redis Cache Drop-In', true));
+        file_put_contents($source, '<?php /* Ace Redis Cache Drop-In */');
+        $this->assertTrue(DropinManager::manage($source, $target, 'Ace Redis Cache Drop-In', true));
+    }
+    public function testAjaxRejectsNestedAndNonArraySettings() {
+        $class = new ReflectionClass(\AceMedia\RedisCache\AdminAjax::class);
+        $instance = $class->newInstanceWithoutConstructor();
+        $method = $class->getMethod('validate_settings');
+        $method->setAccessible(true);
+        $this->assertFalse($method->invoke($instance, 'not an object'));
+        $this->assertFalse($method->invoke($instance, ['host' => ['bad']]));
+        $this->assertTrue($class->hasMethod('get_manage_capability'));
+    }
     public function testStringHelperMatchesNativeEmptyPrefixBehaviour() {
         $this->assertTrue(StringHelper::starts_with('abc', ''));
         $this->assertTrue(StringHelper::starts_with('abc', 'ab'));

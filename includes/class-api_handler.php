@@ -707,7 +707,7 @@ class API_Handler {
         // For POST requests, verify nonce
         if ($request->get_method() === 'POST') {
             $nonce = $request->get_param('nonce');
-            if (!wp_verify_nonce($nonce, 'ace_redis_admin_nonce')) {
+            if (!is_string($nonce) || !wp_verify_nonce(sanitize_text_field($nonce), 'ace_redis_admin_nonce')) {
                 return false;
             }
         }

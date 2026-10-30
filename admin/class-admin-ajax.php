@@ -14,6 +14,10 @@ namespace AceMedia\RedisCache;
 if (!defined('ABSPATH')) exit;
 
 class AdminAjax {
+    private function get_manage_capability() {
+        return SettingsStore::is_network_mode() ? 'manage_network_options' : 'manage_options';
+    }
+
     
     private $redis_connection;
     private $cache_manager;

@@ -216,7 +216,7 @@ class API_Handler {
         register_rest_route($this->namespace, '/status', [
             'methods' => 'GET',
             'callback' => [$this, 'get_simple_status'],
-            'permission_callback' => '__return_true'  // Temporary: make public for testing
+            'permission_callback' => [$this, 'check_simple_permissions']
         ]);
         
         // Simple metrics route for admin dashboard

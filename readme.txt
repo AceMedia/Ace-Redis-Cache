@@ -31,6 +31,14 @@ Open an issue on the plugin's GitHub repository.
 == Changelog ==
 
 = 0.8.15 =
+* Preserve foreign cache drop-ins and symlinks; atomically update ARC-owned files and retry failed upgrades.
+* Keep object-cache flushes and OPcache invalidation inside the site's own data and private code.
+* Use WordPress-managed admin assets and the WordPress 6.9 template enhancement buffer.
+* Validate admin requests, restore valid AJAX capability checks and restrict operational REST status to administrators.
+* Start new installations with caching disabled until configured, and allow activation without Redis.
+* Document external connections and compatibility; exclude standalone diagnostics from release packages.
+
+= 0.8.14 =
 * A maximum TTL now caps every object cache write, explicit expiries included: set, add, set_multiple, incr/decr and the shared transient path all store for at most the cap. The default is 86400 seconds, so a plugin's week-long transient lives for a day and cold keys stop crowding the working set out of a shared Redis. Set it per site with the Object Cache Max TTL setting (`object_cache_max_ttl`, 0 turns it off, otherwise 60 to 2592000) or `ACE_OC_MAX_TTL` in wp-config, which wins. The generation counter key is exempt and keeps no TTL.
 * A matching Page Cache Max TTL setting (`page_cache_max_ttl`) caps a page's Redis lifetime, fresh TTL plus stale-while-revalidate grace together. It is off (0) by default, since page TTLs are already short.
 
@@ -66,6 +74,6 @@ Full-page caching and standalone HTML minification require WordPress 6.9 or late
 
 Redis or Valkey is an administrator-configured cache service. ARC sends cache keys and the data being cached (which may include site content and WordPress object data) to the host and database you configure while caching is enabled. Install the PHP Redis extension before enabling a connection. No hosted Redis account is supplied or selected by this plugin. If using a hosted service, consult your chosen provider's terms and privacy policy before enabling it.
 
-Optional Varnish integration sends purge requests containing site URLs to the proxy explicitly configured by the administrator when cached content changes. Same-site warming requests public URLs on this site's configured address when enabled; it does not send content to an ARC-operated service. ARC has no telemetry and unconfigured activation does not contact an external service.
+Optional Varnish integration sends purge requests containing site hosts and URL patterns when cached content changes. By default it detects a local proxy at 127.0.0.1:6081; an administrator can override that address with ACE_RC_VARNISH_HOST or disable integration with ACE_RC_VARNISH=false. No remote proxy is selected automatically. Same-site warming requests public URLs on this site's configured address when enabled; it does not send content to an ARC-operated service. ARC has no telemetry and unconfigured activation does not contact an external service.
 
 JavaScript and CSS sources are included under assets/src. The source repository includes package.json and webpack.config.js for rebuilding the distributed assets with npm ci and npm run build.

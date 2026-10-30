@@ -1216,7 +1216,7 @@ class AceRedisCache {
             } elseif ($skip_cache && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP host={$req_host} reason=" . ($skip_cache_reason ?: 'mismatch') . " -->";
             } elseif ($is_first_pass && defined('WP_DEBUG') && WP_DEBUG) {
-                $content .= "\n<!-- AceRedisCache: first_pass_skip path_id={$path_id} -->";
+                $content .= "\n<!-- AceRedisCache: first_pass_skip -->";
             } elseif ($has_local_dev_refs && defined('WP_DEBUG') && WP_DEBUG) {
                 $content .= "\n<!-- AceRedisCache: page_cache=SKIP reason=local_dev_asset_reference -->";
             } elseif ($store_block_reason !== null && defined('WP_DEBUG') && WP_DEBUG) {

@@ -325,7 +325,7 @@ class RedisConnection {
         // Check for admin AJAX requests
         if (defined('DOING_AJAX') && DOING_AJAX) {
             // Check if it's an admin AJAX request
-            if (isset($_POST['action']) && strpos($_POST['action'], 'ace_redis_') === 0) {
+            if (isset($_POST['action']) && is_string($_POST['action']) && strpos(sanitize_key(wp_unslash($_POST['action'])), 'ace_redis_') === 0) {
                 return true;
             }
         }

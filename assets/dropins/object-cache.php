@@ -342,7 +342,7 @@ if (!class_exists('WP_Object_Cache')) {
                 strpos($request_uri, 'wp-admin/update-core.php') !== false ||
                 strpos($request_uri, 'wp-admin/update.php') !== false ||
                 isset($_GET['action']) && in_array($_GET['action'], ['update-plugin', 'update-theme', 'upgrade-plugin', 'upgrade-theme']) ||
-                (isset($_POST['action']) && strpos($_POST['action'], 'update') !== false)
+                (isset($_POST['action']) && is_string($_POST['action']) && strpos($_POST['action'], 'update') !== false)
             );
             
             $this->request_context = [

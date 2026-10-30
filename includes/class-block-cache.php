@@ -110,10 +110,14 @@ class BlockCache {
     /* ------------------------------------------------------------ boot */
 
     public static function runtime_available() {
-        foreach (['wp_interactivity', 'wp_interactivity_config', 'wp_interactivity_state', 'wp_enqueue_script_module', 'wp_unique_id', 'wp_unique_prefixed_id', 'get_self_link'] as $function) {
-            if (!function_exists($function)) return false;
-        }
-        return class_exists('WP_Style_Engine_CSS_Rules_Store');
+        return function_exists('wp_interactivity')
+            && function_exists('wp_interactivity_config')
+            && function_exists('wp_interactivity_state')
+            && function_exists('wp_enqueue_script_module')
+            && function_exists('wp_unique_id')
+            && function_exists('wp_unique_prefixed_id')
+            && function_exists('get_self_link')
+            && class_exists('WP_Style_Engine_CSS_Rules_Store');
     }
 
     public static function boot($plugin, $cache_manager, array $settings) {

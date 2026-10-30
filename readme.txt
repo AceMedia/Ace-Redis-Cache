@@ -31,6 +31,7 @@ Open an issue on the plugin's GitHub repository.
 == Changelog ==
 
 = 0.8.15 =
+* Never cache password-protected posts or responses marked private/no-store/no-cache; track cached singular URL variants for immediate privacy-change invalidation. A new page-key policy retires older cached HTML without flushing Redis or object data.
 * Preserve foreign cache drop-ins and symlinks; atomically update ARC-owned files and retry failed upgrades.
 * Keep object-cache flushes and OPcache invalidation inside the site's own data and private code.
 * Use WordPress-managed admin assets and the WordPress 6.9 template enhancement buffer.

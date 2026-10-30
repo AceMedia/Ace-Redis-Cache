@@ -93,6 +93,15 @@ class ReviewSafetyTest extends TestCase {
         $block = $reflection->newInstanceWithoutConstructor();
         $this->assertNull($block->pre_render(null, ['blockName' => 'core/query']));
     }
+    public function testSharedCacheRejectsPrivateResponseHeadersAndProtectedPosts() {
+        foreach (['Cache-Control: private', 'Cache-Control: public, no-store', 'Cache-Control: no-cache="Set-Cookie"', 'Set-Cookie: session=secret'] as $header) {
+            $this->assertTrue(\AceMedia\RedisCache\AceRedisCache::headers_disallow_shared_cache([$header]));
+        }
+        $this->assertFalse(\AceMedia\RedisCache\AceRedisCache::headers_disallow_shared_cache(['Cache-Control: public, max-age=300']));
+        $this->assertTrue(\AceMedia\RedisCache\AceRedisCache::post_allows_shared_cache((object) ['post_status' => 'publish', 'post_password' => '']));
+        $this->assertFalse(\AceMedia\RedisCache\AceRedisCache::post_allows_shared_cache((object) ['post_status' => 'publish', 'post_password' => 'secret']));
+        $this->assertFalse(\AceMedia\RedisCache\AceRedisCache::post_allows_shared_cache((object) ['post_status' => 'private', 'post_password' => '']));
+    }
     public function testStringHelperMatchesNativeEmptyPrefixBehaviour() {
         $this->assertTrue(StringHelper::starts_with('abc', ''));
         $this->assertTrue(StringHelper::starts_with('abc', 'ab'));

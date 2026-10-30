@@ -235,7 +235,7 @@ try {
         }
     }
 
-    $core_key = 'page_cache:' . $key_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version;
+    $core_key = 'page_cache:' . $key_uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $site_version . ':p2';
     if ($suffix !== '') {
         $core_key .= ':' . $suffix;
     }

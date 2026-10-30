@@ -27,6 +27,6 @@ class CacheKeyHostTest extends TestCase {
 
         $key = $method->invoke($instance, '/shop/', 'https', 'desktop', 7, 'Example.COM:8443');
 
-        $this->assertSame('page_cache:/shop/:https:desktop:example.com:v7', $key);
+        $this->assertSame('page_cache:/shop/:https:desktop:example.com:v7:p2', $key);
     }
 }

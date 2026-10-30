@@ -1015,6 +1015,10 @@ class AceRedisCache {
             return;
         }
         $this->page_cache_started = true;
+        if ($this->singular_response_is_private() || self::headers_disallow_shared_cache(headers_list())) {
+            if (!headers_sent()) header('X-AceRedisCache: BYPASS private');
+            return;
+        }
         if ($this->is_admin_auth_or_system_request()) {
             return;
         }
@@ -1203,7 +1207,7 @@ class AceRedisCache {
             $store_block_reason = $this->page_cache_store_block_reason($content);
 
             // Cache the content with intelligent minification handling
-            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content)) {
+            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content) && $this->register_singular_cache_path()) {
                 $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification, $this->page_cache_physical_ttl());
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
@@ -1250,7 +1254,10 @@ class AceRedisCache {
                         . ($this->dynamic_placeholder_stats['skipped_over_limit'] ? ' capped=1' : '') . ' -->';
                 }
             }
-            if (!headers_sent()) { header('X-AceRedisCache: MISS'); $this->emit_browser_cache_headers('miss', $cache_key); }
+            if (!headers_sent()) {
+                header('X-AceRedisCache: MISS');
+                if ($store_block_reason !== 'private_response' && $store_block_reason !== 'protected_post') $this->emit_browser_cache_headers('miss', $cache_key);
+            }
             // Compress final output if enabled before sending to client
             return $content;
         }, PHP_INT_MAX);
@@ -1391,7 +1398,62 @@ class AceRedisCache {
      * @param int|null $code    Override for the PHP-level status code (tests).
      * @return string|null Reason slug, or null to allow the store.
      */
+    private function singular_path_index_key($post_id) {
+        $host = $this->normalize_cache_host(wp_parse_url(home_url(), PHP_URL_HOST) ?: '');
+        return 'ace_rc:post_page_paths:' . $host . ':' . (int) $post_id;
+    }
+
+    private function register_singular_cache_path() {
+        $query = $this->main_query_or_null();
+        if (!$query || !$query->is_singular()) return true;
+        $post = $query->get_queried_object();
+        if (!self::post_allows_shared_cache($post)) return false;
+        try {
+            $redis = $this->cache_manager->get_raw_client();
+            if (!$redis || !method_exists($redis, 'rawCommand')) return false;
+            $key = $this->singular_path_index_key($post->ID);
+            $path = self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/');
+            // Bound attacker-controlled query variants. Never store an unindexed URL.
+            if ((int) $redis->rawCommand('SCARD', $key) >= 256 && !$redis->rawCommand('SISMEMBER', $key, $path)) return false;
+            if ($redis->rawCommand('SADD', $key, $path) === false) return false;
+            $index_ttl = max((int) $redis->rawCommand('TTL', $key), $this->page_cache_physical_ttl() + 60);
+            return $redis->rawCommand('EXPIRE', $key, (string) $index_ttl) !== false;
+        } catch (\Throwable $error) { return false; }
+    }
+
+    private function purge_recorded_post_paths($post_id) {
+        try {
+            $redis = $this->cache_manager->get_raw_client();
+            if (!$redis || !method_exists($redis, 'rawCommand')) return;
+            $key = $this->singular_path_index_key($post_id);
+            $paths = $redis->rawCommand('SMEMBERS', $key);
+            if (is_array($paths) && $paths) $this->invalidate_paths($paths);
+            // Keep the bounded index until its TTL so a subsequent retry can purge again.
+        } catch (\Throwable $error) {
+            if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace Redis Cache: protected post invalidation could not reach Redis.');
+        }
+    }
+
+    public static function headers_disallow_shared_cache(array $headers) {
+        foreach ($headers as $header) {
+            if (stripos($header, 'Set-Cookie:') === 0) return true;
+            if (stripos($header, 'Cache-Control:') === 0 && preg_match('/(?:^|[,\s:])(?:private|no-store|no-cache)(?:[=,\s]|$)/i', $header)) return true;
+        }
+        return false;
+    }
+
+    public static function post_allows_shared_cache($post) {
+        return is_object($post) && ($post->post_status ?? '') === 'publish' && empty($post->post_password);
+    }
+
+    private function singular_response_is_private() {
+        $query = $this->main_query_or_null();
+        return $query && $query->is_singular() && !self::post_allows_shared_cache($query->get_queried_object());
+    }
+
     private function page_cache_store_block_reason($content, $code = null) {
+        if ($this->singular_response_is_private()) return 'protected_post';
+        if (self::headers_disallow_shared_cache(headers_list())) return 'private_response';
         if (!is_string($content) || trim($content) === '') {
             return 'empty_body';
         }
@@ -1938,6 +2000,7 @@ class AceRedisCache {
             \wp_is_mobile() ? 'mobile' : 'desktop',
             $host,
             'v' . $version,
+            'p2', // Shared-cache privacy policy; old unclassified responses are never reused.
         ];
 
         $base_count = count($key_parts);
@@ -2095,6 +2158,7 @@ class AceRedisCache {
             $device,
             $host,
             'v' . (int) $version,
+            'p2',
         ];
 
         $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
@@ -2122,11 +2186,13 @@ class AceRedisCache {
      */
     public function purge_url($url) {
         $path = wp_parse_url((string) $url, PHP_URL_PATH) ?: '/';
-        if ($path === '') { $path = '/'; }
-        if ($path[0] !== '/') { $path = '/' . $path; }
-        $paths = [$path];
+        $query = wp_parse_url((string) $url, PHP_URL_QUERY);
+        $suffix = is_string($query) && $query !== '' ? '?' . $query : '';
+        if ($path[0] !== '/') $path = '/' . $path;
+        $paths = [self::normalize_request_uri($path . $suffix)];
         if ($path !== '/') {
-            $paths[] = substr($path, -1) === '/' ? rtrim($path, '/') : $path . '/';
+            $alternate = substr($path, -1) === '/' ? rtrim($path, '/') : $path . '/';
+            $paths[] = self::normalize_request_uri($alternate . $suffix);
         }
         return $this->invalidate_paths(array_unique($paths));
     }
@@ -2244,7 +2310,7 @@ class AceRedisCache {
             $uri = self::normalize_request_uri((string) $path);
             foreach (['http', 'https'] as $scheme) {
                 foreach (['desktop', 'mobile'] as $device) {
-                    $core = 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $version;
+                    $core = 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $version . ':p2';
                     if ((string) $suffix !== '') {
                         $core .= ':' . $suffix;
                     }
@@ -2574,6 +2640,14 @@ class AceRedisCache {
     public function on_post_updated($post_ID, $post_after, $post_before) {
         if (wp_is_post_revision($post_ID)) return;
         if (!$post_after || !$post_before) return; // need both snapshots
+        $privacy_changed = ($post_before->post_password ?? '') !== ($post_after->post_password ?? '')
+            || $post_before->post_status !== $post_after->post_status;
+        if ($privacy_changed && $this->cache_manager) {
+            $this->purge_recorded_post_paths($post_ID);
+            foreach (array_unique(array_filter([get_permalink($post_before), get_permalink($post_after), add_query_arg('p', (int) $post_ID, home_url('/')), add_query_arg('page_id', (int) $post_ID, home_url('/'))])) as $privacy_url) {
+                $this->purge_url($privacy_url);
+            }
+        }
         $was_published = ($post_before->post_status === 'publish');
         $is_published  = ($post_after->post_status === 'publish');
         if (!$was_published && !$is_published) return; // neither side published
@@ -2597,7 +2671,7 @@ class AceRedisCache {
         // redirect_canonical() to send guests to a non-public draft URL (404). Force immediate purge to prevent that.
         $critical_publish_transition = (!$was_published && $is_published);
         $slug_changed = ($post_before->post_name !== $post_after->post_name);
-        $force_immediate = apply_filters('ace_rc_force_immediate_invalidation_on_critical_change', ($critical_publish_transition || $slug_changed), $post_ID, $post_after, $post_before, $this->settings);
+        $force_immediate = apply_filters('ace_rc_force_immediate_invalidation_on_critical_change', ($critical_publish_transition || $slug_changed || $privacy_changed), $post_ID, $post_after, $post_before, $this->settings);
         if ($this->should_defer_post_invalidation() && !$force_immediate) {
             $this->enqueue_deferred_post($post_ID, ['page'=>true,'archives'=>true,'transients'=>true,'blocks_full'=>true]);
             $this->enqueue_sitemap_prime_for_post($post_ID, $post_after);
@@ -3289,7 +3363,7 @@ class AceRedisCache {
             return $this->build_page_cache_core_key($uri, $scheme, $device, null, $host);
         }
         list($version, $suffix) = $tokens[$host];
-        return 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . $version . ($suffix !== '' ? ':' . $suffix : '');
+        return 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . $version . ':p2' . ($suffix !== '' ? ':' . $suffix : '');
     }
 
     /** The raw "stored_at:fresh_until" marker beside a queued URL's page, or null. */

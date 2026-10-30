@@ -10,31 +10,31 @@ use AceMedia\RedisCache\VarnishBridge;
 
 class VarnishBridgeTest extends TestCase {
 
-    private function matches($path, $url) {
+    private function pathMatches($path, $url) {
         return (bool) preg_match('#' . str_replace('#', '\#', VarnishBridge::path_regex($path)) . '#', $url);
     }
 
     public function testPathRegexMatchesPageWithAndWithoutSlashOrQuery() {
         foreach (['/events/foo/', '/events/foo', '/events/foo/?utm=1', '/events/foo?x=y'] as $url) {
-            $this->assertTrue($this->matches('/events/foo/', $url), $url);
+            $this->assertTrue($this->pathMatches('/events/foo/', $url), $url);
         }
     }
 
     public function testPathRegexDoesNotMatchOtherPages() {
         foreach (['/events/foo-bar/', '/events/foo/child/', '/x/events/foo/'] as $url) {
-            $this->assertFalse($this->matches('/events/foo/', $url), $url);
+            $this->assertFalse($this->pathMatches('/events/foo/', $url), $url);
         }
     }
 
     public function testHomeOnlyMatchesHome() {
-        $this->assertTrue($this->matches('/', '/'));
-        $this->assertTrue($this->matches('/', '/?s=x'));
-        $this->assertFalse($this->matches('/', '/about/'));
+        $this->assertTrue($this->pathMatches('/', '/'));
+        $this->assertTrue($this->pathMatches('/', '/?s=x'));
+        $this->assertFalse($this->pathMatches('/', '/about/'));
     }
 
     public function testRegexCharactersInPathAreEscaped() {
-        $this->assertTrue($this->matches('/a.b+c/', '/a.b+c/'));
-        $this->assertFalse($this->matches('/a.b+c/', '/axbbc/'));
+        $this->assertTrue($this->pathMatches('/a.b+c/', '/a.b+c/'));
+        $this->assertFalse($this->pathMatches('/a.b+c/', '/axbbc/'));
     }
 
     public function testUnsafePathsAreRejected() {

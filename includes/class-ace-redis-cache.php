@@ -113,7 +113,7 @@ class AceRedisCache {
             // Back-compat defaults
             'ttl' => 3600,
             'mode' => 'full',
-            'enabled' => 1,
+            'enabled' => 0,
             'enable_tls' => 0, // Changed default to 0 (disabled)
             'enable_transient_cache' => 0,
             'enable_admin_optimization' => 1,  // Skip expensive operations in admin
@@ -190,7 +190,7 @@ class AceRedisCache {
             // Back-compat defaults
             'ttl' => 3600,
             'mode' => 'full',
-            'enabled' => 1,
+            'enabled' => 0,
             'enable_tls' => 0,
             'enable_transient_cache' => 0,
             'enable_admin_optimization' => 1,  // Skip expensive operations in admin
@@ -1008,6 +1008,8 @@ class AceRedisCache {
      * Start full page cache output buffering
      */
     public function start_full_page_cache() {
+        // WordPress owns the complete response buffer from 6.9 onward.
+        if (!function_exists('wp_start_template_enhancement_output_buffer')) return;
         if ($this->page_cache_started) {
             return;
         }
@@ -1115,7 +1117,7 @@ class AceRedisCache {
         }
         
         // Start output buffering
-        ob_start(function($content) use ($cache_key) {
+        add_filter('wp_template_enhancement_output_buffer', function($content) use ($cache_key) {
             // Canonical host enforcement & poison prevention
             $home_host = parse_url(home_url(), PHP_URL_HOST);
             $req_host = $_SERVER['HTTP_HOST'] ?? $home_host;
@@ -1248,9 +1250,8 @@ class AceRedisCache {
             }
             if (!headers_sent()) { header('X-AceRedisCache: MISS'); $this->emit_browser_cache_headers('miss', $cache_key); }
             // Compress final output if enabled before sending to client
-            $content = $this->maybe_recompress_for_output($content);
             return $content;
-        });
+        }, PHP_INT_MAX);
     }
 
     /**
@@ -4328,7 +4329,7 @@ class AceRedisCache {
                 'password' => '',
                 'ttl' => 3600,
                 'mode' => 'full',
-                'enabled' => 1,
+                'enabled' => 0,
                 'enable_tls' => 0,
                 'enable_transient_cache' => 0,
                 'enable_minification' => 0,
@@ -4373,21 +4374,9 @@ class AceRedisCache {
             }
         }
         
-        // Skip Redis connection test during activation if components weren't initialized
-        // (This prevents timeout issues during activation)
-        if ($this->redis_connection) {
-            $status = $this->redis_connection->get_status();
-            if (!$status['connected']) {
-                wp_die(
-                    'Ace Redis Cache activation failed: Unable to connect to Redis server. Please check your Redis configuration.',
-                    'Plugin Activation Error',
-                    ['back_link' => true]
-                );
-            }
-        } else {
-            // Redis connection wasn't initialized (likely due to activation safety check)
-            // Plugin will initialize properly on next request
-        }
+        // Configuration and connection checks belong to the settings screen. Activation
+        // must succeed without a running Redis server and makes no new connection.
+
     }
     
     /**

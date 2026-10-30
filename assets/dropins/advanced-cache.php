@@ -10,6 +10,9 @@ if (!defined('ABSPATH')) {
     return;
 }
 
+// Older WordPress versions use live page rendering; never replay an old stored page.
+if (empty($GLOBALS['wp_version']) || version_compare($GLOBALS['wp_version'], '6.9', '<')) return;
+
 if (php_sapi_name() === 'cli') {
     return;
 }

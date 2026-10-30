@@ -59,3 +59,13 @@ Open an issue on the plugin's GitHub repository.
 
 = 0.8.5 =
 * Initial public release.
+
+== Compatibility and external services ==
+
+Full-page caching and standalone HTML minification require WordPress 6.9 or later. ARC uses WordPress's template enhancement buffer and never leaves its own response buffer open. On WordPress 5.0 to 6.8 pages render live; object, transient and block caches remain available. Existing page-cache settings are retained for a later WordPress upgrade. Response compression is left to the web server for freshly rendered pages so other HTML filters receive HTML rather than compressed bytes.
+
+Redis or Valkey is an administrator-configured cache service. ARC sends cache keys and the data being cached (which may include site content and WordPress object data) to the host and database you configure while caching is enabled. Install the PHP Redis extension before enabling a connection. No hosted Redis account is supplied or selected by this plugin. If using a hosted service, consult your chosen provider's terms and privacy policy before enabling it.
+
+Optional Varnish integration sends purge requests containing site URLs to the proxy explicitly configured by the administrator when cached content changes. Same-site warming requests public URLs on this site's configured address when enabled; it does not send content to an ARC-operated service. ARC has no telemetry and unconfigured activation does not contact an external service.
+
+JavaScript and CSS sources are included under assets/src. The source repository includes package.json and webpack.config.js for rebuilding the distributed assets with npm ci and npm run build.

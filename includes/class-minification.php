@@ -50,7 +50,9 @@ class Minification {
             return;
         }
         
-        ob_start([$this, 'minify_output']);
+        if (function_exists('wp_start_template_enhancement_output_buffer')) {
+            add_filter('wp_template_enhancement_output_buffer', [$this, 'minify_output'], 20);
+        }
     }
     
     /**

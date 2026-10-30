@@ -1576,7 +1576,7 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         /**
-         * Flush everything in our namespace. If ACE_OC_FLUSHDB_ON_SAVE is true, flush the entire DB.
+         * Flush only our namespace. The legacy ACE_OC_FLUSHDB_ON_SAVE constant is ignored.
          * 
          * @param bool $force Force flush even during bypass mode
          */
@@ -1594,11 +1594,6 @@ if (!class_exists('WP_Object_Cache')) {
             $this->reset_runtime();
             $respect_bypass = !$this->suspend_persistent_writes;
             if ((!$force && $this->bypass && $respect_bypass) || $this->redis === null) return true;
-
-            if (defined('ACE_OC_FLUSHDB_ON_SAVE') && ACE_OC_FLUSHDB_ON_SAVE) {
-                try { $this->redis->flushDB(); } catch (\Throwable $e) {}
-                return true;
-            }
 
             // Generation flush (#27): one INCR; old keys expire by TTL or the daily purge.
             if ($this->bump_generation()) {

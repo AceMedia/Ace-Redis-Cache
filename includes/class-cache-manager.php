@@ -111,7 +111,7 @@ class CacheManager {
             $lines = explode("\n", $custom_exclusions);
             foreach ($lines as $line) {
                 $line = trim($line);
-                if (!empty($line) && !str_starts_with($line, '#')) {
+                if (!empty($line) && !StringHelper::starts_with($line, '#')) {
                     $exclusions[] = $line;
                 }
             }
@@ -134,7 +134,7 @@ class CacheManager {
             $lines = explode("\n", $custom_exclusions);
             foreach ($lines as $line) {
                 $line = trim($line);
-                if (!empty($line) && !str_starts_with($line, '#')) {
+                if (!empty($line) && !StringHelper::starts_with($line, '#')) {
                     $exclusions[] = $line;
                 }
             }
@@ -165,7 +165,7 @@ class CacheManager {
             $lines = explode("\n", $custom_exclusions);
             foreach ($lines as $line) {
                 $line = trim($line);
-                if (!empty($line) && !str_starts_with($line, '#')) {
+                if (!empty($line) && !StringHelper::starts_with($line, '#')) {
                     $exclusions[] = $line;
                 }
             }
@@ -1296,7 +1296,7 @@ class CacheManager {
             if (!$logged_once && (defined('WP_DEBUG') && WP_DEBUG)) { $logged_once = true; error_log('Ace-Redis-Cache: gzip decompress failed; serving raw.'); }
             return $data;
         }
-        if (str_starts_with($stored, 'raw:')) {
+        if (StringHelper::starts_with($stored, 'raw:')) {
             return substr($stored, 4);
         }
         // Foreign format: a value cache-manager wrote ALWAYS carries a br:/gz:/raw: marker (or the

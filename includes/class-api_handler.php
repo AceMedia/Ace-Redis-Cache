@@ -434,14 +434,9 @@ class API_Handler {
                 continue;
             }
 
-            $backup = $target . '.bak.' . gmdate('YmdHis');
-            if (file_exists($target) && !@copy($target, $backup)) {
-                $errors[] = sprintf('Failed to create backup for %s.', $status['label']);
-                continue;
-            }
-
-            if (!@copy($source, $target)) {
-                $errors[] = sprintf('Failed to update %s.', $status['label']);
+            $signature = $type === 'object' ? 'Ace Redis Cache Drop-In' : 'Ace Redis Cache advanced-cache drop-in';
+            if (!DropinManager::manage($source, $target, $signature, true)) {
+                $errors[] = sprintf('Unable to safely update %s; check ownership and directory permissions.', $status['label']);
                 continue;
             }
 
@@ -490,14 +485,11 @@ class API_Handler {
         if (empty($current['enable_opcache_helpers'])) {
             return new \WP_REST_Response(['success' => false, 'message' => 'OPcache helpers disabled'], 400);
         }
-        $ok = false;
-        if (function_exists('opcache_reset')) {
-            $ok = @opcache_reset();
-        }
+        $ok = OpcacheHelper::invalidate_private_scripts();
         return new \WP_REST_Response([
             'success' => (bool)$ok,
             'action' => 'reset',
-            'message' => $ok ? 'OPcache reset executed' : 'OPcache reset unavailable'
+            'message' => $ok ? 'Site OPcache invalidation completed' : 'Site OPcache invalidation unavailable'
         ], $ok ? 200 : 500);
     }
 
@@ -527,7 +519,7 @@ class API_Handler {
     public function opcache_status_route($request) {
         $data = [
             'enabled' => false,
-            'can_reset' => function_exists('opcache_reset'),
+            'can_reset' => function_exists('opcache_invalidate'),
             'can_compile' => function_exists('opcache_compile_file'),
             'memory_used' => null,
             'memory_free' => null,

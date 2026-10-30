@@ -158,7 +158,7 @@ class Minification {
         $patterns = explode("\n", $exclusions);
         foreach ($patterns as $pattern) {
             $pattern = trim($pattern);
-            if (!empty($pattern) && !str_starts_with($pattern, '#')) {
+            if (!empty($pattern) && !StringHelper::starts_with($pattern, '#')) {
                 if (strpos($html, $pattern) !== false) {
                     return true;
                 }

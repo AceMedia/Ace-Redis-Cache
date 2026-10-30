@@ -24,13 +24,6 @@ define('ACE_REDIS_CACHE_PLUGIN_FILE', __FILE__);
 define('ACE_REDIS_CACHE_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('ACE_REDIS_CACHE_PLUGIN_URL', plugin_dir_url(__FILE__));
 
-// Polyfill for PHP < 8.0
-if (!function_exists('str_starts_with')) {
-    function str_starts_with($haystack, $needle) {
-        return (string)$needle !== '' && strncmp($haystack, $needle, strlen($needle)) === 0;
-    }
-}
-
 /**
  * Main plugin bootstrap class
  */

@@ -1631,7 +1631,7 @@ class AceRedisCache {
             $lines = preg_split('/\n+/', $raw);
             foreach ($lines as $line) {
                 $line = trim($line);
-                if ($line === '' || str_starts_with($line, '#')) continue;
+                if ($line === '' || StringHelper::starts_with($line, '#')) continue;
                 $patterns[] = $line;
             }
         }
@@ -1843,7 +1843,7 @@ class AceRedisCache {
             $lines = explode("\n", $this->settings['excluded_blocks']);
             foreach ($lines as $line) {
                 $line = trim($line);
-                if ($line !== '' && !str_starts_with($line, '#')) { $patterns[] = $line; }
+                if ($line !== '' && !StringHelper::starts_with($line, '#')) { $patterns[] = $line; }
             }
         }
         foreach ($patterns as $pattern) {
@@ -2317,10 +2317,7 @@ class AceRedisCache {
     /** Optionally reset OPcache (if enabled in settings) after settings change or manual call */
     public function maybe_opcache_reset() {
         if (!$this->opcache_runtime_enabled) return false;
-        if (function_exists('opcache_reset')) {
-            return @opcache_reset();
-        }
-        return false;
+        return OpcacheHelper::invalidate_private_scripts();
     }
 
     /** Optionally precompile a small list of hot files (index, theme functions) */
@@ -4631,69 +4628,9 @@ class AceRedisCache {
      */
     private function maybe_manage_dropin() {
         $enabled = (bool)($this->settings['enable_object_cache_dropin'] ?? 0);
-        $content_dir = defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : WP_CONTENT_DIR; // WP sets this
-        $dropin_target = trailingslashit($content_dir) . 'object-cache.php';
-        $dropin_source = trailingslashit($this->plugin_path) . '/assets/dropins/object-cache.php';
-        $did_install_or_remove = false; // track change for wp_cache_flush()
-
-        if ($enabled) {
-            // Ensure source exists; if not, provide guidance via error_log
-            if (!file_exists($dropin_source)) {
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('Ace-Redis-Cache: drop-in source not found: ' . $dropin_source);
-                }
-                return;
-            }
-            $need_copy = true;
-            $existing_is_ours = false;
-            $existing_same_hash = false;
-            if (file_exists($dropin_target)) {
-                $existing = @file_get_contents($dropin_target);
-                if (is_string($existing)) {
-                    $existing_is_ours = strpos($existing, 'Ace Redis Cache Drop-In') !== false;
-                    $src_hash = @md5_file($dropin_source);
-                    $tgt_hash = md5($existing);
-                    if ($src_hash && $tgt_hash && $src_hash === $tgt_hash) {
-                        $existing_same_hash = true;
-                    }
-                }
-            }
-            if ($existing_is_ours && $existing_same_hash) {
-                // Already deployed and identical — nothing to do
-                $need_copy = false;
-            }
-            if ($need_copy) {
-                if (!@copy($dropin_source, $dropin_target)) {
-                    $msg = 'Ace-Redis-Cache: Failed to deploy object-cache.php. Try manually: '
-                        . 'cp ' . escapeshellarg($dropin_source) . ' ' . escapeshellarg($dropin_target);
-                    if (defined('WP_DEBUG') && WP_DEBUG) { error_log($msg); }
-                    // Persist so the admin sees why the object cache never activated.
-                    set_transient('ace_redis_dropin_error', $msg, DAY_IN_SECONDS);
-                } else {
-                    $did_install_or_remove = true;
-                    delete_transient('ace_redis_dropin_error');
-                }
-            } else {
-                // Already correctly deployed — clear any stale failure flag.
-                delete_transient('ace_redis_dropin_error');
-            }
-        } else {
-            // Remove drop-in if we own it (basic heuristic: look for our signature header)
-            if (file_exists($dropin_target)) {
-                $contents = @file_get_contents($dropin_target);
-                if ($contents !== false && strpos($contents, 'Ace Redis Cache Drop-In') !== false) {
-                    if (!@unlink($dropin_target)) {
-                        $msg = 'Ace-Redis-Cache: Failed to remove object-cache.php. Try manually:\n'
-                            . 'rm ' . escapeshellarg($dropin_target);
-                        if (defined('WP_DEBUG') && WP_DEBUG) { error_log($msg); }
-                    } else { $did_install_or_remove = true; }
-                }
-            }
-        }
-        // If a drop-in was installed or removed during this settings change request, flush object cache once.
-        if ($did_install_or_remove && function_exists('wp_cache_flush')) {
-            @wp_cache_flush();
-        }
+        $ok = DropinManager::manage($this->plugin_path . '/assets/dropins/object-cache.php', WP_CONTENT_DIR . '/object-cache.php', 'Ace Redis Cache Drop-In', $enabled);
+        if ($ok) delete_transient('ace_redis_dropin_error');
+        else set_transient('ace_redis_dropin_error', 'The object-cache.php file could not be updated. Check directory permissions and remove another cache plugin through its own settings first. Symlinks and foreign drop-ins are preserved.', DAY_IN_SECONDS);
     }
 
     /**
@@ -4718,44 +4655,7 @@ class AceRedisCache {
      */
     private function maybe_manage_advanced_dropin() {
         $enabled = !empty($this->settings['enable_page_cache']);
-        $content_dir = defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : WP_CONTENT_DIR;
-        $dropin_target = trailingslashit($content_dir) . 'advanced-cache.php';
-        $dropin_source = trailingslashit($this->plugin_path) . '/assets/dropins/advanced-cache.php';
-
-        if ($enabled) {
-            if (!file_exists($dropin_source)) {
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('Ace-Redis-Cache: advanced drop-in source not found: ' . $dropin_source);
-                }
-                return;
-            }
-
-            $need_copy = true;
-            if (file_exists($dropin_target)) {
-                $existing = @file_get_contents($dropin_target);
-                if (is_string($existing) && strpos($existing, 'Ace Redis Cache advanced-cache drop-in') !== false) {
-                    $src_hash = @md5_file($dropin_source);
-                    $tgt_hash = md5($existing);
-                    if ($src_hash && $tgt_hash && $src_hash === $tgt_hash) {
-                        $need_copy = false;
-                    }
-                }
-            }
-
-            if ($need_copy && !@copy($dropin_source, $dropin_target) && defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('Ace-Redis-Cache: Failed to deploy advanced-cache.php');
-            }
-            return;
-        }
-
-        if (file_exists($dropin_target)) {
-            $contents = @file_get_contents($dropin_target);
-            if ($contents !== false && strpos($contents, 'Ace Redis Cache advanced-cache drop-in') !== false) {
-                if (!@unlink($dropin_target) && defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('Ace-Redis-Cache: Failed to remove advanced-cache.php');
-                }
-            }
-        }
+        DropinManager::manage($this->plugin_path . '/assets/dropins/advanced-cache.php', WP_CONTENT_DIR . '/advanced-cache.php', 'Ace Redis Cache advanced-cache drop-in', $enabled);
     }
 
     /**
@@ -4991,7 +4891,7 @@ class AceRedisCache {
     }
 
     private function build_image_cache_busted_url($url) {
-        if (!is_string($url) || $url === '' || str_starts_with($url, 'data:')) {
+        if (!is_string($url) || $url === '' || StringHelper::starts_with($url, 'data:')) {
             return null;
         }
 
@@ -5033,7 +4933,7 @@ class AceRedisCache {
             return $asset;
         }
 
-        if (!str_starts_with($asset, '/')) {
+        if (!StringHelper::starts_with($asset, '/')) {
             return null;
         }
 
@@ -5079,17 +4979,17 @@ class AceRedisCache {
         $core = $core_cache;
         $candidates = [];
 
-        if (str_starts_with($path, '/assets/') || str_starts_with($path, '/core/')) {
+        if (StringHelper::starts_with($path, '/assets/') || StringHelper::starts_with($path, '/core/')) {
             $candidates[] = $root . $path;
         }
-        if (str_starts_with($path, '/wp-includes/') || str_starts_with($path, '/wp-admin/') || str_starts_with($path, '/wp-content/')) {
+        if (StringHelper::starts_with($path, '/wp-includes/') || StringHelper::starts_with($path, '/wp-admin/') || StringHelper::starts_with($path, '/wp-content/')) {
             $candidates[] = $core . $path;
         }
         $candidates[] = $root . $path;
 
         foreach (array_unique($candidates) as $candidate) {
             $real = realpath($candidate);
-            if ($real && is_file($real) && (str_starts_with($real, $root . '/') || $real === $root)) {
+            if ($real && is_file($real) && (StringHelper::starts_with($real, $root . '/') || $real === $root)) {
                 $mime = $this->get_asset_proxy_mime_type($real);
                 return $resolve_cache[$asset] = [
                     'file' => $real,
@@ -5254,7 +5154,7 @@ class AceRedisCache {
     }
 
     private function append_static_asset_version($url) {
-        if (!is_string($url) || $url === '' || str_starts_with($url, 'data:')) {
+        if (!is_string($url) || $url === '' || StringHelper::starts_with($url, 'data:')) {
             return $url;
         }
 

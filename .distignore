@@ -29,3 +29,6 @@
 /CHANGELOG.md
 /TODO.md
 *.map
+
+/cache-monitor.php
+/test-cache-performance.php

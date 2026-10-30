@@ -4,6 +4,8 @@
  * Run this to test cache performance improvements
  */
 
+if (PHP_SAPI !== 'cli') { http_response_code(403); exit; }
+
 // Load WordPress
 define('WP_USE_THEMES', false);
 require_once(__DIR__ . '/../../../core/wp-load.php');

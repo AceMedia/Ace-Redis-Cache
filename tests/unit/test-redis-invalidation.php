@@ -81,15 +81,15 @@ class RedisInvalidationTest extends TestCase {
     }
 
     public function testKeysPerPathAndLegacyDuplicatesDropped() {
-        // Two versions: 2 x 2 x 2 x 2 versioned keys plus the 3 legacy keys per scheme and
-        // device once (they are identical for both versions), so 28 rather than 40.
+        // Two versions include raw/minified/direct copies and freshness markers,
+        // with the unversioned legacy candidates deduplicated.
         $keys = AceRedisCache::page_keys_for_cores($this->cores('/a/', [7, 6]));
-        $this->assertSame(28, count($keys));
+        $this->assertSame(48, count($keys));
         $this->assertSame(count($keys), count(array_unique($keys)));
         $this->assertContains('page_cache_min:page_cache:acetest:/a/:https:mobile:example.com:v6', $keys);
         $this->assertContains('page_cache:acetest:/a/:http:desktop:example.com', $keys);
-        // One version: 5 keys per scheme and device.
-        $this->assertSame(20, count(AceRedisCache::page_keys_for_cores($this->cores('/a/', [0]))));
+        // One version: 8 keys per scheme and device.
+        $this->assertSame(32, count(AceRedisCache::page_keys_for_cores($this->cores('/a/', [0]))));
     }
 
     public function testOnePathIsOneRoundTripOfSingleKeyUnlinks() {

@@ -17,7 +17,7 @@ spl_autoload_register(function ($class) {
 function plugin_basename($file) { return basename(dirname($file)) . '/' . basename($file); }
 define('ACE_OC_FLUSHDB_ON_SAVE', true);
 
-define('ACE_REDIS_CACHE_VERSION', '0.8.15');
+define('ACE_REDIS_CACHE_VERSION', '0.8.16');
 
 function wp_parse_url($url, $component = -1) { return parse_url($url, $component); }
 function wp_rand($min = 0, $max = 0) { return $max ? random_int($min, $max) : random_int(0, PHP_INT_MAX); }

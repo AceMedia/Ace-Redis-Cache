@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.15
+Stable tag: 0.8.16
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -28,7 +28,17 @@ Includes a Redis object cache drop-in, an advanced-cache page cache drop-in, a b
 
 Open an issue on the plugin's GitHub repository.
 
+= What does clearing a URL remove? =
+
+Clearing a URL with meaningful query parameters removes that exact normalised query, including its trailing-slash alternative. Tracking parameters are ignored. Clearing a clean path removes its recorded query variants too; clearing the clean root therefore includes plain-permalink variants such as `/?p=123`. A post edit uses the post's own recorded URLs to avoid clearing other plain-permalink posts unnecessarily.
+
+The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
+
 == Changelog ==
+
+= 0.8.16 =
+* Clear retained query variants when a clean page or related archive is invalidated. Exact query URLs remain targeted.
+* Bound the per-site path registry and refuse unindexed stores; retire older unindexed page entries without flushing object caches.
 
 = 0.8.15 =
 * Never cache password-protected posts or responses marked private/no-store/no-cache; track cached singular URL variants for immediate privacy-change invalidation. A new page-key policy retires older cached HTML without flushing Redis or object data.

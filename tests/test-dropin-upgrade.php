@@ -1,7 +1,7 @@
 <?php
 /** Version-only migration with William-shaped legacy settings; no live WordPress. */
 define('ABSPATH', __DIR__ . '/');
-define('ACE_REDIS_CACHE_VERSION', '0.8.15');
+define('ACE_REDIS_CACHE_VERSION', '0.8.16');
 $dir = sys_get_temp_dir() . '/arc-upgrade-' . bin2hex(random_bytes(8));
 mkdir($dir);
 define('WP_CONTENT_DIR', $dir);

@@ -28,7 +28,7 @@ class AceRedisCache {
     
     private $plugin_url;
     private $plugin_path; // define to avoid dynamic property deprecation
-    private $plugin_version = '0.8.15';
+    private $plugin_version = '0.8.16';
     // Debug tracking for transient flag mutation during save
     private $debug_pre_update_transient_early = null;
     
@@ -1207,7 +1207,7 @@ class AceRedisCache {
             $store_block_reason = $this->page_cache_store_block_reason($content);
 
             // Cache the content with intelligent minification handling
-            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content) && $this->register_singular_cache_path()) {
+            if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content) && $this->register_page_cache_path() && $this->register_singular_cache_path()) {
                 $this->cache_manager->set_with_minification($cache_key, $cache_version, $this->minification, $this->page_cache_physical_ttl());
                 // Store precise stored_at meta side key (sparse small JSON)
                 try {
@@ -1398,8 +1398,14 @@ class AceRedisCache {
      * @param int|null $code    Override for the PHP-level status code (tests).
      * @return string|null Reason slug, or null to allow the store.
      */
+    private function register_page_cache_path() {
+        try {
+            return PagePathIndex::register($this->cache_manager->get_raw_client(), home_url(), self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->page_cache_physical_ttl());
+        } catch (\Throwable $error) { return false; }
+    }
+
     private function singular_path_index_key($post_id) {
-        return $this->site_scoped_key('ace_rc:post_page_paths') . ':' . (int) $post_id;
+        return $this->site_scoped_key('ace_rc:post_page_paths_v3') . ':' . (int) $post_id;
     }
 
     private function register_singular_cache_path() {
@@ -1412,12 +1418,7 @@ class AceRedisCache {
             if (!$redis || !method_exists($redis, 'rawCommand')) return false;
             $key = $this->singular_path_index_key($post->ID);
             $path = self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/');
-            // Bound attacker-controlled query variants. Never store an unindexed URL.
-            if ((int) $redis->rawCommand('SCARD', $key) >= 256 && !$redis->rawCommand('SISMEMBER', $key, $path)) return false;
-            if ($redis->rawCommand('SADD', $key, $path) === false) return false;
-            $index_ttl = max((int) $redis->rawCommand('TTL', $key), $this->page_cache_physical_ttl() + 60);
-            $expiry_set = $redis->rawCommand('EXPIRE', $key, (string) $index_ttl);
-            return $expiry_set === true || $expiry_set === 1;
+            return PagePathIndex::register($redis, home_url(), $path, $this->page_cache_physical_ttl(), $key);
         } catch (\Throwable $error) { return false; }
     }
 
@@ -1426,7 +1427,7 @@ class AceRedisCache {
             $redis = $this->cache_manager->get_raw_client();
             if (!$redis || !method_exists($redis, 'rawCommand')) return;
             $key = $this->singular_path_index_key($post_id);
-            $paths = $redis->rawCommand('SMEMBERS', $key);
+            $paths = $redis->rawCommand('ZRANGE', $key, '0', (string) (PagePathIndex::LIMIT - 1));
             if (is_array($paths) && $paths) $this->invalidate_paths($paths);
             // Keep the bounded index until its TTL so a subsequent retry can purge again.
         } catch (\Throwable $error) {
@@ -2000,7 +2001,7 @@ class AceRedisCache {
             \wp_is_mobile() ? 'mobile' : 'desktop',
             $host,
             'v' . $version,
-            'p2', // Shared-cache privacy policy; old unclassified responses are never reused.
+            'p3', // Indexed page policy; old unindexed responses are never reused.
         ];
 
         $base_count = count($key_parts);
@@ -2158,7 +2159,7 @@ class AceRedisCache {
             $device,
             $host,
             'v' . (int) $version,
-            'p2',
+            'p3',
         ];
 
         $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
@@ -2184,15 +2185,31 @@ class AceRedisCache {
      * plugins (Ace Taxonomy Tools retired archives, Ace Ads Manager) can purge a
      * URL without knowing how keys are built.
      */
-    public function purge_url($url) {
-        $path = wp_parse_url((string) $url, PHP_URL_PATH) ?: '/';
-        $query = wp_parse_url((string) $url, PHP_URL_QUERY);
-        $suffix = is_string($query) && $query !== '' ? '?' . $query : '';
+    private function local_purge_path($url) {
+        if (!is_string($url) || $url === '') return null;
+        $parts = wp_parse_url($url);
+        $home = wp_parse_url(home_url());
+        if ($parts === false || isset($parts['user']) || isset($parts['pass'])) return null;
+        if (isset($parts['host']) && (strtolower($parts['host']) !== strtolower($home['host'] ?? '') || ($parts['port'] ?? null) !== ($home['port'] ?? null))) return null;
+        if (isset($parts['scheme']) && !in_array(strtolower($parts['scheme']), ['http', 'https'], true)) return null;
+        $path = $parts['path'] ?? '/';
+        if ($path === '') $path = '/';
         if ($path[0] !== '/') $path = '/' . $path;
-        $paths = [self::normalize_request_uri($path . $suffix)];
+        $base = rtrim($home['path'] ?? '', '/');
+        if ($base !== '' && $path !== $base && strpos($path, $base . '/') !== 0) return null;
+        $query = $parts['query'] ?? '';
+        return self::normalize_request_uri($path . ($query !== '' ? '?' . $query : ''));
+    }
+
+    public function purge_url($url) {
+        $uri = $this->local_purge_path($url);
+        if ($uri === null) return 0;
+        list($path, $query) = array_pad(explode('?', $uri, 2), 2, '');
+        $suffix = $query !== '' ? '?' . $query : '';
+        $paths = [$uri];
         if ($path !== '/') {
             $alternate = substr($path, -1) === '/' ? rtrim($path, '/') : $path . '/';
-            $paths[] = self::normalize_request_uri($alternate . $suffix);
+            $paths[] = $alternate . $suffix;
         }
         return $this->invalidate_paths(array_unique($paths));
     }
@@ -2205,6 +2222,7 @@ class AceRedisCache {
         if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
             $redis = $this->cache_manager->get_raw_client();
         }
+        $paths = PagePathIndex::expand($redis, home_url(), $paths);
         $deleted = $this->delete_page_keys($this->page_invalidation_keys($paths), $redis, 'path invalidation');
         $deleted += $this->invalidate_early_serve_paths($paths, $redis);
         do_action('ace_rc_paths_invalidated', $paths, $deleted);
@@ -2240,7 +2258,7 @@ class AceRedisCache {
         foreach ($cores as $pair) {
             list($core, $ver) = $pair;
             $legacy_core = str_replace(':v' . (int) $ver, '', $core);
-            foreach (['page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core] as $k) {
+            foreach (['page_cache:' . $core, 'page_cache_min:' . $core, $legacy_core, 'page_cache:' . $legacy_core, 'page_cache_min:' . $legacy_core, $core, 'ace:1:fresh:' . $core, 'ace:1:fresh:' . $legacy_core] as $k) {
                 $keys[$k] = true;
             }
         }
@@ -2310,7 +2328,7 @@ class AceRedisCache {
             $uri = self::normalize_request_uri((string) $path);
             foreach (['http', 'https'] as $scheme) {
                 foreach (['desktop', 'mobile'] as $device) {
-                    $core = 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $version . ':p2';
+                    $core = 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . (int) $version . ':p3';
                     if ((string) $suffix !== '') {
                         $core .= ':' . $suffix;
                     }
@@ -2328,14 +2346,15 @@ class AceRedisCache {
         if (isset($processed[$post_id])) {
             return; // already handled this post in current request (prevents double from status + save_post)
         }
+        $this->purge_recorded_post_paths($post_id);
         $permalink = get_permalink($post_id);
         if (!$permalink) return;
-        $path = wp_parse_url($permalink, PHP_URL_PATH) ?: '/';
+        $path = self::normalize_request_uri((wp_parse_url($permalink, PHP_URL_PATH) ?: '/') . (($query = wp_parse_url($permalink, PHP_URL_QUERY)) ? '?' . $query : ''));
         if ($path === '') { $path = '/'; }
         if ($path[0] !== '/') { $path = '/' . $path; }
         $paths = [$path];
-        // Add with / without trailing slash variants
-        if ($path !== '/') {
+        // Query permalinks are exact targets; adding a slash after their query changes identity.
+        if ($path !== '/' && strpos($path, '?') === false) {
             if (substr($path, -1) === '/') {
                 $paths[] = rtrim($path, '/');
             } else {
@@ -2348,7 +2367,7 @@ class AceRedisCache {
         if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
             $redis = $this->cache_manager->get_raw_client();
         }
-        $deleted = $redis ? $this->delete_page_keys($this->page_invalidation_keys($paths), $redis, 'post cache invalidation') : 0;
+        $deleted = $this->invalidate_paths($paths);
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log("AceRedisCache invalidated page cache for post $post_id (deleted_keys=$deleted paths=" . count($paths) . ")");
         }
@@ -2597,41 +2616,7 @@ class AceRedisCache {
         // Allow external filters to adjust
         $paths = apply_filters('ace_rc_post_archive_invalidation_paths', $paths, $post_id, $post, $this->settings);
         if (empty($paths)) return;
-        $schemes = ['http','https'];
-        $devices = ['desktop','mobile'];
-        $redis = $this->cache_manager && method_exists($this->cache_manager, 'get_raw_client') ? $this->cache_manager->get_raw_client() : null;
-        $deleted = 0; $examined = 0;
-        foreach ($paths as $p) {
-            foreach ($schemes as $scheme) {
-                foreach ($devices as $device) {
-                    $core = $this->build_page_cache_core_key($p, $scheme, $device);
-                    $raw_key = 'page_cache:' . $core;
-                    $min_key = 'page_cache_min:' . $core;
-                    $legacy_key = $core;
-                    $examined += 3;
-                    try {
-                        if ($redis) {
-                            if (method_exists($redis, 'del')) {
-                                $deleted += (int)$redis->del($raw_key);
-                                $deleted += (int)$redis->del($min_key);
-                                $deleted += (int)$redis->del($legacy_key);
-                            } elseif (method_exists($redis, 'unlink')) {
-                                $deleted += (int)$redis->unlink($raw_key);
-                                $deleted += (int)$redis->unlink($min_key);
-                                $deleted += (int)$redis->unlink($legacy_key);
-                            }
-                        }
-                    } catch (\Throwable $t) {
-                        if (defined('WP_DEBUG') && WP_DEBUG) {
-                            error_log('AceRedisCache archive cache invalidation error: ' . $t->getMessage());
-                        }
-                    }
-                }
-            }
-        }
-        if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log('AceRedisCache archive/home page cache purge post_id=' . $post_id . ' paths=' . count($paths) . ' deleted_keys=' . $deleted . ' examined=' . $examined);
-        }
+        $this->invalidate_paths($paths);
     }
 
     /**
@@ -3363,7 +3348,7 @@ class AceRedisCache {
             return $this->build_page_cache_core_key($uri, $scheme, $device, null, $host);
         }
         list($version, $suffix) = $tokens[$host];
-        return 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . $version . ':p2' . ($suffix !== '' ? ':' . $suffix : '');
+        return 'page_cache:' . $uri . ':' . $scheme . ':' . $device . ':' . $host . ':v' . $version . ':p3' . ($suffix !== '' ? ':' . $suffix : '');
     }
 
     /** The raw "stored_at:fresh_until" marker beside a queued URL's page, or null. */
@@ -3523,6 +3508,7 @@ class AceRedisCache {
         if (!$post || $post->post_status !== 'publish' || !is_post_type_viewable($post->post_type)) {
             return;
         }
+        $this->purge_recorded_post_paths($post_id);
         $permalink = get_permalink($post);
         if ($permalink) {
             $this->purge_url($permalink);
@@ -3675,6 +3661,14 @@ class AceRedisCache {
         }
         if (!$redis) {
             return 0;
+        }
+        $urls = array_values(array_filter($urls, function ($url) { return $this->local_purge_path($url) !== null; }));
+        foreach ($urls as $url) {
+            $path = $this->local_purge_path($url);
+            if ($path === null || strpos($path, '?') !== false) continue;
+            $variants = PagePathIndex::expand($redis, home_url(), [$path]);
+            $variants = array_values(array_filter($variants, static function ($variant) { return strpos($variant, '?') !== false; }));
+            if ($variants) $this->invalidate_paths($variants);
         }
         $max = max(1, (int) apply_filters('ace_rc_recache_max_urls', 100, $this->settings));
         $queue = [];
@@ -4194,6 +4188,7 @@ class AceRedisCache {
             $post = get_post($pid);
             if (!$post) continue;
             if ($recache && (!empty($ops['recache']) || !empty($ops['page']) || !empty($ops['archives']))) {
+                $this->purge_recorded_post_paths($pid);
                 list($urls, $wide) = $this->recache_targets($post);
                 if ($post->post_status === 'publish' && is_post_type_viewable($post->post_type)) {
                     $urls[] = get_permalink($post);

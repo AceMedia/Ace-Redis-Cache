@@ -411,6 +411,21 @@ class BlockCache {
         return $prefix . 'b:' . $profile . ':' . (int) $generation . '.' . (int) $profile_version . ':' . md5(serialize($vary));
     }
 
+    /** MGET where the server allows it. Cluster-mode Redis refuses it across slots, so read one at a time there. */
+    private function read_keys($redis, array $keys) {
+        try {
+            $vals = $redis->mget($keys);
+            if (is_array($vals)) {
+                return $vals;
+            }
+        } catch (\Throwable $e) {
+            // Falls through to single reads.
+        }
+        return array_map(static function ($key) use ($redis) {
+            return $redis->get($key);
+        }, $keys);
+    }
+
     private function versions() {
         if ($this->versions !== null) {
             return $this->versions;
@@ -423,7 +438,7 @@ class BlockCache {
         $redis = $this->redis();
         if ($redis) {
             try {
-                $vals = $redis->mget(array_map(function ($n) { return $this->prefix() . $n; }, $names));
+                $vals = $this->read_keys($redis, array_map(function ($n) { return $this->prefix() . $n; }, $names));
                 foreach ($names as $i => $n) {
                     $this->versions[$n] = (int) ($vals[$i] ?? 0);
                 }
@@ -763,7 +778,7 @@ class BlockCache {
         try {
             // A dependency that changed while we were rendering: do not keep the stale result.
             if ($deps) {
-                $touched = $redis->mget(array_map(static function ($id) use ($p) { return $p . 't:' . $id; }, $deps));
+                $touched = $this->read_keys($redis, array_map(static function ($id) use ($p) { return $p . 't:' . $id; }, $deps));
                 foreach ((array) $touched as $t) {
                     if ($t !== false && $t !== null && (float) $t >= $started) {
                         return;

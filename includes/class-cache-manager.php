@@ -275,7 +275,19 @@ class CacheManager {
         
         foreach ($key_chunks as $chunk) {
             $deleted = $this->redis_connection->retry_operation(function($redis) use ($chunk) {
-                return $redis->del($chunk);
+                try {
+                    return $redis->del($chunk);
+                } catch (\RedisException $e) {
+                    // Cluster-mode Redis refuses multi-key DEL across slots.
+                    if (stripos($e->getMessage(), 'CROSSSLOT') === false) {
+                        throw $e;
+                    }
+                    $count = 0;
+                    foreach ($chunk as $key) {
+                        $count += (int) $redis->del($key);
+                    }
+                    return $count;
+                }
             });
             
             if ($deleted !== null) {

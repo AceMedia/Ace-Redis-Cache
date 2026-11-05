@@ -124,14 +124,14 @@ class Minification {
         }
         
         try {
-            // Minify HTML structure
-            $html = $this->minify_html($html);
-            
-            // Minify inline CSS
-            $html = $this->minify_inline_css($html);
-            
-            // Minify inline JavaScript
-            $html = $this->minify_inline_js($html);
+            // A stage that fails (a regex past pcre.backtrack_limit returns null on a large
+            // page) is skipped: an unminified page is fine, an empty one is an outage.
+            foreach (['minify_html', 'minify_inline_css', 'minify_inline_js'] as $stage) {
+                $result = $this->$stage($html);
+                if (is_string($result) && $result !== '') {
+                    $html = $result;
+                }
+            }
             
             return $html;
             
@@ -177,6 +177,7 @@ class Minification {
      * @return string Minified HTML
      */
     public function minify_html($html) {
+        $original = $html;
         // Preserve important content completely - don't touch script, style, pre, code, textarea
         $preserve_tags = [];
         $preserve_patterns = [
@@ -192,20 +193,24 @@ class Minification {
                 $placeholder_index++;
                 return $placeholder;
             }, $html);
+            // Without its scripts protected, the steps below would corrupt them.
+            if ($html === null) {
+                return $original;
+            }
         }
         
     // Remove regular HTML comments but keep IE conditionals and our dynamic block placeholders
     // Preserve comments that begin with ACE_BLOCK_DYNAMIC: (legacy) and ACE_DYNAMIC blk: (second-iteration placeholders)
-    $html = preg_replace('/<!--(?!\s*(?:\[if|\[endif)|ACE_BLOCK_DYNAMIC:|ACE_DYNAMIC blk:).*?-->/s', '', $html);
+    $html = self::replace('/<!--(?!\s*(?:\[if|\[endif)|ACE_BLOCK_DYNAMIC:|ACE_DYNAMIC blk:).*?-->/s', '', $html);
         
         // Remove ALL blank lines (lines with only whitespace)
-        $html = preg_replace('/^\s*$/m', '', $html);
+        $html = self::replace('/^\s*$/m', '', $html);
         
         // Remove all consecutive newlines (collapse multiple newlines into none)
-        $html = preg_replace('/\n+/', '', $html);
+        $html = self::replace('/\n+/', '', $html);
         
         // Convert multiple spaces to single spaces
-        $html = preg_replace('/ {2,}/', ' ', $html);
+        $html = self::replace('/ {2,}/', ' ', $html);
         
         // Restore preserved content
         foreach ($preserve_tags as $placeholder => $original) {
@@ -213,6 +218,11 @@ class Minification {
         }
         
         return trim($html);
+    }
+    
+    /** preg_replace that leaves the text alone if the regex fails, rather than returning null. */
+    private static function replace($pattern, $replacement, $subject) {
+        return preg_replace($pattern, $replacement, $subject) ?? $subject;
     }
     
     /**
@@ -226,16 +236,16 @@ class Minification {
             $css = $matches[1];
             
             // Remove CSS comments
-            $css = preg_replace('/\/\*.*?\*\//s', '', $css);
+            $css = self::replace('/\/\*.*?\*\//s', '', $css);
             
             // Remove empty lines
-            $css = preg_replace('/\n\s*\n/', "\n", $css);
+            $css = self::replace('/\n\s*\n/', "\n", $css);
             
             // Remove leading and trailing whitespace from each line
-            $css = preg_replace('/^\s+|\s+$/m', '', $css);
+            $css = self::replace('/^\s+|\s+$/m', '', $css);
             
             // Remove newlines
-            $css = preg_replace('/\n+/', '', $css);
+            $css = self::replace('/\n+/', '', $css);
             
             // Trim final result
             $css = trim($css);
@@ -243,7 +253,7 @@ class Minification {
             // Reconstruct the style tag
             $opening_tag = substr($matches[0], 0, strpos($matches[0], '>') + 1);
             return $opening_tag . $css . '</style>';
-        }, $html);
+        }, $html) ?? $html;
     }
     
     /**
@@ -270,10 +280,10 @@ class Minification {
             // Don't touch anything else to avoid breaking JS syntax
             
             // Remove lines that are completely empty (only whitespace)
-            $js = preg_replace('/^\s*$/m', '', $js);
+            $js = self::replace('/^\s*$/m', '', $js);
             
             // Remove consecutive newlines (multiple blank lines become single)
-            $js = preg_replace('/\n{3,}/', "\n\n", $js);
+            $js = self::replace('/\n{3,}/', "\n\n", $js);
             
             // Trim the start and end
             $js = trim($js);
@@ -281,7 +291,7 @@ class Minification {
             // Reconstruct the script tag
             $opening_tag = substr($matches[0], 0, strpos($matches[0], '>') + 1);
             return $opening_tag . $js . '</script>';
-        }, $html);
+        }, $html) ?? $html;
     }
     
     /**
@@ -292,25 +302,25 @@ class Minification {
      */
     public function minify_css($css) {
         // Remove comments
-        $css = preg_replace('/\/\*.*?\*\//s', '', $css);
+        $css = self::replace('/\/\*.*?\*\//s', '', $css);
         
         // Remove unnecessary whitespace
-        $css = preg_replace('/\s+/', ' ', $css);
+        $css = self::replace('/\s+/', ' ', $css);
         
         // Remove whitespace around specific characters
-        $css = preg_replace('/\s*([\{\}:;,>+~])\s*/', '$1', $css);
+        $css = self::replace('/\s*([\{\}:;,>+~])\s*/', '$1', $css);
         
         // Remove trailing semicolons before closing braces
-        $css = preg_replace('/;(\s*})/', '$1', $css);
+        $css = self::replace('/;(\s*})/', '$1', $css);
         
         // Convert hex colors to shorter format where possible
-        $css = preg_replace('/#([0-9a-f])\1([0-9a-f])\2([0-9a-f])\3/i', '#$1$2$3', $css);
+        $css = self::replace('/#([0-9a-f])\1([0-9a-f])\2([0-9a-f])\3/i', '#$1$2$3', $css);
         
         // Remove unnecessary quotes from URLs
-        $css = preg_replace('/url\((["\'])([^"\']*)\1\)/', 'url($2)', $css);
+        $css = self::replace('/url\((["\'])([^"\']*)\1\)/', 'url($2)', $css);
         
         // Remove empty rules
-        $css = preg_replace('/[^}]+\{\s*\}/', '', $css);
+        $css = self::replace('/[^}]+\{\s*\}/', '', $css);
         
         return trim($css);
     }
@@ -325,19 +335,19 @@ class Minification {
         // This is a basic minification - for production use, consider a proper JS minifier
         
         // Remove single-line comments (be careful with URLs and regex)
-        $js = preg_replace('/(?<!["\'])\/\/[^\r\n]*/', '', $js);
+        $js = self::replace('/(?<!["\'])\/\/[^\r\n]*/', '', $js);
         
         // Remove multi-line comments
-        $js = preg_replace('/\/\*.*?\*\//s', '', $js);
+        $js = self::replace('/\/\*.*?\*\//s', '', $js);
         
         // Remove unnecessary whitespace
-        $js = preg_replace('/\s+/', ' ', $js);
+        $js = self::replace('/\s+/', ' ', $js);
         
         // Remove whitespace around operators and punctuation
-        $js = preg_replace('/\s*([\{\}:;,=\(\)\[\]><!&\|+\-\*\/])\s*/', '$1', $js);
+        $js = self::replace('/\s*([\{\}:;,=\(\)\[\]><!&\|+\-\*\/])\s*/', '$1', $js);
         
         // Remove trailing semicolons before closing braces
-        $js = preg_replace('/;(\s*})/', '$1', $js);
+        $js = self::replace('/;(\s*})/', '$1', $js);
         
         return trim($js);
     }

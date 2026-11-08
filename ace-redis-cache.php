@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Ace Redis Cache
  * Description: Smart Redis-powered caching with WordPress Block API support and configurable exclusions for any plugins.
- * Version: 0.8.16
+ * Version: 0.9.0
  * Author: Ace Media
  * Requires at least: 5.0
  * Tested up to: 7.0
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ACE_REDIS_CACHE_VERSION', '0.8.16');
+define('ACE_REDIS_CACHE_VERSION', '0.9.0');
 define('ACE_REDIS_CACHE_PLUGIN_FILE', __FILE__);
 define('ACE_REDIS_CACHE_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('ACE_REDIS_CACHE_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -282,4 +282,32 @@ function ace_redis_cache() {
 function ace_rc_soft_purge_page_cache($force = false) {
     $plugin = ace_redis_cache();
     return $plugin && method_exists($plugin, 'soft_purge_page_cache') && $plugin->soft_purge_page_cache((bool) $force);
+}
+
+/**
+ * A wp-admin read kept in the admin query cache (see AdminQueryCache). Runs $compute uncached
+ * when the "wp-admin query cache" setting is off, so callers need no setting check of their own.
+ *
+ * @param string   $key     Unique within your plugin; prefix it with your slug.
+ * @param callable $compute Returns the value; null is not stored.
+ * @param string[] $tags    What the value depends on: bump any of them to drop it.
+ * @param int|null $ttl     Seconds, else the setting's TTL.
+ * @return mixed
+ */
+function ace_rc_admin_cache_remember($key, callable $compute, array $tags = [], $ttl = null) {
+    if (!class_exists('AceMedia\\RedisCache\\AdminQueryCache')) {
+        return $compute();
+    }
+    return \AceMedia\RedisCache\AdminQueryCache::remember($key, $compute, $tags, $ttl);
+}
+
+/**
+ * Drop every admin query cache entry that depends on $tag. Call it wherever that data is written.
+ *
+ * @param string $tag
+ */
+function ace_rc_admin_cache_bump($tag) {
+    if (class_exists('AceMedia\\RedisCache\\AdminQueryCache')) {
+        \AceMedia\RedisCache\AdminQueryCache::bump($tag);
+    }
 }

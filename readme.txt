@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.8.16
+Stable tag: 0.9.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.0 =
+* New setting, off by default: serve cached pages to logged-in users on the front end. Each group (administrators, editors, members who cannot edit, WooCommerce customers) has its own copy, apart from the guest copy; the toolbar is rendered fresh and every nonce is swapped for the viewer's own on each hit. Previews, the Customizer, POST requests and ?ace_nocache=1 always bypass, a copy is served only while fresh, and purges drop every variant.
+* New settings for signed-in object cache reads: signed-in front-end pages (on, as before) and wp-admin screens (off) read the shared object cache without writing to it; on WooCommerce sites, basket and checkout reads too.
+* New wp-admin query cache, off by default: core's uncached admin reads (month filters, custom field keys, media checks) plus ace_rc_admin_cache_remember() / ace_rc_admin_cache_bump() for plugins.
 
 = 0.8.16 =
 * Clear retained query variants when a clean page or related archive is invalidated. Exact query URLs remain targeted.

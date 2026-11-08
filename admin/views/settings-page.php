@@ -491,6 +491,52 @@ php -m | grep -i zlib</pre>
                     </div>
                     <div class="setting-row">
                         <div class="setting-label">
+                            <label for="page_cache_logged_in">Serve cached pages to logged-in users</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[page_cache_logged_in]" id="page_cache_logged_in" value="1" <?php checked($settings['page_cache_logged_in'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'Front end only. Never wp-admin, AJAX, REST, previews, the Customizer, POST requests or ?ace_nocache=1.')); ?>
+                            <p class="description">Signed-in visitors get their own cached copy of each front-end page, kept apart from the guest copy and shared only within a group. The toolbar is rendered fresh for each visitor and every nonce on the page is swapped for theirs, so nothing from one user reaches another. A copy is only served while fresh and is dropped whenever the page is purged. Authors and contributors are never served one, as their edit links differ per person.</p>
+                            <div style="margin-top:8px;">
+                                <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[page_cache_li_admins]" value="1" <?php checked($settings['page_cache_li_admins'] ?? 1); ?> /> Administrators</label>
+                                <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[page_cache_li_editors]" value="1" <?php checked($settings['page_cache_li_editors'] ?? 1); ?> /> Editors (can edit everyone's posts)</label>
+                                <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[page_cache_li_readers]" value="1" <?php checked($settings['page_cache_li_readers'] ?? 1); ?> /> Subscribers and other members who cannot edit</label>
+                            </div>
+                            <p class="description">Responses carry <code>X-AceRedisCache-Variant</code> (for example <code>li-editor-ab</code>). A page that still names the user (their email address, a comment form's "Logged in as") is never stored; sites can add their own checks with the <code>ace_rc_logged_in_store_block</code> filter.</p>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="member_object_cache_read">Signed-in object cache reads</label>
+                        </div>
+                        <div class="setting-field">
+                            <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[member_object_cache_read]" id="member_object_cache_read" value="1" <?php checked($settings['member_object_cache_read'] ?? 1); ?> /> Signed-in front-end pages read the shared object cache</label>
+                            <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[admin_object_cache_read]" id="admin_object_cache_read" value="1" <?php checked($settings['admin_object_cache_read'] ?? 0); ?> /> wp-admin screens read the shared object cache</label>
+                            <p class="description">Signed-in requests never write to the object cache, and a change they make still clears the shared copy. Without these they skip Redis entirely and re-read every option, term and meta row from the database. The wp-admin read covers plain screen loads only; AJAX, REST, cron, updates and form posts stay uncached. Needs the object-cache drop-in. <code>ACE_OC_MEMBER_READ</code> and <code>ACE_OC_ADMIN_READ</code> in wp-config override these.</p>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="admin_query_cache">wp-admin query cache</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[admin_query_cache]" id="admin_query_cache" value="1" <?php checked($settings['admin_query_cache'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'green', 'wp-admin only.')); ?>
+                            <p class="description">Keeps the results of slow, repeated wp-admin reads for a short time and drops them the moment the data under them changes: the posts list month filter, the media library month filter, the custom fields key list and the media modal's audio/video checks. Plugins can cache their own admin reads with <code>ace_rc_admin_cache_remember()</code> and clear them with <code>ace_rc_admin_cache_bump()</code>.</p>
+                            <div style="margin-top:8px;">
+                                <label for="admin_query_cache_ttl" style="width:140px; display:inline-block;">Keep for up to</label>
+                                <input type="number" name="ace_redis_cache_settings[admin_query_cache_ttl]" id="admin_query_cache_ttl" value="<?php echo esc_attr($settings['admin_query_cache_ttl'] ?? 300); ?>" min="30" max="3600" class="small-text" /> seconds
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
                             <label for="enable_static_asset_cache">Static Asset Cache</label>
                         </div>
                         <div class="setting-field">
@@ -814,6 +860,34 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                 </p>
 
                 <div class="settings-form">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_page_cache_customers">Cached pages for logged-in customers</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_page_cache_customers]" id="wc_page_cache_customers" value="1" <?php checked($settings['wc_page_cache_customers'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'amber', 'Needs "Serve cached pages to logged-in users" on the Caching tab.')); ?>
+                            <p class="description">Lets signed-in customers share one cached copy of shop, product and content pages. Anyone with something in their basket, and every basket, checkout and account page, is always rendered live. Leave this off if prices, stock or content differ per customer (trade pricing, memberships, wholesale roles).</p>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <label for="wc_object_cache_read">Basket and checkout object cache reads</label>
+                        </div>
+                        <div class="setting-field">
+                            <label class="ace-switch">
+                                <input type="checkbox" name="ace_redis_cache_settings[wc_object_cache_read]" id="wc_object_cache_read" value="1" <?php checked($settings['wc_object_cache_read'] ?? 0); ?> />
+                                <span class="ace-slider"></span>
+                            </label>
+                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green', 'Read only: basket, session and order data are never written to the shared cache.')); ?>
+                            <p class="description">Basket, checkout and Store API requests read shared product, option, term and shipping data from the object cache instead of the database. They never write to it. <code>ACE_OC_WC_READ</code> in wp-config overrides this.</p>
+                        </div>
+                    </div>
+
                     <div class="setting-row">
                         <div class="setting-label">
                             <label for="wc_skip_cart_cookies">Cart Cookie on Product Pages</label>

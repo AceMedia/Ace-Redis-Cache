@@ -327,6 +327,17 @@ class AdminAjax {
         $validated['manage_static_cache_via_htaccess'] = !empty($settings['manage_static_cache_via_htaccess']) ? 1 : 0;
         $validated['prefer_existing_static_cache_headers'] = !empty($settings['prefer_existing_static_cache_headers']) ? 1 : 0;
         $validated['enable_dynamic_microcache'] = !empty($settings['enable_dynamic_microcache']) ? 1 : 0;
+        // Signed-in front-end page cache and the wp-admin query cache.
+        $validated['page_cache_logged_in'] = !empty($settings['page_cache_logged_in']) ? 1 : 0;
+        $validated['page_cache_li_admins'] = !empty($settings['page_cache_li_admins']) ? 1 : 0;
+        $validated['page_cache_li_editors'] = !empty($settings['page_cache_li_editors']) ? 1 : 0;
+        $validated['page_cache_li_readers'] = !empty($settings['page_cache_li_readers']) ? 1 : 0;
+        $validated['wc_page_cache_customers'] = !empty($settings['wc_page_cache_customers']) ? 1 : 0;
+        $validated['admin_query_cache'] = !empty($settings['admin_query_cache']) ? 1 : 0;
+        $validated['member_object_cache_read'] = !empty($settings['member_object_cache_read']) ? 1 : 0;
+        $validated['admin_object_cache_read'] = !empty($settings['admin_object_cache_read']) ? 1 : 0;
+        $validated['wc_object_cache_read'] = !empty($settings['wc_object_cache_read']) ? 1 : 0;
+        $validated['admin_query_cache_ttl'] = max(30, min(3600, (int) ($settings['admin_query_cache_ttl'] ?? 300)));
         $validated['enable_opcache_helpers'] = !empty($settings['enable_opcache_helpers']) ? 1 : 0;
         $validated['dynamic_excluded_blocks'] = !empty($settings['dynamic_excluded_blocks']) ? 1 : 0;
         $validated['exclude_sitemaps'] = !empty($settings['exclude_sitemaps']) ? 1 : 0;

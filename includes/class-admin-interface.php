@@ -636,6 +636,17 @@ class AdminInterface {
         $sanitized['manage_static_cache_via_htaccess'] = !empty($input['manage_static_cache_via_htaccess']) ? 1 : 0;
         $sanitized['prefer_existing_static_cache_headers'] = !empty($input['prefer_existing_static_cache_headers']) ? 1 : 0;
         // WooCommerce performance settings
+        // Signed-in front-end page cache and the wp-admin query cache.
+        $sanitized['page_cache_logged_in'] = !empty($input['page_cache_logged_in']) ? 1 : 0;
+        $sanitized['page_cache_li_admins'] = !empty($input['page_cache_li_admins']) ? 1 : 0;
+        $sanitized['page_cache_li_editors'] = !empty($input['page_cache_li_editors']) ? 1 : 0;
+        $sanitized['page_cache_li_readers'] = !empty($input['page_cache_li_readers']) ? 1 : 0;
+        $sanitized['wc_page_cache_customers'] = !empty($input['wc_page_cache_customers']) ? 1 : 0;
+        $sanitized['admin_query_cache'] = !empty($input['admin_query_cache']) ? 1 : 0;
+        $sanitized['member_object_cache_read'] = !empty($input['member_object_cache_read']) ? 1 : 0;
+        $sanitized['admin_object_cache_read'] = !empty($input['admin_object_cache_read']) ? 1 : 0;
+        $sanitized['wc_object_cache_read'] = !empty($input['wc_object_cache_read']) ? 1 : 0;
+        $sanitized['admin_query_cache_ttl'] = max(30, min(3600, (int) ($input['admin_query_cache_ttl'] ?? 300)));
         $sanitized['wc_skip_cart_cookies'] = !empty($input['wc_skip_cart_cookies']) ? 1 : 0;
         $sanitized['wc_disable_persistent_cart'] = !empty($input['wc_disable_persistent_cart']) ? 1 : 0;
         $sanitized['wc_skip_children_on_archives'] = !empty($input['wc_skip_children_on_archives']) ? 1 : 0;

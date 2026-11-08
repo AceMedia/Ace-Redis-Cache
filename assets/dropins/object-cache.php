@@ -247,6 +247,9 @@ if (!class_exists('WP_Object_Cache')) {
         protected $invalidate_connect_failed = false; // see invalidate_persistent()
         protected $wc_read_mode = false; // cart/checkout: read shared groups from Redis, never persist
         protected $member_read_mode = false; // signed-in front end: read shared groups from Redis, never persist
+        protected $admin_read_mode = false;  // wp-admin screens: the same read-only mode, when the setting is on
+        protected $plugin_settings_loaded = false;
+        protected $plugin_settings_row = null;
         protected $redis_loaded = []; // group => key => md5 of what Redis handed us this request
         protected $signed_in = false;
         protected $max_value_bytes = self::MAX_VALUE_BYTES_DEFAULT;
@@ -398,8 +401,10 @@ if (!class_exists('WP_Object_Cache')) {
             // cached. Read-mode lets them CONNECT and READ those shared persistent groups from Redis
             // while still not persisting — collapsing the query storm to cache hits. Product/price
             // freshness equals the front end (same object-cache invalidation on save). Default OFF.
+            // The plugin setting "Cart and checkout read the shared object cache" turns it on;
+            // ACE_OC_WC_READ in wp-config overrides the setting either way.
             $wc_read_mode = $is_wc_customer_session_request
-                && defined('ACE_OC_WC_READ') && ACE_OC_WC_READ;
+                && (defined('ACE_OC_WC_READ') ? (bool) ACE_OC_WC_READ : !empty(($this->plugin_settings() ?? [])['wc_object_cache_read']));
             $this->wc_read_mode = $wc_read_mode;
 
             if ($editor_bypass && !$wc_read_mode) {
@@ -426,9 +431,27 @@ if (!class_exists('WP_Object_Cache')) {
                 && !$is_cron
                 && !$is_update_operation && !$is_wc_customer_session_request
                 && in_array($request_method, $allow_methods, true)
-                && (!defined('ACE_OC_MEMBER_READ') || ACE_OC_MEMBER_READ);
+                && (defined('ACE_OC_MEMBER_READ') ? (bool) ACE_OC_MEMBER_READ : !empty(($this->plugin_settings() ?? [])['member_object_cache_read'] ?? 1));
+
+            // Admin read mode (plugin setting "wp-admin reads the shared object cache", off by
+            // default; ACE_OC_ADMIN_READ overrides). A wp-admin screen otherwise runs with no Redis
+            // at all and re-reads every option, term and meta row the front end already cached.
+            // Same contract as member read: read shared persistent groups, never write, and a
+            // write in this process still deletes the shared copy. Only plain screen loads (GET):
+            // AJAX, REST, cron, updates, log-in and anything that posts stay strict.
+            $admin_read_mode = !$member_read_mode && $this->runtime_only_mode
+                && ($is_logged_in_fn || $is_logged_in_cookie)
+                && ($is_admin_by_url || $is_admin_req)
+                && strpos($request_uri, '/wp-login.php') === false
+                && !$is_ajax && !$is_rest && !$is_cron && !$is_cli
+                && !$is_update_operation && !$is_wc_customer_session_request
+                && in_array($request_method, $allow_methods, true)
+                && (defined('ACE_OC_ADMIN_READ') ? (bool) ACE_OC_ADMIN_READ : !empty(($this->plugin_settings() ?? [])['admin_object_cache_read']));
+            $this->admin_read_mode = $admin_read_mode;
+            $member_read_mode = $member_read_mode || $admin_read_mode;
             $this->member_read_mode = (bool) apply_filters('ace_oc_member_read_mode', $member_read_mode, $this->request_context);
             $this->request_context['member_read'] = $this->member_read_mode;
+            $this->request_context['admin_read'] = $this->admin_read_mode && $this->member_read_mode;
             $this->signed_in = ($is_logged_in_fn || $is_logged_in_cookie);
             if (!$is_cli) { register_shutdown_function([$this, 'log_slow_request']); }
 
@@ -539,7 +562,7 @@ if (!class_exists('WP_Object_Cache')) {
                 if ($err === '' || !is_dir(dirname($err))) { return; }
                 $file = dirname($err) . '/ace-requests.log';
             }
-            $mode = $this->member_read_mode ? 'member-read'
+            $mode = $this->member_read_mode ? ($this->admin_read_mode ? 'admin-read' : 'member-read')
                 : ($this->wc_read_mode ? 'wc-read'
                 : ($this->runtime_only_mode || $this->bypass ? 'no-redis'
                 : ($this->redis !== null && $this->connected ? 'redis' : 'no-conn')));
@@ -658,15 +681,15 @@ if (!class_exists('WP_Object_Cache')) {
             }
         }
 
-        protected function init_redis() {
-            global $ace_redis_shared_connection;
-            if ($ace_redis_shared_connection instanceof \Redis) {
-                $this->redis = $ace_redis_shared_connection;
-                $this->connected = true;
-                $this->connect_via = 'shared';
-                return;
+        /**
+         * The plugin's settings row, read straight from the database (get_option() would recurse
+         * into this cache), once per request. Null when it cannot be read.
+         */
+        protected function plugin_settings() {
+            if ($this->plugin_settings_loaded) {
+                return $this->plugin_settings_row;
             }
-
+            $this->plugin_settings_loaded = true;
             // Get settings directly from database to avoid circular dependency with get_option().
             // During early bootstrap, table prefix info can be incomplete; skip DB lookup if table is ambiguous.
             $plugin_settings = null;
@@ -702,6 +725,21 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
             
+            $this->plugin_settings_row = is_array($plugin_settings) ? $plugin_settings : null;
+            return $this->plugin_settings_row;
+        }
+
+        protected function init_redis() {
+            global $ace_redis_shared_connection;
+            if ($ace_redis_shared_connection instanceof \Redis) {
+                $this->redis = $ace_redis_shared_connection;
+                $this->connected = true;
+                $this->connect_via = 'shared';
+                return;
+            }
+
+            $plugin_settings = $this->plugin_settings();
+
             // Use plugin settings if available, otherwise fall back to constants and defaults
             if (is_array($plugin_settings) && isset($plugin_settings['object_cache_max_ttl'])) {
                 self::$max_ttl_setting = max(0, (int) $plugin_settings['object_cache_max_ttl']);

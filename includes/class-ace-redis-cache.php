@@ -28,7 +28,7 @@ class AceRedisCache {
     
     private $plugin_url;
     private $plugin_path; // define to avoid dynamic property deprecation
-    private $plugin_version = '0.8.16';
+    private $plugin_version = '0.9.0';
     // Debug tracking for transient flag mutation during save
     private $debug_pre_update_transient_early = null;
     
@@ -66,6 +66,11 @@ class AceRedisCache {
     private $opcache_runtime_enabled = false;
     // Request-local memoized site version for cache key generation.
     private $site_cache_version = null;
+    // Signed-in page cache: the group this request is cached under (see LoggedInPageCache).
+    private $li_group = null;
+    private $li_group_resolved = false;
+    /** @var LoggedInPageCache|null Collects nonce actions and marks the toolbar on a signed-in miss. */
+    private $li_render = null;
     
     /**
      * Constructor
@@ -151,6 +156,19 @@ class AceRedisCache {
             'send_cache_meta_headers' => 0,
             'enable_dynamic_microcache' => 0,
             'dynamic_microcache_ttl' => 10,
+            // Signed-in front-end page cache (off by default) and its groups.
+            'page_cache_logged_in' => 0,
+            'page_cache_li_admins' => 1,
+            'page_cache_li_editors' => 1,
+            'page_cache_li_readers' => 1,
+            'wc_page_cache_customers' => 0,
+            // Which signed-in requests read the shared object cache (read only, never write).
+            'member_object_cache_read' => 1,
+            'admin_object_cache_read' => 0,
+            'wc_object_cache_read' => 0,
+            // wp-admin query cache (off by default).
+            'admin_query_cache' => 0,
+            'admin_query_cache_ttl' => 300,
             'block_cache_enabled' => 0, 'block_cache_ttl' => 43200, 'block_cache_woo' => 1, 'block_cache_query' => 1, 'block_cache_latest_posts' => 1, 'block_cache_custom' => 1, 'block_cache_logged_in' => 0,
             'enable_opcache_helpers' => 0,
             'enable_static_asset_cache' => 0,
@@ -229,6 +247,19 @@ class AceRedisCache {
             'send_cache_meta_headers' => 0,
             'enable_dynamic_microcache' => 0,
             'dynamic_microcache_ttl' => 10,
+            // Signed-in front-end page cache (off by default) and its groups.
+            'page_cache_logged_in' => 0,
+            'page_cache_li_admins' => 1,
+            'page_cache_li_editors' => 1,
+            'page_cache_li_readers' => 1,
+            'wc_page_cache_customers' => 0,
+            // Which signed-in requests read the shared object cache (read only, never write).
+            'member_object_cache_read' => 1,
+            'admin_object_cache_read' => 0,
+            'wc_object_cache_read' => 0,
+            // wp-admin query cache (off by default).
+            'admin_query_cache' => 0,
+            'admin_query_cache_ttl' => 300,
             'block_cache_enabled' => 0, 'block_cache_ttl' => 43200, 'block_cache_woo' => 1, 'block_cache_query' => 1, 'block_cache_latest_posts' => 1, 'block_cache_custom' => 1, 'block_cache_logged_in' => 0,
             'enable_opcache_helpers' => 0,
             'enable_static_asset_cache' => 0,
@@ -384,6 +415,10 @@ class AceRedisCache {
         add_filter('option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
         add_filter('site_option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
 
+        // wp-admin query cache: invalidation hooks run everywhere, the cached reads only in wp-admin.
+        AdminQueryCache::configure($this->settings);
+        AdminQueryCache::register_core_hooks();
+
         add_action('post_updated', [$this, 'on_post_updated'], 10, 3);
         // Recache on edit (#21). Registered for every request, not in setup_caching_hooks():
         // editors save from wp-admin and the REST API as signed-in users, which that skips.
@@ -468,9 +503,12 @@ class AceRedisCache {
      */
     private function setup_caching_hooks() {
         $request_dev_mode = $this->is_request_cache_dev_mode();
+        // A signed-in front-end request may still use the page cache (its own variant, see
+        // LoggedInPageCache); objects and transients stay as they are for signed-in users.
+        $page_mode = !$request_dev_mode || $this->logged_in_page_cache_group() !== null;
 
         // Full page cache (if enabled)
-        if (!$request_dev_mode && !empty($this->settings['enable_page_cache'])) {
+        if ($page_mode && !empty($this->settings['enable_page_cache'])) {
             $this->setup_full_page_cache();
         }
 
@@ -490,7 +528,7 @@ class AceRedisCache {
         }
 
         // Initialize dynamic placeholders runtime (after settings loaded) only if page cache enabled
-        if (!$request_dev_mode && !empty($this->settings['enable_page_cache'])) {
+        if ($page_mode && !empty($this->settings['enable_page_cache'])) {
             $this->init_dynamic_placeholder_runtime();
             // Register per-post page cache invalidation hooks
             add_action('save_post', [$this, 'maybe_invalidate_post_page_cache'], 50, 3);
@@ -637,6 +675,99 @@ class AceRedisCache {
      * @return bool True if request should be cached
      */
     /**
+     * The signed-in group this front-end request may be page cached under, or null: the setting
+     * is off, nobody is signed in, the request is admin/AJAX/REST/cron or a WooCommerce session
+     * page, or the user's group is not cached (authors and contributors never are).
+     */
+    private function logged_in_page_cache_group() {
+        if ($this->li_group_resolved) {
+            return $this->li_group;
+        }
+        if (empty($this->settings['page_cache_logged_in']) || !function_exists('wp_get_current_user')) {
+            return null; // pluggable functions not loaded yet: ask again later
+        }
+        $this->li_group_resolved = true;
+        if (!\is_user_logged_in() || \is_admin() || \wp_doing_ajax() || $this->is_rest_request() || (defined('DOING_CRON') && DOING_CRON) || (defined('WP_CLI') && WP_CLI)) {
+            return null;
+        }
+        $uri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+        if ($this->is_woocommerce_uncacheable_request($uri, (string) wp_parse_url($uri, PHP_URL_PATH))) {
+            return null;
+        }
+        $user = \wp_get_current_user();
+        $is_customer = class_exists('WooCommerce') && in_array('customer', (array) $user->roles, true);
+        $group = LoggedInPageCache::group($this->settings, 'current_user_can', $is_customer);
+        // A site can narrow this (null = never cache this user); only the known groups are purged.
+        $group = apply_filters('ace_rc_logged_in_cache_group', $group, $user, $this->settings);
+        $this->li_group = in_array($group, LoggedInPageCache::GROUPS, true) ? $group : null;
+        return $this->li_group;
+    }
+
+    private function is_logged_in_variant() {
+        return \is_user_logged_in() && $this->logged_in_page_cache_group() !== null;
+    }
+
+    private function logged_in_variant() {
+        return LoggedInPageCache::variant((string) $this->logged_in_page_cache_group(), \is_admin_bar_showing());
+    }
+
+    /**
+     * Response headers for the "is this shared-cacheable?" checks. WordPress itself sends no-cache
+     * headers to every signed-in visitor (WP::send_headers()), which would otherwise rule out every
+     * signed-in page; only those exact headers are set aside, so a plugin's own private/no-store
+     * or a Set-Cookie still stops the store.
+     */
+    private function headers_for_store_check() {
+        $headers = headers_list();
+        if (!$this->is_logged_in_variant() || !function_exists('wp_get_nocache_headers')) {
+            return $headers;
+        }
+        $nocache = [];
+        foreach (wp_get_nocache_headers() as $name => $value) {
+            if ($value !== false && $value !== '') $nocache[] = strtolower($name . ': ' . $value);
+        }
+        return array_values(array_filter($headers, function ($h) use ($nocache) {
+            return !in_array(strtolower(trim($h)), $nocache, true);
+        }));
+    }
+
+    /**
+     * Fresh enough to serve a signed-in visitor: stored within the fresh TTL, after the last soft
+     * purge, and not marked stale by an edit. No stored time counts as stale.
+     */
+    private function logged_in_copy_is_fresh($cache_key) {
+        try {
+            $meta_key = $this->page_cache_meta_prefix . $cache_key;
+            list($values, $marker) = $this->cache_manager->get_many_with_raw([$meta_key, $this->site_page_epoch_key()], 'ace:1:fresh:' . $cache_key);
+        } catch (\Throwable $t) {
+            return false;
+        }
+        $meta = $values[$meta_key] ?? null;
+        $stored_at = is_array($meta) ? (int) ($meta['stored_at'] ?? 0) : 0;
+        if ($stored_at <= 0) {
+            return false;
+        }
+        if (is_string($marker) && strpos($marker, ':') !== false && (int) explode(':', $marker, 2)[1] < time()) {
+            return false;
+        }
+        if (time() - $stored_at >= $this->page_cache_fresh_ttl()) {
+            return false;
+        }
+        return $stored_at >= (int) ($values[$this->site_page_epoch_key()] ?? 0);
+    }
+
+    /** The stored signed-in copy with this visitor's nonces and toolbar put back. */
+    private function restore_logged_in_copy($html) {
+        $bar = '';
+        if (\is_admin_bar_showing() && function_exists('wp_admin_bar_render')) {
+            ob_start();
+            \wp_admin_bar_render();
+            $bar = (string) ob_get_clean();
+        }
+        return LoggedInPageCache::from_stored($html, 'wp_create_nonce', $bar);
+    }
+
+    /**
      * The crawler bypass rule: a user-agent pattern and the path prefixes it applies to, both from
      * the 'ace_rc_crawler_bypass' filter (['agents' => regex body, 'paths' => ['/civic/', ...]]).
      * Empty by default, so nothing changes for a site that never filters it.
@@ -702,8 +833,8 @@ class AceRedisCache {
             return false;
         }
         
-        // Don't cache if user is logged in (optional - can be configured)
-        if (is_user_logged_in()) {
+        // Signed-in visitors only when the signed-in page cache covers their group.
+        if (is_user_logged_in() && $this->logged_in_page_cache_group() === null) {
             return false;
         }
         
@@ -1015,7 +1146,8 @@ class AceRedisCache {
             return;
         }
         $this->page_cache_started = true;
-        if ($this->singular_response_is_private() || self::headers_disallow_shared_cache(headers_list())) {
+        $li = $this->is_logged_in_variant();
+        if ($this->singular_response_is_private() || self::headers_disallow_shared_cache($this->headers_for_store_check())) {
             if (!headers_sent()) header('X-AceRedisCache: BYPASS private');
             return;
         }
@@ -1049,7 +1181,15 @@ class AceRedisCache {
             if (!headers_sent()) { header('X-AceRedisCache: BYPASS param'); }
             return; // don't start buffering or touch cache
         }
+        // Previews and the Customizer show unsaved changes: never serve or store them.
+        if (\is_preview() || \is_customize_preview() || isset($_GET['preview']) || isset($_GET['customize_changeset_uuid'])) {
+            if (!headers_sent()) { header('X-AceRedisCache: BYPASS preview'); }
+            return;
+        }
         $cache_key = $this->generate_page_cache_key();
+        if ($li && !headers_sent()) {
+            header('X-AceRedisCache-Variant: ' . $this->logged_in_variant());
+        }
 
         // Cache primers / stale-while-revalidate refreshers must REGENERATE and re-store, not be
         // served the existing (possibly stale) copy. When the request carries a primer header we
@@ -1060,7 +1200,8 @@ class AceRedisCache {
             || !empty($_SERVER['HTTP_X_ACEREDIS_REFRESH']);
 
         $direct_compressed = null;
-        if (!$is_prime_refresh && empty($this->settings['enable_static_asset_cache'])) {
+        // A signed-in copy always goes through the standard path: its nonces and toolbar are put back.
+        if (!$is_prime_refresh && !$li && empty($this->settings['enable_static_asset_cache'])) {
             $direct_compressed = $this->try_serve_compressed_directly($cache_key);
         }
         if ($direct_compressed !== null) {
@@ -1086,6 +1227,11 @@ class AceRedisCache {
                 }
             }
         }
+        // A signed-in copy is served only while fresh. Its refresher would be a guest request, so
+        // a stale one is re-rendered for this visitor instead of served and refreshed behind them.
+        if ($cached_content !== null && $li && !$this->logged_in_copy_is_fresh($cache_key)) {
+            $cached_content = null;
+        }
         if ($cached_content !== null) {
             if ($this->enable_dynamic_block_placeholders) {
                 $cached_content = $this->expand_dynamic_block_placeholders($cached_content);
@@ -1097,16 +1243,20 @@ class AceRedisCache {
                 }
             }
             $cached_content = $this->rewrite_image_urls_for_cache_busting($cached_content);
+            if ($li) {
+                $cached_content = $this->restore_logged_in_copy($cached_content);
+            }
             if (!headers_sent()) {
                 header('X-AceRedisCache: HIT');
-                $this->emit_browser_cache_headers('hit', $cache_key);
+                // WordPress already sent no-cache headers for a signed-in visitor; keep them.
+                if (!$li) $this->emit_browser_cache_headers('hit', $cache_key);
                 if ($this->dynamic_microcache_enabled) {
                     header('X-AceRedisCache-Dynamic-MicroHits: ' . $this->dynamic_microcache_hits);
                 }
             }
             // Re-apply compression for delivery if enabled and client accepts it
             $cached_content = $this->maybe_recompress_for_output($cached_content);
-            $this->maybe_trigger_swr_refresh($cache_key);
+            if (!$li) $this->maybe_trigger_swr_refresh($cache_key);
             echo $cached_content; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated response; escaping corrupts HTML and compressed bytes.
             if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
             return;
@@ -1120,9 +1270,15 @@ class AceRedisCache {
         if ($this->dynamic_placeholders_enabled) {
             add_filter('render_block', [$this, 'filter_render_block_allowlist_dynamic'], 9, 2);
         }
+        if ($li) {
+            $this->li_render = new LoggedInPageCache();
+            add_filter('nonce_life', [$this->li_render, 'record_nonce_action'], PHP_INT_MAX, 2);
+            add_action('wp_before_admin_bar_render', [$this->li_render, 'bar_start'], PHP_INT_MIN);
+            add_action('wp_after_admin_bar_render', [$this->li_render, 'bar_end'], PHP_INT_MAX);
+        }
         
         // Start output buffering
-        add_filter('wp_template_enhancement_output_buffer', function($content) use ($cache_key) {
+        add_filter('wp_template_enhancement_output_buffer', function($content) use ($cache_key, $li) {
             // Canonical host enforcement & poison prevention
             $home_host = wp_parse_url(home_url(), PHP_URL_HOST);
             $req_host = isset($_SERVER['HTTP_HOST']) && is_string($_SERVER['HTTP_HOST']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])) : '';
@@ -1200,11 +1356,22 @@ class AceRedisCache {
                     $cache_version = preg_replace($pattern, $placeholder, $cache_version);
                 }
             }
+            $li_block_reason = null;
+            if ($li && $this->li_render) {
+                remove_filter('nonce_life', [$this->li_render, 'record_nonce_action'], PHP_INT_MAX);
+                $cache_version = LoggedInPageCache::to_stored($cache_version, $this->li_render->actions(), 'wp_create_nonce');
+                $content = LoggedInPageCache::strip_markers($content);
+                $li_block_reason = LoggedInPageCache::identity_block_reason($cache_version, \wp_get_current_user());
+                $li_block_reason = apply_filters('ace_rc_logged_in_store_block', $li_block_reason, $cache_version, \wp_get_current_user());
+            }
             $has_local_dev_refs = $this->contains_local_dev_asset_references($cache_version);
             // Only ever store a real, complete page. See page_cache_store_block_reason()
             // for what each guard is protecting against - a 404 or a blank-main 200 that
             // reaches Redis re-serves itself for the whole TTL.
             $store_block_reason = $this->page_cache_store_block_reason($content);
+            if ($store_block_reason === null && is_string($li_block_reason) && $li_block_reason !== '') {
+                $store_block_reason = $li_block_reason;
+            }
 
             // Cache the content with intelligent minification handling
             if (!$skip_cache && !$is_first_pass && !$has_local_dev_refs && $store_block_reason === null && !empty($content) && $this->register_page_cache_path() && $this->register_singular_cache_path()) {
@@ -1256,7 +1423,8 @@ class AceRedisCache {
             }
             if (!headers_sent()) {
                 header('X-AceRedisCache: MISS');
-                if ($store_block_reason !== 'private_response' && $store_block_reason !== 'protected_post') $this->emit_browser_cache_headers('miss', $cache_key);
+                if ($li && $store_block_reason !== null) header('X-AceRedisCache-Skip: ' . $store_block_reason);
+                if (!$li && $store_block_reason !== 'private_response' && $store_block_reason !== 'protected_post') $this->emit_browser_cache_headers('miss', $cache_key);
             }
             // Compress final output if enabled before sending to client
             return $content;
@@ -1454,7 +1622,7 @@ class AceRedisCache {
 
     private function page_cache_store_block_reason($content, $code = null) {
         if ($this->singular_response_is_private()) return 'protected_post';
-        if (self::headers_disallow_shared_cache(headers_list())) return 'private_response';
+        if (self::headers_disallow_shared_cache($this->headers_for_store_check())) return 'private_response';
         if (!is_string($content) || trim($content) === '') {
             return 'empty_body';
         }
@@ -1698,8 +1866,8 @@ class AceRedisCache {
         $enabled_setting = !empty($this->settings['dynamic_excluded_blocks']);
         $enabled = apply_filters('ace_rc_enable_partial_dynamic', $enabled_setting, $this->settings);
         if (!$enabled) { return; }
-        // Guest frontend only
-        if (is_admin() || is_user_logged_in() || wp_doing_ajax() || $this->is_rest_request()) { return; }
+        // Guest frontend, or a signed-in request the signed-in page cache covers
+        if (is_admin() || (is_user_logged_in() && $this->logged_in_page_cache_group() === null) || wp_doing_ajax() || $this->is_rest_request()) { return; }
         // Use excluded_blocks as dynamic patterns
         $raw = $this->settings['excluded_blocks'] ?? '';
         $patterns = [];
@@ -1875,7 +2043,7 @@ class AceRedisCache {
      */
     public function filter_render_block_for_placeholders($block_content, $block) {
         // Only apply when page cache is enabled and request qualifies for caching (guest frontend)
-        if (empty($this->settings['enable_page_cache']) || is_user_logged_in() || is_admin() || wp_doing_ajax() || $this->is_rest_request()) {
+        if (empty($this->settings['enable_page_cache']) || (is_user_logged_in() && $this->logged_in_page_cache_group() === null) || is_admin() || wp_doing_ajax() || $this->is_rest_request()) {
             return $block_content;
         }
         $block_name = $block['blockName'] ?? '';
@@ -2020,6 +2188,11 @@ class AceRedisCache {
         // pre-plugins so it can't run the filter itself. (#4 early-serve groundwork.)
         $this->maybe_publish_page_key_inputs((int) $version, $host, array_slice($key_parts, $base_count));
 
+        // A signed-in copy has its own trailing part, so a guest key never matches one.
+        if ($this->is_logged_in_variant()) {
+            $key_parts[] = $this->logged_in_variant();
+        }
+
         return implode(':', $key_parts);
     }
 
@@ -2147,7 +2320,7 @@ class AceRedisCache {
      * @param string $device 'desktop'|'mobile'
      * @return string
      */
-    private function build_page_cache_core_key($path, $scheme, $device, $version = null, $host = null) {
+    private function build_page_cache_core_key($path, $scheme, $device, $version = null, $host = null, $variant = '') {
         if ($version === null) { $version = $this->get_site_cache_version(); }
         if ($host === null) { $host = wp_parse_url(home_url(), PHP_URL_HOST) ?: ''; }
         $host = $this->normalize_cache_host($host);
@@ -2169,6 +2342,9 @@ class AceRedisCache {
             'host' => $host,
             'version' => (int) $version,
         ]);
+        if ($variant !== '') {
+            $key_parts = array_merge((array) $key_parts, [$variant]);
+        }
 
         return implode(':', array_map('strval', (array) $key_parts));
     }
@@ -2223,7 +2399,7 @@ class AceRedisCache {
             $redis = $this->cache_manager->get_raw_client();
         }
         $paths = PagePathIndex::expand($redis, home_url(), $paths);
-        $deleted = $this->delete_page_keys($this->page_invalidation_keys($paths), $redis, 'path invalidation');
+        $deleted = $this->delete_page_keys(array_merge($this->page_invalidation_keys($paths), $this->logged_in_invalidation_keys($paths)), $redis, 'path invalidation');
         $deleted += $this->invalidate_early_serve_paths($paths, $redis);
         do_action('ace_rc_paths_invalidated', $paths, $deleted);
         return $deleted;
@@ -2248,6 +2424,37 @@ class AceRedisCache {
             }
         }
         return self::page_keys_for_cores($cores);
+    }
+
+    /**
+     * Every signed-in copy stored for these paths (each group, with and without the toolbar), or
+     * none when the signed-in page cache is off. A copy left behind after it is switched off is
+     * never served, since no request builds its key.
+     */
+    private function logged_in_invalidation_keys(array $paths) {
+        if (empty($this->settings['page_cache_logged_in'])) {
+            return [];
+        }
+        $versions = [];
+        try { $cv = (int) wp_cache_get('site_version', 'version'); $versions[] = $cv; if ($cv > 0) { $versions[] = $cv - 1; } } catch (\Throwable $t) { $versions[] = 0; }
+        $cores = [];
+        foreach ($paths as $p) {
+            foreach (['http', 'https'] as $scheme) {
+                foreach (['desktop', 'mobile'] as $device) {
+                    foreach ($versions as $ver) {
+                        foreach (LoggedInPageCache::all_variants() as $variant) {
+                            $core = $this->build_page_cache_core_key($p, $scheme, $device, $ver, null, $variant);
+                            $cores[] = [$core, $ver];
+                        }
+                    }
+                }
+            }
+        }
+        $keys = self::page_keys_for_cores($cores);
+        foreach ($cores as $pair) {
+            $keys[] = $this->page_cache_meta_prefix . $pair[0];
+        }
+        return $keys;
     }
 
     /**
@@ -3663,6 +3870,19 @@ class AceRedisCache {
             return 0;
         }
         $urls = array_values(array_filter($urls, function ($url) { return $this->local_purge_path($url) !== null; }));
+        // The refresher renders as a guest, so it cannot refresh a signed-in copy in place: delete
+        // those, and the next signed-in visitor renders a fresh one.
+        $li_paths = [];
+        foreach ($urls as $url) {
+            $path = $this->local_purge_path($url);
+            if ($path !== null) {
+                $li_paths[] = $path;
+                $li_paths[] = substr($path, -1) === '/' && $path !== '/' ? rtrim($path, '/') : $path;
+            }
+        }
+        if ($li_paths) {
+            $this->delete_page_keys($this->logged_in_invalidation_keys(array_values(array_unique($li_paths))), $redis, 'signed-in recache');
+        }
         foreach ($urls as $url) {
             $path = $this->local_purge_path($url);
             if ($path === null || strpos($path, '?') !== false) continue;

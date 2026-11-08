@@ -120,6 +120,8 @@ class AdminQueryCache {
         add_filter('media_library_months_with_files', [__CLASS__, 'media_months'], 10, 1);
         // The custom fields box: SELECT DISTINCT meta_key over the whole postmeta table.
         add_filter('postmeta_form_keys', [__CLASS__, 'postmeta_keys'], 10, 2);
+        // The media library's type filter: SELECT DISTINCT post_mime_type over every attachment.
+        add_filter('pre_get_available_post_mime_types', [__CLASS__, 'mime_types'], 10, 2);
         // "Is there any audio/video?" probes on every screen that opens the media modal.
         add_filter('media_library_show_audio_playlist', [__CLASS__, 'has_audio'], 10, 1);
         add_filter('media_library_show_video_playlist', [__CLASS__, 'has_video'], 10, 1);
@@ -188,6 +190,18 @@ class AdminQueryCache {
                 $limit
             ));
         }, ['postmeta']);
+    }
+
+    public static function mime_types($types, $type) {
+        if ($types !== null || !self::enabled()) {
+            return $types;
+        }
+        global $wpdb;
+        $type = (string) $type;
+        // The query core runs in get_available_post_mime_types().
+        return self::remember('mime_types:' . $type, function () use ($wpdb, $type) {
+            return $wpdb->get_col($wpdb->prepare("SELECT DISTINCT post_mime_type FROM $wpdb->posts WHERE post_type = %s AND post_mime_type != ''", $type));
+        }, ['attachments']);
     }
 
     public static function has_audio($show) {

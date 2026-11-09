@@ -176,12 +176,19 @@ if (!class_exists('WP_Object_Cache')) {
         // generation (`<namespace>v<gen>:...`), held in Redis at `<namespace>gen` and
         // memoised per process. flush() is then one INCR: keys of the old generation
         // become unreachable at once and expire by their TTL (every write carries one,
-        // DEFAULT_TTL at most when the caller gave none). A daily cron UNLINKs stale
-        // generations early. If the generation key cannot be read, the drop-in uses the
+        // DEFAULT_TTL at most when the caller gave none). A purge UNLINKs stale generations
+        // a couple of minutes after each flush (and daily as a backstop): left to the TTL, a
+        // site that flushes a few times an hour keeps a day of dead generations in Redis,
+        // which on the shared AceHost instance was over 90% of its memory. If the generation key cannot be read, the drop-in uses the
         // legacy key format and the SCAN-and-UNLINK flush, as before.
         protected $use_generations = true;
         protected $generation = null;      // int once loaded, false when unavailable
         protected static $generation_memo = []; // namespace => int (per process)
+        protected $stale_purge_wanted = false;  // this process bumped; schedule a purge at shutdown
+        private const STALE_PURGE_DELAY = 120;  // seconds, so requests already running can finish
+        protected $post_flush_at = 0;           // when this process last flushed for a post change
+        protected $post_flush_pending = false;  // a post change inside the window still owes a flush
+        private const POST_FLUSH_WINDOW = 60;   // seconds between post-change flushes per process
 
         private const BYPASS_GROUPS_DEFAULT = [
             'woocommerce_sessions',
@@ -497,6 +504,8 @@ if (!class_exists('WP_Object_Cache')) {
             // Lazy clean-up of keys from superseded generations (#27).
             add_action('ace_rc_purge_stale_generations', [$this, 'purge_stale_generations']);
             add_action('init', [$this, 'schedule_generation_purge']);
+            add_action('shutdown', [$this, 'flush_pending_post_changes'], 999);
+            add_action('shutdown', [$this, 'schedule_stale_purge_soon'], 1000);
         }
 
         public function apply_woocommerce_profile() {
@@ -617,19 +626,57 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         /**
-         * Cache flush for post changes — object-cache namespace only.
-         * Invalidates our cached objects so the frontend reflects the change, WITHOUT
-         * touching keys we don't own.
+         * Object-cache invalidation for a public post change: that post's own keys and the
+         * posts `last_changed` stamp, which every cached post query is keyed on. WordPress has
+         * already run clean_post_cache() by now; repeating the deletes covers callers that
+         * wrote the row directly and then fired save_post. Page and block caches are the
+         * plugin's job (its own save_post handlers, per post path).
+         *
+         * This used to flush the whole object cache. Importers save posts in loops (TalkFuse's
+         * feed ingest updates every story it touches), so that meant a dozen flushes a minute,
+         * every transient and count cache thrown away each time, and a day of dead generations
+         * filling the shared Redis. A site whose own caches really do depend on the flush can
+         * have it back with ACE_OC_FLUSH_ON_POST_CHANGE or the `ace_oc_flush_on_post_change`
+         * filter; it is then held to one flush a minute per process, with one more at shutdown
+         * for anything that changed in between.
          */
         protected function flush_everything_for_post($post_id) {
-            $this->runtime = [];
+            $post_id = (int) $post_id;
+            if (!$this->flush_on_post_change($post_id)) {
+                if ($post_id > 0) {
+                    $this->delete($post_id, 'posts');
+                    $this->delete($post_id, 'post_meta');
+                }
+                if (function_exists('wp_cache_set_posts_last_changed')) {
+                    wp_cache_set_posts_last_changed();
+                } else {
+                    $this->set('last_changed', microtime(), 'posts');
+                }
+                return;
+            }
 
-            // Do NOT flushDB(): ElastiCache Serverless is a single shared DB that also
-            // holds the page-cache plugin keys (page_cache:/page_cache_min:/page_cache_meta:/
-            // dyn_block:/ace_rc:). flushDB() here wipes the page cache on every publish →
-            // stampede. Clear only our object-cache namespace; the page-cache plugin runs
-            // its own save_post invalidation.
-            $this->flush(true); // forced, namespace-only (scans/dels our namespace — see flush())
+            $this->reset_runtime();
+            $now = time();
+            if ($this->post_flush_at && $now - $this->post_flush_at < self::POST_FLUSH_WINDOW) {
+                $this->post_flush_pending = true;
+                return;
+            }
+            $this->post_flush_at = $now;
+            $this->post_flush_pending = false;
+            $this->flush(true);
+        }
+
+        /** Whether this site asked for the old whole-cache flush on post changes. */
+        protected function flush_on_post_change($post_id) {
+            if (defined('ACE_OC_FLUSH_ON_POST_CHANGE')) { return (bool) ACE_OC_FLUSH_ON_POST_CHANGE; }
+            return function_exists('apply_filters') && (bool) apply_filters('ace_oc_flush_on_post_change', false, $post_id);
+        }
+
+        /** Shutdown: the one flush owed for post changes held back by the window above. */
+        public function flush_pending_post_changes() {
+            if (!$this->post_flush_pending) { return; }
+            $this->post_flush_pending = false;
+            $this->flush(true);
         }
 
         /**
@@ -903,17 +950,31 @@ if (!class_exists('WP_Object_Cache')) {
             if (!is_int($gen) && !is_numeric($gen)) { return false; }
             $this->generation = (int) $gen;
             self::$generation_memo[$this->namespace] = (int) $gen;
+            $this->stale_purge_wanted = true;
             return true;
         }
 
         /**
          * Maintenance: UNLINK keys left behind by older generations (and legacy keys
          * without one). They would expire by TTL anyway; this just frees memory sooner.
-         * Runs on the daily `ace_rc_purge_stale_generations` cron, never on a request path.
+         * Runs on the `ace_rc_purge_stale_generations` cron (soon after a flush, and daily),
+         * never on a request path.
+         *
+         * The generation is read fresh from Redis, not from this process's memo: a long cron
+         * process that started before another process flushed would otherwise keep the old
+         * generation and UNLINK the live one. A short lock keeps two purges from overlapping.
          */
         public function purge_stale_generations() {
-            $gen = $this->current_generation();
-            if ($gen === false) { return 0; }
+            if (!$this->use_generations || !$this->redis) { return 0; }
+            $lock = $this->namespace . 'purge_lock';
+            try {
+                if (!$this->redis->rawCommand('SET', $lock, '1', 'NX', 'EX', '300')) { return 0; }
+                $raw = $this->redis->rawCommand('GET', $this->generation_key());
+            } catch (\Throwable $e) {
+                return 0;
+            }
+            if (!is_numeric($raw)) { return 0; }
+            $gen = (int) $raw;
             $keep = $this->namespace . 'v' . $gen . ':';
             $gen_key = $this->generation_key();
             $it = null;
@@ -923,7 +984,7 @@ if (!class_exists('WP_Object_Cache')) {
                 do {
                     $keys = $this->redis->scan($it, $this->namespace . '*', 1000);
                     foreach ((array) $keys as $k) {
-                        if ($k === $gen_key || strpos($k, $keep) === 0) { continue; }
+                        if ($k === $gen_key || $k === $lock || strpos($k, $keep) === 0) { continue; }
                         $stale[] = $k;
                         if (count($stale) >= self::UNLINK_BATCH) {
                             $this->unlink_batch($stale);
@@ -935,12 +996,26 @@ if (!class_exists('WP_Object_Cache')) {
                 $this->unlink_batch($stale);
                 $count += count($stale);
             } catch (\Throwable $e) {}
+            try { $this->redis->rawCommand('DEL', $lock); } catch (\Throwable $e) {}
             return $count;
         }
 
         public function schedule_generation_purge() {
             if (function_exists('wp_next_scheduled') && !wp_next_scheduled('ace_rc_purge_stale_generations')) {
                 wp_schedule_event(time() + 3600, 'daily', 'ace_rc_purge_stale_generations');
+            }
+        }
+
+        /**
+         * After a request that flushed, queue one purge a couple of minutes out. WP-Cron will
+         * not add a second identical event within ten minutes of another, so a burst of
+         * flushes across many requests still costs one purge per ten minutes at most.
+         */
+        public function schedule_stale_purge_soon() {
+            if (!$this->stale_purge_wanted) { return; }
+            $this->stale_purge_wanted = false;
+            if (function_exists('wp_schedule_single_event')) {
+                wp_schedule_single_event(time() + self::STALE_PURGE_DELAY, 'ace_rc_purge_stale_generations');
             }
         }
 

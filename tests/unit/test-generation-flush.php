@@ -69,8 +69,8 @@ class GenerationFlushTest extends TestCase {
         $p->setValue(null, []);
     }
 
-    private function cache($redis, $namespace) {
-        $ref = new \ReflectionClass('WP_Object_Cache');
+    private function cache($redis, $namespace, $class = 'WP_Object_Cache') {
+        $ref = new \ReflectionClass($class);
         $cache = $ref->newInstanceWithoutConstructor();
         $props = [
             'redis' => $redis, 'connected' => true, 'namespace' => $namespace, 'blog_prefix' => '1:',
@@ -169,5 +169,88 @@ class GenerationFlushTest extends TestCase {
         $this->assertSame(['acetest:a:1:post_meta:k'], $this->keys('acetest:a:*'));
         $c->flush(true);
         $this->assertSame([], $this->keys('acetest:a:*'));
+    }
+    private function call($obj, $method, ...$args) {
+        $m = new \ReflectionMethod($obj, $method);
+        if (PHP_VERSION_ID < 80100) { $m->setAccessible(true); }
+        return $m->invoke($obj, ...$args);
+    }
+
+    private function prop($obj, $name) {
+        $p = new \ReflectionProperty($obj, $name);
+        if (PHP_VERSION_ID < 80100) { $p->setAccessible(true); }
+        return $p->getValue($obj);
+    }
+
+    public function testPostChangeInvalidatesThePostNotTheCache() {
+        $r = $this->redis();
+        $c = $this->cache($r, 'acetest:a:');
+        $c->set(42, 'post 42', 'posts');
+        $c->set(42, ['meta'], 'post_meta');
+        $c->set(7, 'post 7', 'posts');
+        $c->set('tfn_topic_found_x', ['count' => 10], 'transient');
+        $c->set('last_changed', 'before', 'posts');
+        $gen = $r->get('acetest:a:gen');
+
+        $this->call($c, 'flush_everything_for_post', 42);
+
+        $this->assertSame($gen, $r->get('acetest:a:gen'), 'a post change must not move the generation');
+        $reader = $this->cache($r, 'acetest:a:');
+        $this->assertFalse($reader->get(42, 'posts', true));
+        $this->assertFalse($reader->get(42, 'post_meta', true));
+        $this->assertNotSame('before', $reader->get('last_changed', 'posts', true));
+        $this->assertSame('post 7', $reader->get(7, 'posts', true));
+        $this->assertSame(['count' => 10], $reader->get('tfn_topic_found_x', 'transient', true));
+    }
+
+    public function testOptedInPostFlushesAreHeldToOnePerWindow() {
+        $r = $this->redis();
+        $class = get_class(new class extends WP_Object_Cache {
+            public function __construct() {}
+            protected function flush_on_post_change($post_id) { return true; }
+        });
+        $c = $this->cache($r, 'acetest:a:', $class);
+        $c->set('k', 'x', 'post_meta');
+        $start = (int) $r->get('acetest:a:gen');
+
+        for ($i = 1; $i <= 25; $i++) { $this->call($c, 'flush_everything_for_post', $i); }
+        $this->assertSame($start + 1, (int) $r->get('acetest:a:gen'), 'a burst of saves flushes once');
+
+        $c->flush_pending_post_changes();
+        $this->assertSame($start + 2, (int) $r->get('acetest:a:gen'), 'the held-back changes flush once at shutdown');
+        $c->flush_pending_post_changes();
+        $this->assertSame($start + 2, (int) $r->get('acetest:a:gen'));
+    }
+
+    public function testFlushAsksForAStalePurgeSoon() {
+        $r = $this->redis();
+        $c = $this->cache($r, 'acetest:a:');
+        $c->set('k', 'x', 'post_meta');
+        $this->assertFalse($this->prop($c, 'stale_purge_wanted'));
+        $c->flush(true);
+        $this->assertTrue($this->prop($c, 'stale_purge_wanted'));
+    }
+
+    public function testPurgeKeepsTheLiveGenerationWhenThisProcessIsBehind() {
+        $r = $this->redis();
+        $cron = $this->cache($r, 'acetest:a:');
+        $cron->set('old', 'x', 'post_meta'); // the cron process memoises this generation
+
+        $web = $this->cache($r, 'acetest:a:');
+        $web->flush(true); // another process moves the site on
+        $web->set('live', 'y', 'post_meta');
+
+        $this->assertSame(1, $cron->purge_stale_generations());
+        $this->assertSame('y', $this->cache($r, 'acetest:a:')->get('live', 'post_meta', true));
+        $this->assertSame(0, (int) $r->exists('acetest:a:purge_lock'));
+    }
+
+    public function testOverlappingPurgesStandDown() {
+        $r = $this->redis();
+        $c = $this->cache($r, 'acetest:a:');
+        $c->set('k', 'x', 'post_meta');
+        $c->flush(true);
+        $r->set('acetest:a:purge_lock', '1', ['EX' => 60]);
+        $this->assertSame(0, $c->purge_stale_generations());
     }
 }

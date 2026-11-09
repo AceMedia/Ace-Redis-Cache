@@ -28,7 +28,7 @@ class AceRedisCache {
     
     private $plugin_url;
     private $plugin_path; // define to avoid dynamic property deprecation
-    private $plugin_version = '0.9.0';
+    private $plugin_version = '0.9.1';
     // Debug tracking for transient flag mutation during save
     private $debug_pre_update_transient_early = null;
     
@@ -536,8 +536,9 @@ class AceRedisCache {
             add_action('deleted_post', [$this, 'maybe_invalidate_post_page_cache_deleted'], 50, 1);
             add_action('transition_post_status', [$this, 'maybe_invalidate_post_page_cache_status'], 50, 3);
             
-            // Force complete Redis flush for post updates to ensure block caching compatibility
-            // This ensures all caches (page, block, object) are cleared when posts change
+            // Broad page purge on post updates, for block caching compatibility: page and block
+            // caches go (soft where the site has a grace window). The object cache is not flushed;
+            // WordPress invalidates the post's own keys and query stamps, and the drop-in does too.
             add_filter('ace_rc_broad_page_cache_purge_on_post_update', '__return_true');
             
             // Priming cron handler
@@ -2725,11 +2726,10 @@ class AceRedisCache {
             }
         }
         if ($broad) {
-            // Broad = wipe THIS SITE's caches only. (This used to flushDB / scan bare
-            // page_cache:*/ace:* prefixes, which nuked every site sharing the Redis DB.)
-            if (function_exists('wp_cache_flush')) {
-                wp_cache_flush(); // drop-in flush is namespace-scoped to this site
-            }
+            // Broad = wipe THIS SITE's page and block caches only. (This used to flushDB / scan
+            // bare page_cache:*/ace:* prefixes, which nuked every site sharing the Redis DB, and
+            // later flushed the whole object cache on every save, which an importer turned into
+            // dozens of flushes a minute. Object keys for the post are invalidated by WordPress.)
             if ($this->cache_manager && method_exists($this->cache_manager, 'clear_all_cache')) {
                 $this->cache_manager->clear_all_cache(); // host-scoped page patterns
             }
@@ -3838,10 +3838,7 @@ class AceRedisCache {
             }
             return false;
         }
-        if (function_exists('wp_cache_flush')) {
-            wp_cache_flush();
-        }
-        $this->cache_manager->clear_all_cache();
+        $this->cache_manager->clear_all_cache(); // page and block keys; object keys are WordPress's
         return true;
     }
 

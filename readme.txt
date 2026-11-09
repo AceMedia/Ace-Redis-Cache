@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.9.0
+Stable tag: 0.9.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.1 =
+* Saving a post no longer flushes the whole object cache. The drop-in invalidates that post's own keys and the posts query stamp, and the broad page purge clears page and block caches only. Importers that save posts in a loop were moving the generation a dozen times a minute, dropping every transient each time and filling a shared Redis with dead generations. Sites that need the old flush can set ACE_OC_FLUSH_ON_POST_CHANGE or the ace_oc_flush_on_post_change filter; it is then held to one flush a minute per process, plus one at shutdown.
+* Stale generations are purged a couple of minutes after a flush (at most once every ten minutes), not only daily.
+* The stale purge reads the live generation from Redis instead of the process's memo, so a long cron run can no longer remove the current generation, and overlapping purges stand down.
 
 = 0.9.0 =
 * New setting, off by default: serve cached pages to logged-in users on the front end. Each group (administrators, editors, members who cannot edit, WooCommerce customers) has its own copy, apart from the guest copy; the toolbar is rendered fresh and every nonce is swapped for the viewer's own on each hit. Previews, the Customizer, POST requests and ?ace_nocache=1 always bypass, a copy is served only while fresh, and purges drop every variant.

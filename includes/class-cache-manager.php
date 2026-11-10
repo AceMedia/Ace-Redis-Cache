@@ -1001,18 +1001,18 @@ class CacheManager {
         $minification_enabled = ($this->settings['enable_minification'] ?? 0) && $minifier;
         
         if (!$should_exclude && $minification_enabled) {
-            // Store both minified and original versions
+            // Store the minified copy only. Until 0.9.2 the original was written beside it "as a
+            // fallback", but the read path only reaches the original when the minified key is
+            // missing, and both carried the same TTL, so the second copy was never served: it
+            // just doubled every minifying site's page cache (Sheff: 590 MB of a full 3 GB Redis,
+            // 10 Nov 2026). A page that fails to minify is still stored under the original key.
             try {
                 $minified_content = $minifier->minify_output($content);
-                
-                // Store minified version with separate key
                 $minified_key = $this->minified_cache_prefix . $key;
                 $redis->setex($minified_key, $ttl, $this->maybe_compress($minified_content, 'page'));
-                
-                // Store original version (as fallback)
-                $original_key = $this->cache_prefix . $key;
-                $redis->setex($original_key, $ttl, $this->maybe_compress($content, 'page'));
-                
+                // An earlier original for this page would outlive the minified copy and be
+                // served stale once that expires; drop it.
+                RedisBatch::delete_keys($redis, [$this->cache_prefix . $key]);
                 return true;
             } catch (\Exception $e) {
                 // If minification fails, store original

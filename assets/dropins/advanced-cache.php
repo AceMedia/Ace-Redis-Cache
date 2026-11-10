@@ -44,6 +44,13 @@ if (!empty($_SERVER['HTTP_X_ACEREDIS_PRIME']) || !empty($_SERVER['HTTP_X_ACEREDI
     return;
 }
 
+// So must the request this file makes for itself after serving a live block's older copy (see
+// "stale blocks" below): WordPress serves the stored page as usual, renders the expired block and
+// refills its microcache.
+if (!empty($_SERVER['HTTP_X_ACEREDIS_DYN'])) {
+    return;
+}
+
 // LOGGED_IN_COOKIE is NOT defined this early (wp-settings defines cookie constants
 // after advanced-cache loads), so a constant-gated check is dead code — which served
 // cached guest pages to logged-in users the moment early-serve went live. Match the
@@ -380,7 +387,20 @@ try {
     // served without booting WordPress, exactly as fresh as WordPress would have
     // served it. A copy that has expired needs a real render, so the request goes on
     // to WordPress, which renders the block and refills the microcache.
+    //
+    // Stale blocks: on a quiet page that meant the first visitor after every expiry
+    // (30 seconds, say) waited for a full WordPress boot. WordPress now also keeps an
+    // older copy of each block (dyn_block_st:, some minutes). When only that one is
+    // left the page is served with it, and once the visitor has their response this
+    // request asks WordPress for the same page in the background, which renders the
+    // block and refills both copies. One such request per block per 20 seconds; with
+    // no older copy either, the request goes to WordPress as before. It needs PHP-FPM
+    // (to finish the response first) and curl; without them nothing changes. Define
+    // ACE_REDIS_EARLY_STALE_BLOCKS false to switch it off.
     $filled = '';
+    $stale_blocks = [];
+    $can_refresh_blocks = function_exists('fastcgi_finish_request') && function_exists('curl_init')
+        && !(defined('ACE_REDIS_EARLY_STALE_BLOCKS') && !ACE_REDIS_EARLY_STALE_BLOCKS);
     if (strpos($inspect_body, '<!--ACE_BLOCK_DYNAMIC:') !== false) {
         $emit('MISS dynamic');
         return;
@@ -392,13 +412,18 @@ try {
         foreach ($hashes as $hash) {
             $keys[] = 'dyn_block:' . $hash;
             $keys[] = 'dyn_block_mc:' . $hash;
+            $keys[] = 'dyn_block_st:' . $hash;
         }
         $values = $hashes ? $redis->mGet($keys) : [];
         $blocks = [];
         foreach ($hashes as $i => $hash) {
             // WordPress only uses the microcache copy while the block's descriptor exists.
-            $descriptor = $values[$i * 2] ?? false;
-            $copy = $values[$i * 2 + 1] ?? false;
+            $descriptor = $values[$i * 3] ?? false;
+            $copy = $values[$i * 3 + 1] ?? false;
+            if ((!is_string($copy) || $copy === '') && $can_refresh_blocks) {
+                $copy = $values[$i * 3 + 2] ?? false;
+                $stale_blocks[] = $hash;
+            }
             if (!is_string($descriptor) || $descriptor === '' || !is_string($copy) || $copy === '') {
                 $blocks = null;
                 break;
@@ -437,7 +462,7 @@ try {
             $body = $plain;
             $encoding = '';
         }
-        $filled = ' filled';
+        $filled = $stale_blocks ? ' filled stale-block' : ' filled';
     }
 
     if ($stale !== '') {
@@ -471,6 +496,40 @@ try {
         header('Content-Length: ' . strlen($body));
     }
     echo $body; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated HTML or compressed response; escaping corrupts the page.
+
+    if ($stale_blocks) {
+        // The visitor has the page. Whoever wins a block's lock asks WordPress to render it again.
+        $refresh = false;
+        try {
+            foreach ($stale_blocks as $hash) {
+                if ($redis->set('ace:1:dynlock:' . $hash, '1', ['nx', 'ex' => 20])) {
+                    $refresh = true;
+                }
+            }
+        } catch (Throwable $e) {}
+        if ($refresh) {
+            fastcgi_finish_request();
+            // phpcs:disable WordPress.WP.AlternativeFunctions -- WordPress is not loaded here.
+            $ch = curl_init($scheme . '://' . $host . $request_uri);
+            if (!$ch) {
+                exit;
+            }
+            curl_setopt_array($ch, [
+                CURLOPT_HTTPHEADER => ['X-AceRedis-Dyn: 1'],
+                CURLOPT_USERAGENT => 'AceRedisCache block refresh',
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_NOBODY => false,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_TIMEOUT => 20,
+                // The site is asking itself; a local or self-signed certificate must not stop it.
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+            ]);
+            curl_exec($ch);
+            // phpcs:enable
+        }
+    }
     exit;
 } catch (Throwable $e) {
     return;

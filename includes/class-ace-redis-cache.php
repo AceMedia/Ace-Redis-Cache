@@ -2034,7 +2034,16 @@ class AceRedisCache {
                     if ($original_post) { $post = $original_post; setup_postdata($post); }
                     // Store in microcache
                     if ($this->dynamic_microcache_enabled && !empty($rendered)) {
-                        try { $this->cache_manager->set('dyn_block_mc:' . $hash, $rendered, $this->dynamic_microcache_ttl); } catch (\Throwable $t) {}
+                        try {
+                            $this->cache_manager->set('dyn_block_mc:' . $hash, $rendered, $this->dynamic_microcache_ttl);
+                            // An older copy for advanced-cache.php: once the microcache copy has expired it
+                            // serves this one and has the block rendered again in the background, so a
+                            // visitor to a quiet page does not wait for WordPress to boot.
+                            $stale_ttl = (int) apply_filters('ace_rc_dynamic_stale_ttl', max(300, min(3600, $this->dynamic_microcache_ttl * 20)), $payload['name']);
+                            if ($stale_ttl > $this->dynamic_microcache_ttl) {
+                                $this->cache_manager->set('dyn_block_st:' . $hash, $rendered, $stale_ttl);
+                            }
+                        } catch (\Throwable $t) {}
                     }
                     return $rendered;
                 } catch (\Throwable $t) {

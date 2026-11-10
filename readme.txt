@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.9.3
+Stable tag: 0.9.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,9 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.4 =
+* A page with a live block no longer makes the first visitor after the block's microcache copy expires wait for WordPress to boot. WordPress keeps an older copy of each live block as well (ten minutes by default, filter `ace_rc_dynamic_stale_ttl`); when only that one is left the page is served with it before WordPress boots, and once the visitor has their response the block is rendered again in the background. At most one background render per block every 20 seconds. Needs PHP-FPM and curl; without them, or with `ACE_REDIS_EARLY_STALE_BLOCKS` defined false, such a request goes to WordPress as before.
 
 = 0.9.3 =
 * Pages with live blocks (a bet ticker in the header, say) are served before WordPress boots whenever every live block has a microcache copy. The drop-in pastes the copies in itself, which was all a hit needed WordPress for, so these pages are as fresh as before without a full WordPress start. An expired copy still goes to WordPress, which renders the block and refills the microcache. On PP News dev, where the ticker is on every page, every hit used to boot WordPress.

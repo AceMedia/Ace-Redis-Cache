@@ -936,6 +936,20 @@ class AceRedisCache {
         return false;
     }
 
+    /**
+     * Ace Crawl Enhancer's custom sitemap routes, or null when it is not active. Crawl 1.0.98 renamed the
+     * function; both names are accepted because the two plugins deploy separately on each site.
+     */
+    private function crawl_sitemap_routes() {
+        if (function_exists('acecrawl_sitemap_custom_routes')) {
+            return (array) acecrawl_sitemap_custom_routes();
+        }
+        if (function_exists('ace_sitemap_powertools_custom_routes')) {
+            return (array) ace_sitemap_powertools_custom_routes();
+        }
+        return null;
+    }
+
     private function is_sitemap_request() {
         if (isset($_GET['sitemap']) || isset($_GET['sitemap-stylesheet'])) {
             return true;
@@ -950,14 +964,15 @@ class AceRedisCache {
             return true;
         }
 
-        if (function_exists('ace_sitemap_powertools_custom_routes')) {
+        $crawl_routes = $this->crawl_sitemap_routes();
+        if ($crawl_routes !== null) {
             $path = wp_parse_url($request_uri, PHP_URL_PATH);
             $path = trim((string) $path, '/');
             if ($path === 'sitemap.xml' || $path === 'sitemap.xsl' || $path === 'sitemap-index.xsl') {
                 return true;
             }
             if ($path !== '') {
-                $routes = ace_sitemap_powertools_custom_routes();
+                $routes = $crawl_routes;
                 foreach (array_keys($routes) as $slug) {
                     $slug = trim((string) $slug, '/');
                     if ($slug === '') {
@@ -3275,7 +3290,7 @@ class AceRedisCache {
             home_url('/wp-sitemap.xml'),
         ];
 
-        if (function_exists('ace_sitemap_powertools_custom_routes')) {
+        if ($this->crawl_sitemap_routes() !== null) {
             $urls[] = home_url('/sitemap.xml');
         }
 

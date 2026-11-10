@@ -2283,6 +2283,17 @@ class AceRedisCache {
             }
             // The crawler rule (see crawler_bypass_rule()), so the drop-in can send a bot on a
             // bypassed route through to WordPress rather than handing it the reader's copy.
+            // The browser cache headers a WordPress hit sends, so a page served before WordPress
+            // boots is cached by browsers and Cloudflare the same way. Only the two lifetimes are
+            // published; the drop-in builds the same header values from them.
+            if (!empty($this->settings['enable_browser_cache_headers'])) {
+                $headers = $this->browser_cache_header_values('hit', null, 200);
+                if (preg_match('/max-age=(\d+), s-maxage=(\d+)/', (string) ($headers['Cache-Control'] ?? ''), $ages) === 1) {
+                    $redis->rawCommand('SET', $ns . 'browser_cache', $ages[1] . ':' . $ages[2], 'EX', (string) DAY_IN_SECONDS);
+                }
+            } else {
+                $redis->rawCommand('DEL', $ns . 'browser_cache');
+            }
             $crawler = $this->crawler_bypass_rule();
             if ($crawler['agents'] !== '' && $crawler['paths']) {
                 $redis->rawCommand('SET', $ns . 'crawler_agents', $crawler['agents'], 'EX', (string) DAY_IN_SECONDS);

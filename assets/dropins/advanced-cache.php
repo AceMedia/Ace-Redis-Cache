@@ -271,6 +271,8 @@ try {
         return;
     }
 
+    $browser_cache = $redis->get($token_ns . 'browser_cache');
+
     $payload = false;
     foreach ($candidates as $candidate) {
         $payload = $redis->get($candidate);
@@ -295,21 +297,25 @@ try {
     // is worth checking before unserialize() is asked to allocate for it: a
     // corrupt s:4294967296:"... header is an allocation request, not a cache
     // value. It took a production site down for eighty seconds.
-    if (preg_match('/^s:(\d{1,10}):"/', $payload, $ace_rc_len) === 1
-        && (int) $ace_rc_len[1] <= strlen($payload)) {
-        $decoded = @unserialize($payload);
-        if (is_string($decoded)) {
-            $payload = $decoded;
+    $unwrap = function ($value) {
+        if (preg_match('/^s:(\d{1,10}):"/', $value, $ace_rc_len) === 1
+            && (int) $ace_rc_len[1] <= strlen($value)) {
+            $decoded = @unserialize($value);
+            if (is_string($decoded)) {
+                return $decoded;
+            }
+        } elseif (strncmp($value, "\x00\x00\x00\x02", 4) === 0 && function_exists('igbinary_unserialize')) {
+            // igbinary's header is a 4-byte format version. Only attempt it when the
+            // extension is actually loaded, otherwise leave the payload alone and let the
+            // marker check below fail cleanly into 'MISS undecodable'.
+            $decoded = @igbinary_unserialize($value);
+            if (is_string($decoded)) {
+                return $decoded;
+            }
         }
-    } elseif (strncmp($payload, "\x00\x00\x00\x02", 4) === 0 && function_exists('igbinary_unserialize')) {
-        // igbinary's header is a 4-byte format version. Only attempt it when the
-        // extension is actually loaded, otherwise leave the payload alone and let the
-        // marker check below fail cleanly into 'MISS undecodable'.
-        $decoded = @igbinary_unserialize($payload);
-        if (is_string($decoded)) {
-            $payload = $decoded;
-        }
-    }
+        return $value;
+    };
+    $payload = $unwrap($payload);
 
     // Decode the self-describing marker into [body, encoding]; foreign/undecodable (e.g. an igbinary-wrapped
     // value before the NONE cutover) leaves $body null -> treated as a miss, never served.
@@ -367,10 +373,71 @@ try {
         $emit('MISS uninspectable');
         return;
     }
-    if (strpos($inspect_body, '<!--ACE_DYNAMIC blk:') !== false
-        || strpos($inspect_body, '<!--ACE_BLOCK_DYNAMIC:') !== false) {
+    // Blocks the site keeps live (a bet ticker in the header, say) are stored as
+    // placeholders, and WordPress fills each one from its short-lived microcache copy
+    // when there is one. That paste is all a hit needed WordPress for, so it is done
+    // here: when every placeholder on the page has a microcache copy, the page is
+    // served without booting WordPress, exactly as fresh as WordPress would have
+    // served it. A copy that has expired needs a real render, so the request goes on
+    // to WordPress, which renders the block and refills the microcache.
+    $filled = '';
+    if (strpos($inspect_body, '<!--ACE_BLOCK_DYNAMIC:') !== false) {
         $emit('MISS dynamic');
         return;
+    }
+    if (strpos($inspect_body, '<!--ACE_DYNAMIC blk:') !== false) {
+        preg_match_all('/<!--ACE_DYNAMIC blk:([a-f0-9]{32}):v1-->/', $inspect_body, $ace_rc_dyn);
+        $hashes = array_values(array_unique($ace_rc_dyn[1]));
+        $keys = [];
+        foreach ($hashes as $hash) {
+            $keys[] = 'dyn_block:' . $hash;
+            $keys[] = 'dyn_block_mc:' . $hash;
+        }
+        $values = $hashes ? $redis->mGet($keys) : [];
+        $blocks = [];
+        foreach ($hashes as $i => $hash) {
+            // WordPress only uses the microcache copy while the block's descriptor exists.
+            $descriptor = $values[$i * 2] ?? false;
+            $copy = $values[$i * 2 + 1] ?? false;
+            if (!is_string($descriptor) || $descriptor === '' || !is_string($copy) || $copy === '') {
+                $blocks = null;
+                break;
+            }
+            $copy = $unwrap($copy);
+            $html = null;
+            if (preg_match('/^br\d{0,2}:(.*)$/s', $copy, $m) === 1) {
+                $html = function_exists('brotli_uncompress') ? @brotli_uncompress($m[1]) : false;
+            } elseif (preg_match('/^gz\d{0,2}:(.*)$/s', $copy, $m) === 1) {
+                $html = @gzdecode($m[1]);
+                if (!is_string($html) && function_exists('gzuncompress')) {
+                    $html = @gzuncompress($m[1]);
+                }
+            } elseif (strpos($copy, 'raw:') === 0) {
+                $html = substr($copy, 4);
+            }
+            if (!is_string($html) || $html === '') {
+                $blocks = null;
+                break;
+            }
+            $blocks['<!--ACE_DYNAMIC blk:' . $hash . ':v1-->'] = $html;
+        }
+        if (!$blocks) {
+            $emit('MISS dynamic');
+            return;
+        }
+        $plain = strtr($inspect_body, $blocks);
+        if ($encoding === 'br') {
+            $body = function_exists('brotli_compress') ? @brotli_compress($plain, 5) : false;
+        } elseif ($encoding === 'gzip') {
+            $body = @gzencode($plain, 6);
+        } else {
+            $body = $plain;
+        }
+        if (!is_string($body)) {
+            $body = $plain;
+            $encoding = '';
+        }
+        $filled = ' filled';
     }
 
     if ($stale !== '') {
@@ -391,8 +458,13 @@ try {
             header('Content-Encoding: ' . $encoding);
             header('Vary: Accept-Encoding');
         }
-        header('X-Ace-Early: ' . ($stale !== '' ? 'HIT ' . $stale : 'HIT'));
+        header('X-Ace-Early: ' . ($stale !== '' ? 'HIT ' . $stale : 'HIT') . $filled);
         header('X-AceRedisCache: HIT (advcache' . ($stale !== '' ? ', stale' : '') . ')');
+        if (is_string($browser_cache) && preg_match('/^(\d+):(\d+)$/', $browser_cache, $ages) === 1) {
+            header('Cache-Control: public, max-age=' . $ages[1] . ', s-maxage=' . $ages[2]);
+            header('Expires: ' . gmdate('D, d M Y H:i:s', $now + (int) $ages[1]) . ' GMT');
+            header('Vary: Cookie', false);
+        }
         if (function_exists('header_remove')) {
             header_remove('Content-Length');
         }

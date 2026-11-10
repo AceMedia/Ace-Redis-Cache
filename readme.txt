@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.9.2
+Stable tag: 0.9.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,10 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.3 =
+* Pages with live blocks (a bet ticker in the header, say) are served before WordPress boots whenever every live block has a microcache copy. The drop-in pastes the copies in itself, which was all a hit needed WordPress for, so these pages are as fresh as before without a full WordPress start. An expired copy still goes to WordPress, which renders the block and refills the microcache. On PP News dev, where the ticker is on every page, every hit used to boot WordPress.
+* A page served before WordPress boots now sends the same browser cache headers as a WordPress hit (Cache-Control, Expires, Vary: Cookie) when the site has them switched on.
 
 = 0.9.2 =
 * With minification on, a page is stored once, as its minified copy. The original was also written beside it as a fallback that the read path only reached when the minified key was missing, and both expired together, so it was never served: it doubled every minifying site's page cache (half of Sheffield Events' cache, 590 MB, on a full 3 GB Redis). An older original left from before the upgrade is removed when the page is next cached.

@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.9.4
+Stable tag: 0.9.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,10 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.5 =
+* Pages with live blocks are served before WordPress boots on cluster-mode servers too (ElastiCache Serverless, for one). The drop-in read each block's copies with one MGET, which such a server refuses when the keys hash to different slots, and they always do, so every such page went to WordPress there. The copies are now read with one GET per key in a single pipeline.
+* `ACE_REDIS_EARLY_REFRESH_ADDR` (e.g. `'127.0.0.1'`) sends the background block render straight to this web server. Without it the render goes out by the site's public name, which a CDN or WAF in front of the site may turn away.
 
 = 0.9.4 =
 * A page with a live block no longer makes the first visitor after the block's microcache copy expires wait for WordPress to boot. WordPress keeps an older copy of each live block as well (ten minutes by default, filter `ace_rc_dynamic_stale_ttl`); when only that one is left the page is served with it before WordPress boots, and once the visitor has their response the block is rendered again in the background. At most one background render per block every 20 seconds. Needs PHP-FPM and curl; without them, or with `ACE_REDIS_EARLY_STALE_BLOCKS` defined false, such a request goes to WordPress as before.

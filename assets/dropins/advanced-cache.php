@@ -414,7 +414,28 @@ try {
             $keys[] = 'dyn_block_mc:' . $hash;
             $keys[] = 'dyn_block_st:' . $hash;
         }
-        $values = $hashes ? $redis->mGet($keys) : [];
+        // One GET per key in a single pipeline, not MGET: a cluster-mode server (ElastiCache
+        // Serverless) refuses an MGET whose keys hash to different slots, and these always do,
+        // which sent every page with a live block to WordPress there.
+        $values = [];
+        if ($keys) {
+            try {
+                $pipe = $redis->multi(Redis::PIPELINE);
+                foreach ($keys as $key) {
+                    $pipe->get($key);
+                }
+                $values = $pipe->exec();
+            } catch (Throwable $e) {
+                try { $redis->discard(); } catch (Throwable $e2) {}
+                $values = false;
+            }
+            if (!is_array($values) || count($values) !== count($keys)) {
+                $values = [];
+                foreach ($keys as $key) {
+                    $values[] = $redis->get($key);
+                }
+            }
+        }
         $blocks = [];
         foreach ($hashes as $i => $hash) {
             // WordPress only uses the microcache copy while the block's descriptor exists.
@@ -514,7 +535,7 @@ try {
             if (!$ch) {
                 exit;
             }
-            curl_setopt_array($ch, [
+            $refresh_opts = [
                 CURLOPT_HTTPHEADER => ['X-AceRedis-Dyn: 1'],
                 CURLOPT_USERAGENT => 'AceRedisCache block refresh',
                 CURLOPT_RETURNTRANSFER => true,
@@ -525,7 +546,13 @@ try {
                 // The site is asking itself; a local or self-signed certificate must not stop it.
                 CURLOPT_SSL_VERIFYPEER => false,
                 CURLOPT_SSL_VERIFYHOST => 0,
-            ]);
+            ];
+            // Behind a CDN or WAF that turns away a server's own requests, send the render
+            // straight to this web server instead (ACE_REDIS_EARLY_REFRESH_ADDR, e.g. '127.0.0.1').
+            if (defined('ACE_REDIS_EARLY_REFRESH_ADDR') && is_string(ACE_REDIS_EARLY_REFRESH_ADDR) && ACE_REDIS_EARLY_REFRESH_ADDR !== '') {
+                $refresh_opts[CURLOPT_RESOLVE] = [$host . ':' . ($scheme === 'https' ? 443 : 80) . ':' . ACE_REDIS_EARLY_REFRESH_ADDR];
+            }
+            curl_setopt_array($ch, $refresh_opts);
             curl_exec($ch);
             // phpcs:enable
         }

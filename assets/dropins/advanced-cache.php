@@ -48,6 +48,9 @@ if (!empty($_SERVER['HTTP_X_ACEREDIS_PRIME']) || !empty($_SERVER['HTTP_X_ACEREDI
 // "stale blocks" below): WordPress serves the stored page as usual, renders the expired block and
 // refills its microcache.
 if (!empty($_SERVER['HTTP_X_ACEREDIS_DYN'])) {
+    // The requesting worker stops waiting after a few seconds (see the refresh below) so it is
+    // free for visitors again; this render carries on and refills the block regardless.
+    ignore_user_abort(true);
     return;
 }
 
@@ -541,8 +544,11 @@ try {
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_NOBODY => false,
                 CURLOPT_FOLLOWLOCATION => false,
-                CURLOPT_CONNECTTIMEOUT => 3,
-                CURLOPT_TIMEOUT => 20,
+                // Only long enough to hand the request over: the render it starts ignores the
+                // disconnect and finishes on its own, so this worker isn't held for the whole
+                // render (on a small pool that queued visitors behind slow renders).
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_TIMEOUT => 3,
                 // The site is asking itself; a local or self-signed certificate must not stop it.
                 CURLOPT_SSL_VERIFYPEER => false,
                 CURLOPT_SSL_VERIFYHOST => 0,

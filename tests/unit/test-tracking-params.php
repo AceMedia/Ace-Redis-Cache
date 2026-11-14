@@ -23,6 +23,14 @@ class TrackingParamsTest extends TestCase {
         }
     }
 
+    public function testReferralSharesUseTheCleanPageKey() {
+        foreach (['via=alice', 'tfn_s=legacy-token', 'ref=alice', 'VIA=alice', 'via[]=alice'] as $marker) {
+            $this->assertSame('/news/', AceRedisCache::normalize_request_uri('/news/?' . $marker));
+            $this->assertSame('/news/?page=2', AceRedisCache::normalize_request_uri('/news/?page=2&' . $marker . '&utm_source=share'));
+        }
+        $this->assertSame('/?tfn_sort=new&viaduct=1', AceRedisCache::normalize_request_uri('/?viaduct=1&tfn_sort=new&via=alice'));
+    }
+
     public function testRealParametersAreKeptAndSorted() {
         $this->assertSame(
             '/shop/?orderby=price&page=2',

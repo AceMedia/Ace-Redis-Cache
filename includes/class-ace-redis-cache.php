@@ -2176,7 +2176,7 @@ class AceRedisCache {
         $path = substr($uri, 0, $q);
         parse_str(substr($uri, $q + 1), $params);
         foreach (array_keys($params) as $k) {
-            if (preg_match('/^(utm_|fbclid$|gclid$|gclsrc$|gbraid$|wbraid$|gad_source$|gad_campaignid$|dclid$|srsltid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|igshid$|twclid$|ttclid$|li_fat_id$|epik$|yclid$|hsa_|_hsenc$|_hsmi$|_kx$|v$)/i', (string) $k)) unset($params[$k]);
+            if (preg_match('/^(utm_|fbclid$|gclid$|gclsrc$|gbraid$|wbraid$|gad_source$|gad_campaignid$|dclid$|srsltid$|msclkid$|mc_cid$|mc_eid$|_ga$|_gl$|ref$|via$|tfn_s$|igshid$|twclid$|ttclid$|li_fat_id$|epik$|yclid$|hsa_|_hsenc$|_hsmi$|_kx$|v$)/i', (string) $k)) unset($params[$k]);
         }
         if (!$params) return $path;
         ksort($params);

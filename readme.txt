@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.9.6
+Stable tag: 0.9.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,9 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.7 =
+* WP-Cron runs keep what they write to the object cache. Cron used to count as an update operation, so every cron run ignored Redis and deleted each key it wrote instead of storing it: whatever a scheduled job cached was thrown away at once and rebuilt by the next visitor. Plugin and theme updates still bypass the cache.
 
 = 0.9.6 =
 * The background block render no longer holds the worker that asked for it. That worker used to wait up to 20 seconds for the render to finish; it now hands the request over and lets go after 3 seconds, and the render ignores the disconnect and finishes on its own. On a small PHP-FPM pool with slow page builds, the held workers queued visitors' cache hits behind them.

@@ -346,9 +346,13 @@ if (!class_exists('WP_Object_Cache')) {
             $is_logged_in_fn = function_exists('is_user_logged_in') && is_user_logged_in();
             $is_rest         = defined('REST_REQUEST') && REST_REQUEST;
             
-            // Bypass for WordPress update operations to prevent interference with plugin/theme update checks
+            // Bypass for WordPress update operations to prevent interference with plugin/theme updates.
+            // WP-Cron is not one of them. It used to be, which made every cron run (wp-cron.php and
+            // `wp cron event run`, both define DOING_CRON before WordPress loads) runtime-only: blind
+            // to Redis, and each write it made deleted the key instead of storing it. Caches that cron
+            // exists to build were thrown away as they were written and rebuilt by the next visitor.
+            // Cron's own update checks only write site transients, which persist like anything else.
             $is_update_operation = (
-                (defined('DOING_CRON') && DOING_CRON) ||
                 strpos($request_uri, 'wp-admin/update-core.php') !== false ||
                 strpos($request_uri, 'wp-admin/update.php') !== false ||
                 isset($_GET['action']) && in_array($_GET['action'], ['update-plugin', 'update-theme', 'upgrade-plugin', 'upgrade-theme']) ||
@@ -1037,7 +1041,7 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         /**
-         * A write made in runtime-only mode (cron, admin, update operations) lands in this
+         * A write made in runtime-only mode (admin, AJAX, REST, signed-in, update operations) lands in this
          * process only, and the copy in Redis stays as it was until it expires. Once
          * alloptions persisted (0.7.17) that meant a system-cron run rescheduled every event
          * in the database while wp-cli and the front end kept reading a cron array in which
@@ -1412,9 +1416,10 @@ if (!class_exists('WP_Object_Cache')) {
                 // mode there is no persistent layer, so the local copy is the only truth and must be
                 // returned. Honouring $force here answered false to wp-cron's _get_cron_lock() (a forced
                 // read of 'doing_cron' straight after set_transient()), so wp-cron.php concluded another
-                // process held the lock and exited without running a single event. Cron runs are
-                // classified as update operations and land in this mode, so every scheduled job on a
-                // site with DISABLE_WP_CRON and a system cron stalled silently.
+                // process held the lock and exited without running a single event. Cron runs were then
+                // classified as update operations and landed in this mode, so every scheduled job on a
+                // site with DISABLE_WP_CRON and a system cron stalled silently. (Cron now persists;
+                // a cron run that is runtime-only for another reason still needs this.)
                 $local = $this->runtime_get($group, $key, $local_found);
                 if ($local_found) {
                     $found = true;

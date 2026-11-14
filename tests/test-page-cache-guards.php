@@ -67,6 +67,9 @@ $reset_query = function () use ($query) {
     $query->init_query_flags();
     $query->is_page = true;
     $query->is_singular = true;
+    $query->queried_object = new WP_Post((object) [
+        'ID' => 0, 'post_type' => 'page', 'post_status' => 'publish', 'post_password' => '',
+    ]);
 };
 
 // --- fixtures -----------------------------------------------------------------
@@ -129,6 +132,14 @@ $query->set_404();
 $check('404 is caught even when the SAPI reports no status code', $call('page_cache_store_block_reason', [$populated, false]), 'is_404');
 $reset_query();
 $check('no status code from the SAPI is treated as 200', $call('current_response_code', [false]), 200);
+
+// A populated page can still contain protected data: never store it publicly.
+$reset_query();
+$query->queried_object->post_password = 'fixture-password';
+$check('password-protected page is not stored', $call('page_cache_store_block_reason', [$populated, 200]), 'protected_post');
+$reset_query();
+$query->queried_object->post_status = 'private';
+$check('private page is not stored', $call('page_cache_store_block_reason', [$populated, 200]), 'protected_post');
 
 // --- headers ------------------------------------------------------------------
 

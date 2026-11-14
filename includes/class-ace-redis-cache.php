@@ -4057,8 +4057,9 @@ class AceRedisCache {
             }
         }
         if ($urls) {
-            $this->schedule_sitemap_prime_runner(60);
-            $this->enqueue_prime_urls($urls);
+            // A visitor is waiting for these pages to become fresh. Put them before bulk
+            // sitemap/import work, including when they already exist later in that queue.
+            $this->enqueue_prime_urls($urls, true);
         }
     }
 

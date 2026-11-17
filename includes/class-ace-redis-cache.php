@@ -426,6 +426,7 @@ class AceRedisCache {
             add_action('save_post', [$this, 'queue_recache_on_save'], 99, 2);
             add_action('before_delete_post', [$this, 'recache_on_delete'], 10, 2);
             add_action('wp_update_nav_menu', [$this, 'queue_sitewide_recache']);
+            $this->register_woo_catalogue_recache_hooks();
         }
         add_action('ace_te_taxonomy_changed', [$this, 'handle_taxonomy_changed'], 10, 2);
         
@@ -3735,6 +3736,137 @@ class AceRedisCache {
         $queue['__sitewide'] = ['recache' => true];
         $this->set_runtime_queue($this->deferred_queue_option, $this->deferred_queue_option, $queue, $this->deferred_queue_ttl);
         $this->schedule_deferred_runner();
+    }
+
+    /* ===================== WooCommerce catalogue changes (0.9.7) ===================== */
+
+    /**
+     * What a shop edit changes beyond the product's own page, in every request context:
+     * - an attribute added, renamed (label or slug) or deleted, or one of its terms changed,
+     *   shows on every product, filter and comparison, so the whole site is recached;
+     * - a product (or one of its variations) that a Composite Products component offers is shown
+     *   inside those composites' pages, so each composite is recached with it.
+     */
+    private function register_woo_catalogue_recache_hooks() {
+        if (!class_exists('WooCommerce') && !function_exists('WC')) {
+            return;
+        }
+        foreach (['woocommerce_attribute_added', 'woocommerce_attribute_updated', 'woocommerce_attribute_deleted'] as $hook) {
+            add_action($hook, [$this, 'recache_after_woo_attribute_change'], 20, 0);
+        }
+        foreach (['created_term', 'edited_term', 'delete_term'] as $hook) {
+            add_action($hook, [$this, 'recache_after_woo_term_change'], 20, 3);
+        }
+        foreach ([
+            'woocommerce_update_product', 'woocommerce_update_product_variation',
+            'woocommerce_product_set_stock', 'woocommerce_variation_set_stock',
+            'woocommerce_product_set_stock_status', 'woocommerce_variation_set_stock_status',
+        ] as $hook) {
+            add_action($hook, [$this, 'recache_composites_using_product'], 60, 1);
+        }
+        add_action('save_post_product_variation', [$this, 'recache_composites_using_product'], 60, 1);
+        add_action('save_post_product', [$this, 'recache_composites_using_product'], 60, 1);
+    }
+
+    public function recache_after_woo_attribute_change() {
+        static $done = false;
+        if ($done || !$this->recache_on_edit_enabled()) {
+            return;
+        }
+        $done = true;
+        $this->recache_broad_purge(0, null);
+        $this->queue_sitewide_recache();
+    }
+
+    public function recache_after_woo_term_change($term_id = 0, $tt_id = 0, $taxonomy = '') {
+        if (is_string($taxonomy) && strpos($taxonomy, 'pa_') === 0) {
+            $this->recache_after_woo_attribute_change();
+        }
+    }
+
+    /**
+     * Composite products whose components offer this product. Pure so it can be tested: $rows are
+     * [post_id => _bto_data (array)], $category_ids the product's categories with their ancestors.
+     *
+     * @return int[]
+     */
+    public static function composites_offering($rows, $product_id, array $category_ids = []) {
+        $product_id = (int) $product_id;
+        $found = [];
+        foreach ((array) $rows as $composite_id => $data) {
+            foreach ((array) $data as $component) {
+                if (!is_array($component)) {
+                    continue;
+                }
+                $type = (string) ($component['query_type'] ?? 'product_ids');
+                if ($type === 'category_ids') {
+                    if ($category_ids && array_intersect(array_map('intval', (array) ($component['assigned_category_ids'] ?? [])), $category_ids)) {
+                        $found[] = (int) $composite_id;
+                        break;
+                    }
+                    continue;
+                }
+                if (in_array($product_id, array_map('intval', (array) ($component['assigned_ids'] ?? [])), true)
+                    || (int) ($component['default_id'] ?? 0) === $product_id) {
+                    $found[] = (int) $composite_id;
+                    break;
+                }
+            }
+        }
+        return $found;
+    }
+
+    public function recache_composites_using_product($product) {
+        global $wpdb;
+        if (!class_exists('WC_Composite_Products') && !class_exists('WC_Product_Composite')) {
+            return;
+        }
+        $id = is_object($product) && method_exists($product, 'get_id') ? (int) $product->get_id() : (int) $product;
+        if (!$id) {
+            return;
+        }
+        $post = get_post($id);
+        if ($post && $post->post_type === 'product_variation' && $post->post_parent) {
+            $id = (int) $post->post_parent;
+        }
+        static $seen = [];
+        if (isset($seen[$id])) {
+            return;
+        }
+        $seen[$id] = true;
+        // _bto_data is indexed by meta_key, so this reads only the composites' rows.
+        $found = $wpdb->get_results($wpdb->prepare(
+            "SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_bto_data' AND (meta_value LIKE %s OR meta_value LIKE %s)",
+            '%i:' . $id . ';%',
+            '%category_ids%'
+        ));
+        if (!$found) {
+            return;
+        }
+        $rows = [];
+        foreach ($found as $row) {
+            $data = maybe_unserialize($row->meta_value);
+            if (is_array($data)) {
+                $rows[(int) $row->post_id] = $data;
+            }
+        }
+        $cats = [];
+        foreach ((array) wp_get_post_terms($id, 'product_cat', ['fields' => 'ids']) as $cat) {
+            $cats[] = (int) $cat;
+            foreach (get_ancestors((int) $cat, 'product_cat', 'taxonomy') as $ancestor) {
+                $cats[] = (int) $ancestor;
+            }
+        }
+        foreach (self::composites_offering($rows, $id, array_values(array_unique($cats))) as $composite_id) {
+            if ($composite_id === $id || get_post_status($composite_id) !== 'publish') {
+                continue;
+            }
+            if ($this->recache_on_edit_enabled()) {
+                $this->queue_recache_post($composite_id);
+            } else {
+                $this->invalidate_post_page_cache($composite_id, true);
+            }
+        }
     }
 
     /**

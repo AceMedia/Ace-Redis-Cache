@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.9.7
+Stable tag: 0.9.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.8 =
+* WooCommerce catalogue edits now recache what they change. Adding, renaming or deleting a product attribute, or changing one of its terms, recaches the whole site (every product, filter and comparison shows it); before, only the pages of the products you re-saved were refreshed, so a renamed attribute stayed on every other page until the cache was cleared by hand.
+* With Composite Products, saving a product or variation (or a stock change) recaches every composite whose components offer it, including components that offer a whole category. Before, the composite's own page kept the old component options.
+* These run in every request context, so wp-admin, REST and WP-CLI saves count. `ace_rc_recache_on_edit` still turns them off.
 
 = 0.9.7 =
 * WP-Cron runs keep what they write to the object cache. Cron used to count as an update operation, so every cron run ignored Redis and deleted each key it wrote instead of storing it: whatever a scheduled job cached was thrown away at once and rebuilt by the next visitor. Plugin and theme updates still bypass the cache.

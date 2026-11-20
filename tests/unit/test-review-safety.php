@@ -58,7 +58,9 @@ class ReviewSafetyTest extends TestCase {
         $class = new ReflectionClass(\AceMedia\RedisCache\AdminAjax::class);
         $instance = $class->newInstanceWithoutConstructor();
         $method = $class->getMethod('validate_settings');
-        $method->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
         $this->assertFalse($method->invoke($instance, 'not an object'));
         $this->assertFalse($method->invoke($instance, ['host' => ['bad']]));
         $this->assertTrue($class->hasMethod('get_manage_capability'));
@@ -106,7 +108,9 @@ class ReviewSafetyTest extends TestCase {
         $class = new ReflectionClass(\AceMedia\RedisCache\AceRedisCache::class);
         $plugin = $class->newInstanceWithoutConstructor();
         $method = $class->getMethod('singular_path_index_key');
-        $method->setAccessible(true);
+        if (PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
         $GLOBALS['arc_test_home'] = 'https://example.com/first';
         $first = $method->invoke($plugin, 7);
         $GLOBALS['arc_test_home'] = 'https://example.com/second';

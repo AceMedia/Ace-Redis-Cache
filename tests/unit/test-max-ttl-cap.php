@@ -28,6 +28,7 @@ class MaxTtlCapTest extends TestCase {
     private $redis;
 
     private function redis() {
+        if (getenv('ARC_TEST_REDIS') !== '1') { $this->markTestSkipped('Disposable Redis checks require ARC_TEST_REDIS=1'); }
         if (!class_exists('Redis')) { $this->markTestSkipped('phpredis not loaded'); }
         try {
             $r = new \Redis();

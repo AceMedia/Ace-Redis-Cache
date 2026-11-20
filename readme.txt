@@ -2,9 +2,9 @@
 Contributors: shanerounce
 Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.9.8
+Stable tag: 0.9.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.9 =
+* Unreadable compressed entries now become cache misses, so a missing decoder or corrupt value triggers a fresh response instead of exposing compressed bytes. Healthy gzip/Brotli responses, ordinary strings, stored false and empty strings keep their existing behaviour.
+* An unavailable root object class also becomes a cache miss. This does not validate every nested object graph.
+* Compatibility checks cover PHP 8.6 and WordPress 7.1 while retaining PHP 7.4 support. Unit connection checks stay isolated from real Redis services.
 
 = 0.9.8 =
 * WooCommerce catalogue edits now recache what they change. Adding, renaming or deleting a product attribute, or changing one of its terms, recaches the whole site (every product, filter and comparison shows it); before, only the pages of the products you re-saved were refreshed, so a renamed attribute stayed on every other page until the cache was cleared by hand.

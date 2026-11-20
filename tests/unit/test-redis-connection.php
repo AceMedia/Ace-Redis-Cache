@@ -30,12 +30,20 @@ class RedisConnectionTest extends TestCase {
     }
     
     public function testConnectionStatus() {
-        $status = $this->connection->get_status();
+        // A unit test must not contact the workstation's real Redis service.
+        $connection = new class($this->settings) extends RedisConnection {
+            public function get_connection($force_reconnect = false, $bypass_circuit_breaker = false) {
+                return null;
+            }
+        };
+        $status = $connection->get_status();
         $this->assertIsArray($status);
         $this->assertArrayHasKey('connected', $status);
         $this->assertArrayHasKey('status', $status);
         $this->assertIsBool($status['connected']);
         $this->assertIsString($status['status']);
+        $this->assertFalse($status['connected']);
+        $this->assertSame('Connection failed', $status['status']);
     }
     
     public function testMemoryLimitParsing() {

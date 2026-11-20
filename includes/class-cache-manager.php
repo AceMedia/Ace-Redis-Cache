@@ -818,6 +818,9 @@ class CacheManager {
      */
     private function decode_value($result) {
         $decoded = $this->maybe_decompress($result);
+        if ($decoded === null) {
+            return null;
+        }
         // If we stored serialized data originally, attempt to unserialize - but
         // only once the header's declared size has been checked against what we
         // actually hold (see declared_size_is_plausible).
@@ -825,6 +828,9 @@ class CacheManager {
             return $decoded;
         }
         $unser = @unserialize($decoded);
+        if ($unser instanceof \__PHP_Incomplete_Class) {
+            return null;
+        }
         return ($unser !== false || $decoded === 'b:0;') ? $unser : $decoded;
     }
 
@@ -1261,52 +1267,51 @@ class CacheManager {
 
         // Detect marker
         if (preg_match('/^br(\d{0,2}):/', $stored, $m) === 1) {
-            // Accept both br: (no level) and brX: with level
-            $prefix_len = strlen($m[0]);
-            $data = substr($stored, $prefix_len);
-            if ($for_html) {
-                // Serve compressed bytes directly if client accepts br
-                if (isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
-                    if (!headers_sent()) {
-                        header('Content-Encoding: br');
-                        header('Vary: Accept-Encoding');
-                        // Remove any existing Content-Length and set correct one for compressed bytes
-                        if (function_exists('header_remove')) { header_remove('Content-Length'); }
-                        header('Content-Length: ' . strlen($data));
-                    }
-                    return $data;
+            $data = substr($stored, strlen($m[0]));
+            // A runtime may read entries produced before an extension change or rollback.
+            // Validate before setting response headers or returning encoded bytes.
+            $out = function_exists('brotli_uncompress') ? @brotli_uncompress($data) : false;
+            if (!is_string($out)) {
+                if (!$logged_once && defined('WP_DEBUG') && WP_DEBUG) {
+                    $logged_once = true;
+                    error_log('Ace-Redis-Cache: Brotli payload unavailable or invalid; treating as a cache miss.');
                 }
+                return null;
             }
-            if (function_exists('brotli_uncompress')) {
-                $out = @brotli_uncompress($data);
-                if ($out !== false) return $out;
+            if ($for_html && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'br') !== false) {
+                if (!headers_sent()) {
+                    header('Content-Encoding: br');
+                    header('Vary: Accept-Encoding');
+                    if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                    header('Content-Length: ' . strlen($data));
+                }
+                return $data;
             }
-            if (!$logged_once && (defined('WP_DEBUG') && WP_DEBUG)) { $logged_once = true; error_log('Ace-Redis-Cache: brotli decompress failed; serving raw.'); }
-            return $data;
+            return $out;
         }
         if (preg_match('/^gz(\d{0,2}):/', $stored, $m) === 1) {
-            $prefix_len = strlen($m[0]);
-            $data = substr($stored, $prefix_len);
-            if ($for_html) {
-                // Only serve as gzip if client accepts it AND bytes look like gzip (1F 8B)
-                if (isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false && substr($data, 0, 2) === "\x1f\x8b") {
-                    if (!headers_sent()) {
-                        header('Content-Encoding: gzip');
-                        header('Vary: Accept-Encoding');
-                        if (function_exists('header_remove')) { header_remove('Content-Length'); }
-                        header('Content-Length: ' . strlen($data));
-                    }
-                    return $data;
+            $data = substr($stored, strlen($m[0]));
+            $out = function_exists('gzdecode') ? @gzdecode($data) : false;
+            if (!is_string($out) && function_exists('gzuncompress')) {
+                $out = @gzuncompress($data);
+            }
+            if (!is_string($out)) {
+                if (!$logged_once && defined('WP_DEBUG') && WP_DEBUG) {
+                    $logged_once = true;
+                    error_log('Ace-Redis-Cache: gzip payload invalid; treating as a cache miss.');
                 }
+                return null;
             }
-            $out = @gzdecode($data);
-            if ($out !== false) return $out;
-            if (function_exists('gzuncompress')) {
-                $out2 = @gzuncompress($data);
-                if ($out2 !== false) return $out2;
+            if ($for_html && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && strpos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false && substr($data, 0, 2) === "\x1f\x8b") {
+                if (!headers_sent()) {
+                    header('Content-Encoding: gzip');
+                    header('Vary: Accept-Encoding');
+                    if (function_exists('header_remove')) { header_remove('Content-Length'); }
+                    header('Content-Length: ' . strlen($data));
+                }
+                return $data;
             }
-            if (!$logged_once && (defined('WP_DEBUG') && WP_DEBUG)) { $logged_once = true; error_log('Ace-Redis-Cache: gzip decompress failed; serving raw.'); }
-            return $data;
+            return $out;
         }
         if (StringHelper::starts_with($stored, 'raw:')) {
             return substr($stored, 4);

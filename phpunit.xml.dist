@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<phpunit bootstrap="tests/bootstrap.php"
+<phpunit bootstrap="tests/bootstrap-isolated.php"
          backupGlobals="false"
          backupStaticAttributes="false"
          colors="true"
@@ -10,7 +10,8 @@
          stopOnFailure="false">
     <testsuites>
         <testsuite name="AceRedisCacheTestSuite">
-            <directory>tests/unit/</directory>
+            <directory suffix=".php">tests/unit/</directory>
+            <exclude>tests/unit/test-woo-composites.php</exclude>
         </testsuite>
     </testsuites>
     <filter>

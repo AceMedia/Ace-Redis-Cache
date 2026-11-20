@@ -270,3 +270,9 @@ Page caching and standalone HTML minification require WordPress 6.9's template e
 Automatic drop-in upgrades only replace ARC-owned regular files. Foreign files and symlinks are left untouched; a failed write can be retried after correcting directory permissions. OPcache controls invalidate only real files inside this site's content directory; symlinks resolving to shared code are excluded. The legacy ACE_OC_FLUSHDB_ON_SAVE constant no longer enables a database-wide flush.
 
 The source-only diagnostics require CLI and are excluded from the public ZIP. See readme.txt for external connection disclosures and the build command.
+
+## Isolated PHP compatibility checks
+
+`phpunit -c phpunit.xml.dist` uses the isolated bootstrap and discovers the PHPUnit classes with the repository's `test-*.php` filenames. The separate `tests/unit/test-woo-composites.php` script exits after its own assertions, so it is excluded from PHPUnit discovery and runs separately with PHP. An empty PHPUnit selection is not a passing result.
+
+The three Redis-backed integration classes skip unless `ARC_TEST_REDIS=1` is explicitly set. Enable that only inside a disposable network namespace or container with its own Redis on loopback port 6379. These tests use database 9 and remove their synthetic `acetest:*` keys. Do not opt in against a shared service. The compatibility release is tested on PHP 8.5 and 8.6 with an isolated Redis instance and a positive test-count check.

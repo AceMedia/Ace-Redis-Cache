@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.9.9
+Stable tag: 0.9.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,12 @@ Clearing a URL with meaningful query parameters removes that exact normalised qu
 The registry is scoped to the configured site and path, with up to 256 live variants per path. Expired members make room for new entries. If the registry is full or Redis cannot record a URL, that response is served live. No global Redis scan or database flush is needed. Related archive refreshes also invalidate recorded query variants; identifying additional related archives remains the site's existing hook/filter behaviour.
 
 == Changelog ==
+
+= 0.9.10 =
+* Check complete managed Apache rule writes and preserve existing rules when publication fails.
+* Report a saved setting separately from a failed rules update, including unchanged-setting retries.
+* Keep SaveBar failure instructions visible and retryable in manual and automatic saves.
+* Use the current plugin version for admin asset URLs so browsers load the updated save handling.
 
 = 0.9.9 =
 * Unreadable compressed entries now become cache misses, so a missing decoder or corrupt value triggers a fresh response instead of exposing compressed bytes. Healthy gzip/Brotli responses, ordinary strings, stored false and empty strings keep their existing behaviour.

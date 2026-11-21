@@ -255,6 +255,10 @@ class AdminAjax {
             
             // Save the settings
             $saved = SettingsStore::update_settings($validated_settings);
+            if (SettingsStore::file_write_error() !== null) {
+                $this->send_response(SettingsStore::file_write_error(), false);
+                return;
+            }
             
             if (!$saved && $old_settings === $validated_settings) {
                 // Settings are the same, still success

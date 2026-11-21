@@ -3,7 +3,7 @@
 [![WordPress Plugin](https://img.shields.io/badge/WordPress-6.0%2B-blue.svg)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-purple.svg)](https://php.net/)
 [![License](https://img.shields.io/badge/License-GPLv2%2B-green.svg)](https://www.gnu.org/licenses/gpl-2.0.html)
-[![Version](https://img.shields.io/badge/Version-1.0.3-orange.svg)](https://github.com/acemedia/ace-crawl-enhancer)
+[![Version](https://img.shields.io/badge/Version-0.9.10-orange.svg)](https://github.com/AceMedia/Ace-Redis-Cache)
 
 High-performance full-page, block-aware, and object caching layer for WordPress with dynamic placeholder expansion, micro-caching, intelligent minification, and Brotli/Gzip compression. Designed for edge-grade throughput while preserving dynamic user-facing fragments safely.
 
@@ -15,9 +15,9 @@ High-performance full-page, block-aware, and object caching layer for WordPress 
 - **Donate link:** https://acemedia.ninja/donate/  
 - **Tags:** cache, redis, performance, speed, optimization, object cache, page cache, full page cache, block cache, aws, elasticache, valkey, tls, sni, minification  
 - **Requires at least:** 5.0  
-- **Tested up to:** 6.8  
+- **Tested up to:** 7.1  
 - **Requires PHP:** 7.4 (8.x recommended)  
-- **Stable tag:** 1.0.3 (was 0.5.0 previously)  
+- **Stable tag:** 0.9.10  
 - **License:** GPLv2 or later  
 - **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -276,3 +276,11 @@ The source-only diagnostics require CLI and are excluded from the public ZIP. Se
 `phpunit -c phpunit.xml.dist` uses the isolated bootstrap and discovers the PHPUnit classes with the repository's `test-*.php` filenames. The separate `tests/unit/test-woo-composites.php` script exits after its own assertions, so it is excluded from PHPUnit discovery and runs separately with PHP. An empty PHPUnit selection is not a passing result.
 
 The three Redis-backed integration classes skip unless `ARC_TEST_REDIS=1` is explicitly set. Enable that only inside a disposable network namespace or container with its own Redis on loopback port 6379. These tests use database 9 and remove their synthetic `acetest:*` keys. Do not opt in against a shared service. The compatibility release is tested on PHP 8.5 and 8.6 with an isolated Redis instance and a positive test-count check.
+
+## Managed Apache rule saves (0.9.10)
+
+The static-asset rule writer checks complete publication and preserves unrelated rules and ordinary file metadata. A failed file update is reported separately from the saved database setting. Retrying the same settings retries the file operation. SaveBar keeps failure instructions visible until the next message, and leaves the save retry available.
+
+The advisory lock coordinates this plugin's writers. Other software can ignore it, so the observed-change check does not promise a universal compare-and-swap guarantee. This is general file-save reliability work which also benefits from PHP 8.6's improved final-flush failure reporting. It does not require a new PHP-only syntax path.
+
+Offline regressions: `php tests/test-managed-apache-writes.php`, `php tests/test-managed-apache-reporting.php` and `node tests/test-savebar-reporting.cjs`. The PHP file test should run as an ordinary user so the read-only directory case is exercised. Redis-backed unit tests require a disposable server and `ARC_TEST_REDIS=1`; do not point them at a hosted cache.

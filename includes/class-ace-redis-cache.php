@@ -76,6 +76,9 @@ class AceRedisCache {
      * Constructor
      */
     public function __construct() {
+        if (defined('ACE_REDIS_CACHE_VERSION')) {
+            $this->plugin_version = ACE_REDIS_CACHE_VERSION;
+        }
         $this->plugin_path = dirname(__DIR__);
         // Use the proper root plugin URL. The previous implementation used
         // plugin_dir_url(dirname(__FILE__)) which yielded a URL ending in
@@ -405,6 +408,7 @@ class AceRedisCache {
         // Settings update hooks (single-site + network mode).
         add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
         add_action('update_site_option_ace_redis_cache_settings', [$this, 'on_site_settings_updated'], 10, 4);
+        add_action('ace_rc_reconcile_static_cache_rules', [$this, 'reconcile_static_cache_rules']);
 
         // Pre-update filter (fires before DB write) to trace and preserve transient flag if it mysteriously drops.
         add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace'], 10, 2);
@@ -4914,13 +4918,25 @@ class AceRedisCache {
             }
         }
 
+        $this->reconcile_static_cache_rules();
+    }
+
+    /** Report a failed file update separately from the already-saved database settings. */
+    public function reconcile_static_cache_rules() {
+        SettingsStore::clear_file_write_error();
         try {
-            $this->maybe_manage_static_cache_htaccess();
-        } catch (\Exception $e) {
+            if ($this->maybe_manage_static_cache_htaccess()) { return true; }
+        } catch (\Throwable $e) {
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 error_log('Ace-Redis-Cache .htaccess management error: ' . $e->getMessage());
             }
         }
+        $message = 'Settings were saved, but the Apache cache rules could not be updated. Your existing rules were left in place. Check file ownership and directory permissions, then save again.';
+        SettingsStore::report_file_write_error($message);
+        if (function_exists('add_settings_error')) {
+            add_settings_error('ace_redis_cache_settings', 'ace_rc_htaccess_write_failed', $message, 'error');
+        }
+        return false;
     }
 
     /**
@@ -4937,7 +4953,7 @@ class AceRedisCache {
 
         $htaccess_path = $this->get_site_root_htaccess_path();
         if (!$htaccess_path) {
-            return;
+            return true;
         }
 
         $ttl = isset($this->settings['static_asset_cache_ttl']) ? (int) $this->settings['static_asset_cache_ttl'] : 604800;
@@ -4945,16 +4961,14 @@ class AceRedisCache {
         if ($ttl > 31536000) { $ttl = 31536000; }
 
         if (!$static_enabled || !$manage_htaccess) {
-            $this->remove_managed_static_cache_block($htaccess_path);
-            return;
+            return $this->remove_managed_static_cache_block($htaccess_path);
         }
 
         if ($prefer_existing && $this->detect_existing_static_cache_headers($ttl)) {
-            $this->remove_managed_static_cache_block($htaccess_path);
-            return;
+            return $this->remove_managed_static_cache_block($htaccess_path);
         }
 
-        $this->upsert_managed_static_cache_block($htaccess_path, $ttl);
+        return $this->upsert_managed_static_cache_block($htaccess_path, $ttl);
     }
 
     private function get_site_root_htaccess_path() {
@@ -4999,44 +5013,18 @@ class AceRedisCache {
     }
 
     private function remove_managed_static_cache_block($htaccess_path) {
-        if (!file_exists($htaccess_path) || !is_readable($htaccess_path) || !wp_is_writable($htaccess_path)) {
-            return;
-        }
-
-        $current = (string) file_get_contents($htaccess_path);
-        $updated = preg_replace('/\n?# BEGIN Ace Redis Cache Static Assets.*?# END Ace Redis Cache Static Assets\n?/s', "\n", $current);
-        if ($updated !== null && $updated !== $current) {
-            file_put_contents($htaccess_path, trim($updated) . "\n", LOCK_EX);
-        }
+        if (!file_exists($htaccess_path) && !is_link($htaccess_path)) { return true; }
+        if (!is_readable($htaccess_path) || !wp_is_writable($htaccess_path)) { return false; }
+        return ManagedCacheRules::update($htaccess_path, null);
     }
 
     private function upsert_managed_static_cache_block($htaccess_path, $ttl) {
-        $block = $this->get_managed_static_cache_block($ttl);
-
-        if (!file_exists($htaccess_path)) {
-            $dir = dirname($htaccess_path);
-            if (!is_dir($dir) || !wp_is_writable($dir)) {
-                return;
-            }
-            file_put_contents($htaccess_path, $block . "\n", LOCK_EX);
-            return;
+        if (file_exists($htaccess_path) || is_link($htaccess_path)) {
+            if (!is_readable($htaccess_path) || !wp_is_writable($htaccess_path)) { return false; }
+        } elseif (!is_dir(dirname($htaccess_path)) || !wp_is_writable(dirname($htaccess_path))) {
+            return false;
         }
-
-        if (!is_readable($htaccess_path) || !wp_is_writable($htaccess_path)) {
-            return;
-        }
-
-        $current = (string) file_get_contents($htaccess_path);
-        $stripped = preg_replace('/\n?# BEGIN Ace Redis Cache Static Assets.*?# END Ace Redis Cache Static Assets\n?/s', "\n", $current);
-
-        if ($stripped === null) {
-            return;
-        }
-
-        $new_content = rtrim($stripped) . "\n\n" . $block . "\n";
-        if ($new_content !== $current) {
-            file_put_contents($htaccess_path, $new_content, LOCK_EX);
-        }
+        return ManagedCacheRules::update($htaccess_path, $this->get_managed_static_cache_block($ttl));
     }
 
     private function detect_existing_static_cache_headers($ttl) {

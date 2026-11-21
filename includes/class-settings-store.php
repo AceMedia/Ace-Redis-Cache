@@ -8,6 +8,11 @@ if (!defined('ABSPATH')) { exit; }
  */
 class SettingsStore {
     const SETTINGS_OPTION = 'ace_redis_cache_settings';
+    private static $file_write_error = null;
+
+    public static function file_write_error() { return self::$file_write_error; }
+    public static function clear_file_write_error() { self::$file_write_error = null; }
+    public static function report_file_write_error($message) { self::$file_write_error = $message; }
 
     /**
      * Resolve plugin basename safely for activation checks.
@@ -61,10 +66,15 @@ class SettingsStore {
      * @return bool
      */
     public static function update_settings($value) {
-        if (self::is_network_mode()) {
-            return update_site_option(self::SETTINGS_OPTION, $value);
+        self::clear_file_write_error();
+        $saved = self::is_network_mode()
+            ? update_site_option(self::SETTINGS_OPTION, $value)
+            : update_option(self::SETTINGS_OPTION, $value);
+        // A retry with unchanged settings still needs to repair a previously failed rules write.
+        if (!$saved && self::get_settings(null) === $value && function_exists('do_action')) {
+            do_action('ace_rc_reconcile_static_cache_rules');
         }
-        return update_option(self::SETTINGS_OPTION, $value);
+        return $saved;
     }
 
     /**

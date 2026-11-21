@@ -792,6 +792,12 @@ class API_Handler {
             // IMPORTANT: Do NOT set last_saved_settings before update_option runs, or our override filter
             // will cause core to think nothing changed (old == new) and skip the actual DB write.
             $result = SettingsStore::update_settings($sanitized_settings);
+            if (SettingsStore::file_write_error() !== null) {
+                $this->saving_settings = false;
+                $this->last_saved_settings = null;
+                $this->after_update_option = false;
+                return new \WP_Error('ace_rc_htaccess_write_failed', SettingsStore::file_write_error(), ['status' => 500, 'settings_saved' => true]);
+            }
             // Purge related option caches after primary write (whether core performed a DB write or not)
             $this->purge_option_caches();
             // Now enable override for subsequent stale reads within this same request

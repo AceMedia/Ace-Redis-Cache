@@ -10,6 +10,7 @@
 
 // Import SaveBar component
 import SaveBar from './components/SaveBar.js';
+import { settingsSaveError } from './components/settings-save-error.js';
 
 (function($) {
     'use strict';
@@ -118,13 +119,14 @@ import SaveBar from './components/SaveBar.js';
                 return saveResult;
             } catch (error) {
                 console.error('SaveBar save error:', error);
+                if (error && error.isSettingsSaveError === true) throw error;
                 return false;
             }
         }
 
         // Extracted save logic that can be used by both SaveBar and regular form
         async performSaveSettings() {
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
                 const $form = $('#ace-redis-settings-form');
                 const formData = this.getFormDataObject();
                 // Inject managed plugins payload
@@ -141,7 +143,7 @@ import SaveBar from './components/SaveBar.js';
                         nonce: ace_redis_admin.nonce
                     },
                     success: (response) => {
-                        if (response.success) {
+                        if (response && response.success === true) {
                             // Update the original form data for change tracking
                             this.captureOriginalFormData();
                             // Refresh transient cache health after save
@@ -153,11 +155,11 @@ import SaveBar from './components/SaveBar.js';
                             setTimeout(() => this.refreshTransientHealth && this.refreshTransientHealth(), 300);
                             resolve(response.data || true);
                         } else {
-                            resolve(false);
+                            reject(settingsSaveError(response));
                         }
                     },
-                    error: () => {
-                        resolve(false);
+                    error: (xhr) => {
+                        reject(settingsSaveError(xhr && xhr.responseJSON));
                     }
                 });
             });

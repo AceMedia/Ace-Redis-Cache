@@ -76,6 +76,9 @@ class AceRedisCache {
      * Constructor
      */
     public function __construct() {
+        if (defined('ACE_REDIS_CACHE_VERSION')) {
+            $this->plugin_version = ACE_REDIS_CACHE_VERSION;
+        }
         $this->plugin_path = dirname(__DIR__);
         // Use the proper root plugin URL. The previous implementation used
         // plugin_dir_url(dirname(__FILE__)) which yielded a URL ending in

@@ -8,6 +8,8 @@
  * @since 0.5.0
  */
 
+import { settingsSaveError, settingsSaveErrorMessage } from './settings-save-error.js';
+
 // Ensure `$` refers to jQuery even when WordPress runs in noConflict mode
 // eslint-disable-next-line no-undef
 const $ = window.jQuery;
@@ -46,6 +48,7 @@ class SaveBar {
         }
         this.isSuccess = false;
         this.message = '';
+        this.messageTimer = null;
         this.elapsedTime = 0;
         this.intervalId = null;
         this.originalFormData = null;
@@ -286,7 +289,7 @@ class SaveBar {
             }
         } catch (error) {
             console.error('Save error:', error);
-            this.showMessage('An error occurred while saving.', 'error');
+            this.showMessage(settingsSaveErrorMessage(error, 'An error occurred while saving.'), 'error');
         } finally {
             this.setSaving(false);
         }
@@ -325,12 +328,12 @@ class SaveBar {
             }
         } catch (error) {
             console.error('[SaveBar] Auto-save error:', error);
-            this.showMessage('Auto-save error occurred', 'error');
+            this.showMessage(settingsSaveErrorMessage(error, 'Auto-save error occurred'), 'error');
         }
     }
 
     async defaultSave() {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             const $form = $(this.options.containerSelector);
             const formData = this.getFormDataObject($form);
 
@@ -349,10 +352,10 @@ class SaveBar {
                         resolve(response.data || true);
                         return;
                     }
-                    resolve(false);
+                    reject(settingsSaveError(response));
                 },
-                error: () => {
-                    resolve(false);
+                error: (xhr) => {
+                    reject(settingsSaveError(xhr && xhr.responseJSON));
                 }
             });
         });
@@ -446,6 +449,11 @@ class SaveBar {
     }
 
     showMessage(message, type = 'info') {
+        this.stopElapsedTimeTracking();
+        if (this.messageTimer) {
+            clearTimeout(this.messageTimer);
+            this.messageTimer = null;
+        }
         this.message = message;
         this.updateMessageDisplay(type);
 
@@ -454,9 +462,11 @@ class SaveBar {
             this.startElapsedTimeTracking();
         }
 
-        // Auto-hide messages after different intervals based on type
-        const hideDelay = type === 'error' ? 8000 : (type === 'success' ? 5000 : 3000);
-        setTimeout(() => {
+        // Keep actionable errors visible until the next message or explicit clear.
+        if (type === 'error') return;
+        const hideDelay = type === 'success' ? 5000 : 3000;
+        this.messageTimer = setTimeout(() => {
+            this.messageTimer = null;
             this.clearMessage();
         }, hideDelay);
     }
@@ -478,6 +488,10 @@ class SaveBar {
     }
 
     clearMessage() {
+        if (this.messageTimer) {
+            clearTimeout(this.messageTimer);
+            this.messageTimer = null;
+        }
         this.message = '';
         this.updateMessageDisplay();
         this.stopElapsedTimeTracking();
@@ -541,7 +555,7 @@ class SaveBar {
     }
 
     destroy() {
-        this.stopElapsedTimeTracking();
+        this.clearMessage();
         
         // Remove event listeners
         $(this.options.containerSelector).off('input change');

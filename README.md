@@ -17,7 +17,7 @@ High-performance full-page, block-aware, and object caching layer for WordPress 
 - **Requires at least:** 5.0  
 - **Tested up to:** 7.1  
 - **Requires PHP:** 7.4 (8.x recommended)  
-- **Stable tag:** 0.9.11  
+- **Stable tag:** 0.9.11
 - **License:** GPLv2 or later  
 - **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 

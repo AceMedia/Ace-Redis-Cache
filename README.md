@@ -3,7 +3,7 @@
 [![WordPress Plugin](https://img.shields.io/badge/WordPress-6.0%2B-blue.svg)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-purple.svg)](https://php.net/)
 [![License](https://img.shields.io/badge/License-GPLv2%2B-green.svg)](https://www.gnu.org/licenses/gpl-2.0.html)
-[![Version](https://img.shields.io/badge/Version-0.9.10-orange.svg)](https://github.com/AceMedia/Ace-Redis-Cache)
+[![Version](https://img.shields.io/badge/Version-0.9.11-orange.svg)](https://github.com/AceMedia/Ace-Redis-Cache)
 
 High-performance full-page, block-aware, and object caching layer for WordPress with dynamic placeholder expansion, micro-caching, intelligent minification, and Brotli/Gzip compression. Designed for edge-grade throughput while preserving dynamic user-facing fragments safely.
 
@@ -17,7 +17,7 @@ High-performance full-page, block-aware, and object caching layer for WordPress 
 - **Requires at least:** 5.0  
 - **Tested up to:** 7.1  
 - **Requires PHP:** 7.4 (8.x recommended)  
-- **Stable tag:** 0.9.10  
+- **Stable tag:** 0.9.11
 - **License:** GPLv2 or later  
 - **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 

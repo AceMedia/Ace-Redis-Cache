@@ -3398,7 +3398,8 @@ class AceRedisCache {
         // System cron (WP-CLI) has minutes to spare; a web-triggered WP-Cron request does not.
         $is_cli = defined('WP_CLI') && WP_CLI;
         $budget = (float) apply_filters('ace_rc_prime_time_budget', $is_cli ? 120 : 20, $this->settings);
-        $started = microtime(true);
+        // Keep elapsed work independent of wall-clock corrections; stored timestamps stay real dates.
+        $started = hrtime(true) / 1e9;
         $urls = array_keys($queue);
         $batch = $is_cli ? $urls : array_slice($urls, 0, $batch_size);
         $done = [];
@@ -3428,7 +3429,7 @@ class AceRedisCache {
             ? max(1, (int) apply_filters('ace_rc_prime_parallel', 3, $this->settings)) : 1;
 
         foreach (array_chunk($batch, $parallel) as $chunk) {
-            if ($done && (microtime(true) - $started) > $budget) {
+            if ($done && (hrtime(true) / 1e9 - $started) > $budget) {
                 break;
             }
             // Each page's freshness marker before the render, to tell afterwards whether the
@@ -3454,7 +3455,7 @@ class AceRedisCache {
                     $retry[] = $url;
                 }
             }
-            if ($retry && (microtime(true) - $started) <= $budget) {
+            if ($retry && (hrtime(true) / 1e9 - $started) <= $budget) {
                 $this->prime_fetch($retry, $args);
             }
             foreach ($chunk as $url) {

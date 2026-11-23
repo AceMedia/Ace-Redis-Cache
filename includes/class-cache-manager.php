@@ -432,6 +432,12 @@ class CacheManager {
             return ['status' => 'missing'];
         }
 
+        // A delayed callback must not re-publish a terminal result. Explicit clears
+        // create a fresh queued job through start_async_cache_clear().
+        if (in_array(($job['status'] ?? ''), ['complete', 'failed'], true)) {
+            return $job;
+        }
+
         $redis = $this->redis_connection ? $this->redis_connection->get_connection() : null;
         if (!$redis) {
             $job['status'] = 'failed';

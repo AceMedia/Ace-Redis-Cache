@@ -441,14 +441,15 @@ class CacheManager {
             return $job;
         }
 
-        $deadline = microtime(true) + max(1, (int) $max_seconds);
+        // Elapsed work must not grow or disappear when the wall clock is corrected.
+        $deadline = hrtime(true) / 1e9 + max(1, (int) $max_seconds);
         $patterns = array_values($job['patterns']);
         $pattern_index = max(0, (int) ($job['pattern_index'] ?? 0));
         $cursor = array_key_exists('cursor', $job) && $job['cursor'] !== null ? (int) $job['cursor'] : null;
         $deleted = (int) ($job['deleted'] ?? 0);
 
         try {
-            while ($pattern_index < count($patterns) && microtime(true) < $deadline) {
+            while ($pattern_index < count($patterns) && hrtime(true) / 1e9 < $deadline) {
                 $pattern = $patterns[$pattern_index];
                 $scan_keys = $redis->scan($cursor, $pattern, 1000);
 

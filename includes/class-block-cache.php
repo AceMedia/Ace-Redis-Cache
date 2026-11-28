@@ -25,8 +25,8 @@
  *   that profile's version, which retires all its entries at once. TTL is the safety net.
  * - Purges go through AceRedisCache::purge_url(), which also bans the page in Varnish.
  *
- * Off switches: ACE_RC_BLOCK_CACHE (true/false, overrides the setting), the ace_rc_block_cache_enabled
- * filter, and ace_rc_block_cache_cacheable (per block). Debug: X-Ace-Block-Cache response header.
+ * Off switches: ACEREDIS_BLOCK_CACHE (true/false, overrides the setting), the aceredis_block_cache_enabled
+ * filter, and aceredis_block_cache_cacheable (per block). Debug: X-Ace-Block-Cache response header.
  *
  * @package AceMedia\RedisCache
  */
@@ -89,13 +89,13 @@ class BlockCache {
         return $out;
     }
 
-    /** The setting, overridden by ACE_RC_BLOCK_CACHE and the ace_rc_block_cache_enabled filter. */
+    /** The setting, overridden by ACEREDIS_BLOCK_CACHE and the aceredis_block_cache_enabled filter. */
     public static function is_enabled(array $settings) {
         $on = !empty($settings['block_cache_enabled']);
-        if (defined('ACE_RC_BLOCK_CACHE')) {
-            $on = (bool) ACE_RC_BLOCK_CACHE;
+        if (defined('ACEREDIS_BLOCK_CACHE')) {
+            $on = (bool) ACEREDIS_BLOCK_CACHE;
         }
-        return (bool) apply_filters('ace_rc_block_cache_enabled', $on);
+        return (bool) apply_filters('aceredis_block_cache_enabled', $on);
     }
 
     /** A site-level block cache mu-plugin may already do this job; stay out of its way while it is loaded. */
@@ -132,9 +132,9 @@ class BlockCache {
         self::$instance = $self;
 
         // A full cache clear also retires every block entry (no SCAN: the generation moves on).
-        add_action('ace_rc_cache_cleared', static function () use ($self) { $self->flush(false); }, 5, 0);
+        add_action('aceredis_cache_cleared', static function () use ($self) { $self->flush(false); }, 5, 0);
         // Saving the settings retires block entries only when a block cache setting changed
-        // (a full clear, for other settings, retires them through ace_rc_cache_cleared).
+        // (a full clear, for other settings, retires them through aceredis_cache_cleared).
         add_action('update_option_' . SettingsStore::SETTINGS_OPTION, static function ($old, $new) use ($self) {
             if (self::settings_change_scope($old, $new) === 'block') {
                 $self->flush(false);
@@ -174,7 +174,7 @@ class BlockCache {
                 'label' => 'WooCommerce product blocks',
                 'setting' => 'block_cache_woo',
                 // woocommerce/all-products renders client-side from the Store API: nothing to cache.
-                'blocks' => (array) apply_filters('ace_rc_block_cache_woo_blocks', [
+                'blocks' => (array) apply_filters('aceredis_block_cache_woo_blocks', [
                     'woocommerce/product-collection',
                     'woocommerce/handpicked-products',
                     'woocommerce/product-new',
@@ -210,16 +210,16 @@ class BlockCache {
          * Custom blocks to cache: [ 'ns/block' , ... ]. Listing order often depends on meta
          * (event dates), so any update to a published post retires the whole profile.
          */
-        $custom = array_values(array_filter((array) apply_filters('ace_rc_block_cache_custom_blocks', []), 'is_string'));
+        $custom = array_values(array_filter((array) apply_filters('aceredis_block_cache_custom_blocks', []), 'is_string'));
         $profiles['custom'] = [
             'label' => 'Custom blocks',
             'setting' => 'block_cache_custom',
             'blocks' => $custom,
             'dep_types' => null,
-            'role_safe' => (bool) apply_filters('ace_rc_block_cache_custom_role_safe', false),
+            'role_safe' => (bool) apply_filters('aceredis_block_cache_custom_role_safe', false),
             'bump_on_update' => true,
         ];
-        return apply_filters('ace_rc_block_cache_profiles', $profiles);
+        return apply_filters('aceredis_block_cache_profiles', $profiles);
     }
 
     /**
@@ -249,13 +249,13 @@ class BlockCache {
         if (get_option('woocommerce_calc_taxes') === 'yes' && get_option('woocommerce_tax_based_on', 'shipping') !== 'base') {
             $safe = false;
         }
-        $safe = (bool) apply_filters('ace_rc_block_cache_woo_role_safe', $safe);
+        $safe = (bool) apply_filters('aceredis_block_cache_woo_role_safe', $safe);
         return $safe;
     }
 
     /** Blocks that read the visitor, the cart or the current URL: a tree holding one is never cached. */
     public static function context_blocks() {
-        return apply_filters('ace_rc_block_cache_context_blocks', [
+        return apply_filters('aceredis_block_cache_context_blocks', [
             'woocommerce/mini-cart', 'woocommerce/cart', 'woocommerce/checkout', 'woocommerce/customer-account',
             'woocommerce/product-filters', 'woocommerce/active-filters', 'woocommerce/attribute-filter',
             'woocommerce/price-filter', 'woocommerce/stock-filter', 'woocommerce/rating-filter',
@@ -482,7 +482,7 @@ class BlockCache {
         if (isset($def['vary']) && is_callable($def['vary'])) {
             $vary[] = call_user_func($def['vary'], $block);
         }
-        $vary = apply_filters('ace_rc_block_cache_vary', $vary, $block, $profile);
+        $vary = apply_filters('aceredis_block_cache_vary', $vary, $block, $profile);
         return self::build_key($this->prefix(), $v['gen'] ?? 0, $profile, $v['ver:' . $profile] ?? 0, $vary);
     }
 
@@ -570,7 +570,7 @@ class BlockCache {
             return $pre_render;
         }
         $profile = self::block_profile($parsed_block, self::profiles(), $this->settings);
-        if ($profile === null || !apply_filters('ace_rc_block_cache_cacheable', true, $parsed_block, $profile)) {
+        if ($profile === null || !apply_filters('aceredis_block_cache_cacheable', true, $parsed_block, $profile)) {
             return $pre_render;
         }
         $name = (string) $parsed_block['blockName'];
@@ -1196,7 +1196,7 @@ class BlockCache {
                 if ($this->plugin && method_exists($this->plugin, 'purge_url')) {
                     $this->plugin->purge_url(home_url($path));
                 } else {
-                    do_action('ace_rc_paths_invalidated', [$path], 0);
+                    do_action('aceredis_paths_invalidated', [$path], 0);
                 }
             }
         }

@@ -1,5 +1,5 @@
 (function(){
-                    var enableInputs = document.querySelectorAll('input[name="ace_redis_cache_settings[enabled]"]');
+                    var enableInputs = document.querySelectorAll('input[name="aceredis_cache_settings[enabled]"]');
                     var actions = document.getElementById('ace-redis-inline-cache-actions');
                     if (enableInputs.length && actions) {
                         var update = function(){

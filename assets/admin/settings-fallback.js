@@ -37,9 +37,9 @@
     if (flushBtn && typeof jQuery === 'undefined') {
         flushBtn.addEventListener('click', function(){
             if (!window.fetch) { alert('Fetch API not available'); return; }
-            var restBase = (window.ace_redis_admin && ace_redis_admin.rest_url) ? ace_redis_admin.rest_url : (window.location.origin + '/wp-json/');
+            var restBase = (window.aceredis_admin && aceredis_admin.rest_url) ? aceredis_admin.rest_url : (window.location.origin + '/wp-json/');
             var url = restBase.replace(/\/$/, '') + '/ace-redis-cache/v1/flush-cache';
-            fetch(url, { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-WP-Nonce': (window.ace_redis_admin? ace_redis_admin.rest_nonce : '')}, body:'nonce='+(window.ace_redis_admin? encodeURIComponent(ace_redis_admin.nonce):'') })
+            fetch(url, { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-WP-Nonce': (window.aceredis_admin? aceredis_admin.rest_nonce : '')}, body:'nonce='+(window.aceredis_admin? encodeURIComponent(aceredis_admin.nonce):'') })
                 .then(r=>r.json()).then(function(json){
                     if (json && json.success) {
                         flushBtn.disabled = false;
@@ -55,9 +55,9 @@
     if (bcFlush) {
         bcFlush.addEventListener('click', function(){
             var status = document.getElementById('ace-block-cache-flush-status');
-            var restBase = (window.ace_redis_admin && ace_redis_admin.rest_url) ? ace_redis_admin.rest_url : (window.location.origin + '/wp-json/');
+            var restBase = (window.aceredis_admin && aceredis_admin.rest_url) ? aceredis_admin.rest_url : (window.location.origin + '/wp-json/');
             bcFlush.disabled = true;
-            fetch(restBase.replace(/\/$/, '') + '/ace-redis-cache/v1/block-cache/flush', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-WP-Nonce': (window.ace_redis_admin ? ace_redis_admin.rest_nonce : '')}, body:'nonce=' + (window.ace_redis_admin ? encodeURIComponent(ace_redis_admin.nonce) : '') })
+            fetch(restBase.replace(/\/$/, '') + '/ace-redis-cache/v1/block-cache/flush', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-WP-Nonce': (window.aceredis_admin ? aceredis_admin.rest_nonce : '')}, body:'nonce=' + (window.aceredis_admin ? encodeURIComponent(aceredis_admin.nonce) : '') })
                 .then(function(r){ return r.json(); })
                 .then(function(json){ status.textContent = (json && json.success) ? 'Block cache flushed.' : ((json && json.message) || 'Flush failed.'); })
                 .catch(function(){ status.textContent = 'Flush failed.'; })

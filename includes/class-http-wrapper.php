@@ -8,7 +8,7 @@ if (!defined('ABSPATH')) { exit; }
  * Usage: Http_Wrapper::get( 'https://api.example.com/data', [ 'timeout' => 1, 'cache_ttl' => 120 ] );
  */
 class Http_Wrapper {
-    const CB_OPTION = 'ace_rc_http_cb_state';
+    const CB_OPTION = 'aceredis_http_cb_state';
     const FAIL_THRESHOLD = 5;          // consecutive failures to open circuit
     const HALF_OPEN_AFTER = 30;        // seconds before allowing a test request
     const OPEN_RESET_AFTER = 300;      // full reset after five minutes regardless
@@ -23,7 +23,7 @@ class Http_Wrapper {
         $timeout = isset($args['timeout']) ? (float)$args['timeout'] : 1.0;
         $force_refresh = !empty($args['force_refresh']);
         $headers = isset($args['headers']) && is_array($args['headers']) ? $args['headers'] : [];
-        $ckey = 'ace_http_' . md5($url . serialize($headers));
+        $ckey = 'aceredis_http_' . md5($url . serialize($headers));
 
         // Cached response
         if ($cache_ttl > 0 && !$force_refresh) {
@@ -40,7 +40,7 @@ class Http_Wrapper {
             if (($now - $state['changed']) > self::HALF_OPEN_AFTER) {
                 $state['state'] = 'half';
             } else {
-                return new \WP_Error('ace_rc_cb_open', 'Circuit open for remote HTTP');
+                return new \WP_Error('aceredis_cb_open', 'Circuit open for remote HTTP');
             }
         }
         if ($state['state'] === 'half' && ($now - $state['changed']) > self::OPEN_RESET_AFTER) {
@@ -65,7 +65,7 @@ class Http_Wrapper {
                 $state['changed'] = $now;
             }
             update_option(self::CB_OPTION, $state, 'no');
-            return new \WP_Error('ace_rc_remote_error', 'Upstream error code ' . $code);
+            return new \WP_Error('aceredis_remote_error', 'Upstream error code ' . $code);
         }
 
         // Success path resets failures; handle half-open promote to closed

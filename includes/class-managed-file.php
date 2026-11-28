@@ -2,6 +2,7 @@
 namespace AceMedia\RedisCache;
 if (!defined('ABSPATH')) { exit; }
 
+// phpcs:disable WordPress.WP.AlternativeFunctions -- WP_Filesystem cannot replace a file atomically under a lock while keeping its owner and mode, which is what protects .htaccess here.
 /** Checked local replacement; the persistent advisory lock serialises our writers. */
 class ManagedFile {
     public static function update($target, $transform) {

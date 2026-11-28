@@ -10,7 +10,16 @@
 
 if (!defined('ABSPATH')) { exit; }
 
-if (!function_exists('ace_oc_is_public_ajax')) {
+// aceredis-source-only:start
+// Sites set these in wp-config.php under the names used before 0.10.0.
+foreach (array('ACE_FORCE_TRANSIENT_FLUSH', 'ACE_OC_ADMIN_CACHE_SUSPENDED', 'ACE_OC_ADMIN_READ', 'ACE_OC_BYPASS', 'ACE_OC_FLUSHDB_ON_SAVE', 'ACE_OC_FLUSH_ON_POST_CHANGE', 'ACE_OC_MAX_TTL', 'ACE_OC_MEMBER_READ', 'ACE_OC_NO_PUBLIC_AJAX', 'ACE_OC_PROF', 'ACE_OC_RUNTIME_ONLY', 'ACE_OC_SHARED_TRANSIENTS', 'ACE_OC_SLOW_LOG', 'ACE_OC_SLOW_LOG_MS', 'ACE_OC_WC_READ', 'ACE_RC_BLOCK_CACHE', 'ACE_RC_EXIT_ON_HIT', 'ACE_RC_VARNISH', 'ACE_RC_VARNISH_HOST', 'ACE_REDIS_DB', 'ACE_REDIS_EARLY_REFRESH_ADDR', 'ACE_REDIS_EARLY_SERVE', 'ACE_REDIS_EARLY_STALE', 'ACE_REDIS_EARLY_STALE_BLOCKS', 'ACE_REDIS_HOST', 'ACE_REDIS_MAX_RETRIES', 'ACE_REDIS_OP_TIMEOUT', 'ACE_REDIS_PAGE_DB', 'ACE_REDIS_PAGE_HOST', 'ACE_REDIS_PAGE_PASSWORD', 'ACE_REDIS_PAGE_PORT', 'ACE_REDIS_PASSWORD', 'ACE_REDIS_PORT', 'ACE_REDIS_READ_TIMEOUT', 'ACE_REDIS_SOCKET', 'ACE_REDIS_TIMEOUT', 'ACE_REDIS_USE_TLS', 'ACE_REDIS_VERIFY_TLS') as $aceredis_old) {
+    $aceredis_new = 'ACEREDIS_' . substr($aceredis_old, 0 === strpos($aceredis_old, 'ACE_REDIS_') ? 10 : (0 === strpos($aceredis_old, 'ACE_OC_') ? 4 : (0 === strpos($aceredis_old, 'ACE_RC_') ? 7 : 4)));
+    if (defined($aceredis_old) && !defined($aceredis_new)) { define($aceredis_new, constant($aceredis_old)); }
+}
+unset($aceredis_old, $aceredis_new);
+// aceredis-source-only:end
+
+if (!function_exists('aceredis_oc_is_public_ajax')) {
     /**
      * True for anonymous, non-mutating requests to admin-ajax.php / admin-post.php — the two
      * wp-admin endpoints that serve PUBLIC (wp_ajax_nopriv / admin_post_nopriv) traffic.
@@ -22,10 +31,10 @@ if (!function_exists('ace_oc_is_public_ajax')) {
      * by the top-of-file bypass and the constructor's request classification so they can't drift.
      * It uses only super-globals (available before WP boots).
      *
-     * Escape hatch: define ACE_OC_NO_PUBLIC_AJAX truthy in wp-config to force the old behaviour.
+     * Escape hatch: define ACEREDIS_OC_NO_PUBLIC_AJAX truthy in wp-config to force the old behaviour.
      */
-    function ace_oc_is_public_ajax() {
-        if (defined('ACE_OC_NO_PUBLIC_AJAX') && ACE_OC_NO_PUBLIC_AJAX) { return false; }
+    function aceredis_oc_is_public_ajax() {
+        if (defined('ACEREDIS_OC_NO_PUBLIC_AJAX') && ACEREDIS_OC_NO_PUBLIC_AJAX) { return false; }
 
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         if ($method !== 'GET' && $method !== 'HEAD') { return false; } // POST ajax = mutation
@@ -51,7 +60,7 @@ if (!function_exists('ace_oc_is_public_ajax')) {
     }
 }
 
-if (!function_exists('ace_oc_is_member_front_ajax')) {
+if (!function_exists('aceredis_oc_is_member_front_ajax')) {
     /**
      * A signed-in visitor's front-end admin-ajax GET (map layers, live panels, polling).
      *
@@ -61,8 +70,8 @@ if (!function_exists('ace_oc_is_member_front_ajax')) {
      * they get member read mode like a signed-in page view: read Redis, never persist. A call
      * made from a wp-admin screen (Referer under /wp-admin/) keeps the strict behaviour.
      */
-    function ace_oc_is_member_front_ajax() {
-        if (defined('ACE_OC_MEMBER_READ') && !ACE_OC_MEMBER_READ) { return false; }
+    function aceredis_oc_is_member_front_ajax() {
+        if (defined('ACEREDIS_OC_MEMBER_READ') && !ACEREDIS_OC_MEMBER_READ) { return false; }
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         if ($method !== 'GET' && $method !== 'HEAD') { return false; }
         $uri    = $_SERVER['REQUEST_URI'] ?? '';
@@ -92,12 +101,12 @@ $is_admin_req = (
 
 // Safer: just force cache bypass for admin/login requests — EXCEPT anonymous public AJAX, which is
 // real guest traffic served through admin-ajax.php and must stay cache-eligible (see helper above).
-if ($is_admin_req && !ace_oc_is_public_ajax() && !ace_oc_is_member_front_ajax() && !defined('ACE_OC_BYPASS')) {
-    define('ACE_OC_BYPASS', true);
+if ($is_admin_req && !aceredis_oc_is_public_ajax() && !aceredis_oc_is_member_front_ajax() && !defined('ACEREDIS_OC_BYPASS')) {
+    define('ACEREDIS_OC_BYPASS', true);
 }
 
-if (!function_exists('ace_object_cache_is_woocommerce')) {
-    function ace_object_cache_is_woocommerce() {
+if (!function_exists('aceredis_object_cache_is_woocommerce')) {
+    function aceredis_object_cache_is_woocommerce() {
         if (defined('WC_ABSPATH')) {
             return true;
         }
@@ -151,6 +160,13 @@ if (!class_exists('WP_Object_Cache')) {
         // ['__aceoc'=>WIRE_VERSION,'d'=>data] so reads can reject anything we did
         // not write (foreign serializer/compression, stale-format keys from a prior
         // deploy, corruption) as a cache MISS instead of returning a corrupt type.
+        // The plugin's own settings row, which is never served from a signed-in read copy.
+        private const SETTINGS_KEYS = [
+            'aceredis_cache_settings' => true,
+            // aceredis-source-only:start
+            'ace_redis_cache_settings' => true,
+            // aceredis-source-only:end
+        ];
         private const WIRE_VERSION = 2;
 
         // Backstop TTL (seconds) for writes that pass no explicit expiry. WP's object
@@ -165,12 +181,12 @@ if (!class_exists('WP_Object_Cache')) {
         // Plugins ask for week-long transients, so on the shared Redis instance keys averaged
         // six day TTLs and cold entries crowded out the working set. Every write path clamps
         // its expiry to min(requested or DEFAULT_TTL, max TTL). Configure per site with the
-        // `object_cache_max_ttl` setting (0 turns the cap off) or ACE_OC_MAX_TTL in wp-config,
+        // `object_cache_max_ttl` setting (0 turns the cap off) or ACEREDIS_OC_MAX_TTL in wp-config,
         // which wins over the setting. Exempt: the generation counter `<namespace>gen`, which
         // is written with no TTL on purpose (it must outlive every key it versions).
         private const MAX_TTL = 86400; // 1 day
         protected $max_ttl = null;              // resolved cap for this instance (0 = off)
-        protected static $max_ttl_setting = null; // from ace_redis_cache_settings, per process
+        protected static $max_ttl_setting = null; // from aceredis_cache_settings, per process
 
         // Generation counter (#27). Every object-cache key carries the site's current
         // generation (`<namespace>v<gen>:...`), held in Redis at `<namespace>gen` and
@@ -215,7 +231,7 @@ if (!class_exists('WP_Object_Cache')) {
             'transient',
             'site-transient',
             // First-party context caches. These MUST live in the default const, not the
-            // ace_oc_persistent_groups filter: that filter is applied in __construct()
+            // aceredis_oc_persistent_groups filter: that filter is applied in __construct()
             // (wp_start_object_cache, before plugins load), so a plugin add_filter() is too late.
             'ace_te', // ace-teams-events per-post event context (build_post_event_context)
             'ace_events', // Ace-Community-Events feed + venue/event detail cache (versioned, self::cache_get)
@@ -279,8 +295,8 @@ if (!class_exists('WP_Object_Cache')) {
 
         public function __construct() {
             // Emergency bypass
-            $emergency_bypass = (defined('ACE_OC_BYPASS') && ACE_OC_BYPASS)
-                || (isset($_GET['ace_oc_bypass']) && $_GET['ace_oc_bypass'] == '1');
+            $emergency_bypass = (defined('ACEREDIS_OC_BYPASS') && ACEREDIS_OC_BYPASS)
+                || (isset($_GET['aceredis_oc_bypass']) && $_GET['aceredis_oc_bypass'] == '1');
             if ($emergency_bypass) { $this->bypass = true; }
 
             // Auto-bypass for admin/editor/REST/logged-in - improved early detection
@@ -384,8 +400,8 @@ if (!class_exists('WP_Object_Cache')) {
             );
             if ($admin_read_suspension) {
                 $this->suspend_persistent_writes = true;
-                if (!defined('ACE_OC_ADMIN_CACHE_SUSPENDED')) {
-                    define('ACE_OC_ADMIN_CACHE_SUSPENDED', true);
+                if (!defined('ACEREDIS_OC_ADMIN_CACHE_SUSPENDED')) {
+                    define('ACEREDIS_OC_ADMIN_CACHE_SUSPENDED', true);
                 }
             }
 
@@ -393,8 +409,8 @@ if (!class_exists('WP_Object_Cache')) {
             // Anonymous public AJAX (admin-ajax.php nopriv, GET, no auth/wc cookie) is guest traffic,
             // not editorial — keep it cache-eligible. Shared classifier so gate 1 (top-of-file),
             // this, and the init gate below never disagree. The filter still has final say.
-            if (ace_oc_is_public_ajax()) { $editor_bypass = false; }
-            $editor_bypass   = apply_filters('ace_rc_object_cache_bypass', $editor_bypass, [
+            if (aceredis_oc_is_public_ajax()) { $editor_bypass = false; }
+            $editor_bypass   = apply_filters('aceredis_object_cache_bypass', $editor_bypass, [
                 'is_admin_url'  => $is_admin_by_url,
                 'is_ajax'       => $is_ajax,
                 'is_admin'      => $is_admin_req,
@@ -404,7 +420,7 @@ if (!class_exists('WP_Object_Cache')) {
             ]);
             if ($editor_bypass || $this->suspend_persistent_writes) { $this->bypass = true; }
 
-            // WC shared-read mode (opt-in via ACE_OC_WC_READ). Cart/checkout/Store-API requests are
+            // WC shared-read mode (opt-in via ACEREDIS_OC_WC_READ). Cart/checkout/Store-API requests are
             // session-bearing, so they bypass PERSISTENCE (bypass stays true — nothing cart-specific is
             // ever written to Redis, and sessions stay DB-backed via the woocommerce_sessions bypass
             // group). But without help they also skip Redis ENTIRELY and re-run ~150 queries per request
@@ -413,19 +429,19 @@ if (!class_exists('WP_Object_Cache')) {
             // while still not persisting — collapsing the query storm to cache hits. Product/price
             // freshness equals the front end (same object-cache invalidation on save). Default OFF.
             // The plugin setting "Cart and checkout read the shared object cache" turns it on;
-            // ACE_OC_WC_READ in wp-config overrides the setting either way.
+            // ACEREDIS_OC_WC_READ in wp-config overrides the setting either way.
             $wc_read_mode = $is_wc_customer_session_request
-                && (defined('ACE_OC_WC_READ') ? (bool) ACE_OC_WC_READ : !empty(($this->plugin_settings() ?? [])['wc_object_cache_read']));
+                && (defined('ACEREDIS_OC_WC_READ') ? (bool) ACEREDIS_OC_WC_READ : !empty(($this->plugin_settings() ?? [])['wc_object_cache_read']));
             $this->wc_read_mode = $wc_read_mode;
 
             if ($editor_bypass && !$wc_read_mode) {
                 $this->runtime_only_mode = true;
-                if (!defined('ACE_OC_RUNTIME_ONLY')) {
-                    define('ACE_OC_RUNTIME_ONLY', true);
+                if (!defined('ACEREDIS_OC_RUNTIME_ONLY')) {
+                    define('ACEREDIS_OC_RUNTIME_ONLY', true);
                 }
             }
 
-            // Member read mode (default on; define ACE_OC_MEMBER_READ false to turn it off). A
+            // Member read mode (default on; define ACEREDIS_OC_MEMBER_READ false to turn it off). A
             // signed-in visitor reading the front end is runtime-only, and without help that means
             // no Redis at all: a page that costs a guest 20 queries costs a member 700, because
             // every post, term, option and transient the guests already cached is re-read from the
@@ -434,18 +450,18 @@ if (!class_exists('WP_Object_Cache')) {
             // page view may READ it. It still never persists: writes stay in this process and
             // invalidate as before, so nothing member-specific can ever reach the shared cache.
             // Admin, AJAX, REST, cron, update and cart requests keep the strict behaviour, except a
-            // signed-in front-end admin-ajax GET (see ace_oc_is_member_front_ajax()).
-            $is_member_front_ajax = ace_oc_is_member_front_ajax();
+            // signed-in front-end admin-ajax GET (see aceredis_oc_is_member_front_ajax()).
+            $is_member_front_ajax = aceredis_oc_is_member_front_ajax();
             $member_read_mode = $this->runtime_only_mode
                 && ($is_logged_in_fn || $is_logged_in_cookie)
                 && ($is_member_front_ajax || (!$is_admin_by_url && !$is_admin_req && !$is_ajax && !$is_rest))
                 && !$is_cron
                 && !$is_update_operation && !$is_wc_customer_session_request
                 && in_array($request_method, $allow_methods, true)
-                && (defined('ACE_OC_MEMBER_READ') ? (bool) ACE_OC_MEMBER_READ : !empty(($this->plugin_settings() ?? [])['member_object_cache_read'] ?? 1));
+                && (defined('ACEREDIS_OC_MEMBER_READ') ? (bool) ACEREDIS_OC_MEMBER_READ : !empty(($this->plugin_settings() ?? [])['member_object_cache_read'] ?? 1));
 
             // Admin read mode (plugin setting "wp-admin reads the shared object cache", off by
-            // default; ACE_OC_ADMIN_READ overrides). A wp-admin screen otherwise runs with no Redis
+            // default; ACEREDIS_OC_ADMIN_READ overrides). A wp-admin screen otherwise runs with no Redis
             // at all and re-reads every option, term and meta row the front end already cached.
             // Same contract as member read: read shared persistent groups, never write, and a
             // write in this process still deletes the shared copy. Only plain screen loads (GET):
@@ -457,10 +473,10 @@ if (!class_exists('WP_Object_Cache')) {
                 && !$is_ajax && !$is_rest && !$is_cron && !$is_cli
                 && !$is_update_operation && !$is_wc_customer_session_request
                 && in_array($request_method, $allow_methods, true)
-                && (defined('ACE_OC_ADMIN_READ') ? (bool) ACE_OC_ADMIN_READ : !empty(($this->plugin_settings() ?? [])['admin_object_cache_read']));
+                && (defined('ACEREDIS_OC_ADMIN_READ') ? (bool) ACEREDIS_OC_ADMIN_READ : !empty(($this->plugin_settings() ?? [])['admin_object_cache_read']));
             $this->admin_read_mode = $admin_read_mode;
             $member_read_mode = $member_read_mode || $admin_read_mode;
-            $this->member_read_mode = (bool) apply_filters('ace_oc_member_read_mode', $member_read_mode, $this->request_context);
+            $this->member_read_mode = (bool) apply_filters('aceredis_oc_member_read_mode', $member_read_mode, $this->request_context);
             $this->request_context['member_read'] = $this->member_read_mode;
             $this->request_context['admin_read'] = $this->admin_read_mode && $this->member_read_mode;
             $this->signed_in = ($is_logged_in_fn || $is_logged_in_cookie);
@@ -468,7 +484,7 @@ if (!class_exists('WP_Object_Cache')) {
 
             // Anonymous public AJAX stays cache-eligible so init_redis() actually runs for it
             // (same shared classifier as the two bypass gates above).
-            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !ace_oc_is_public_ajax() && !$wc_read_mode && !$this->member_read_mode;
+            $is_admin_system_request = ($is_admin_by_url || $is_admin_req || $is_ajax || $is_rest) && !aceredis_oc_is_public_ajax() && !$wc_read_mode && !$this->member_read_mode;
 
             $blog_id           = function_exists('get_current_blog_id') ? get_current_blog_id() : 1;
             $this->blog_prefix = (is_multisite() ? $blog_id . ':' : '1:');
@@ -485,7 +501,7 @@ if (!class_exists('WP_Object_Cache')) {
                 }
             }
 
-            if (function_exists('ace_object_cache_is_woocommerce') && ace_object_cache_is_woocommerce()) {
+            if (function_exists('aceredis_object_cache_is_woocommerce') && aceredis_object_cache_is_woocommerce()) {
                 $this->apply_woocommerce_profile();
             }
 
@@ -506,7 +522,7 @@ if (!class_exists('WP_Object_Cache')) {
             add_action('transition_post_status', [$this, 'maybe_flush_on_visibility_change'], 10, 3);
 
             // Lazy clean-up of keys from superseded generations (#27).
-            add_action('ace_rc_purge_stale_generations', [$this, 'purge_stale_generations']);
+            add_action('aceredis_purge_stale_generations', [$this, 'purge_stale_generations']);
             add_action('init', [$this, 'schedule_generation_purge']);
             add_action('shutdown', [$this, 'flush_pending_post_changes'], 999);
             add_action('shutdown', [$this, 'schedule_stale_purge_soon'], 1000);
@@ -514,8 +530,8 @@ if (!class_exists('WP_Object_Cache')) {
 
         public function apply_woocommerce_profile() {
             $this->max_value_bytes = self::MAX_VALUE_BYTES_WC;
-            $this->bypass_groups = apply_filters('ace_oc_bypass_groups', self::BYPASS_GROUPS_DEFAULT);
-            $this->persistent_groups = apply_filters('ace_oc_persistent_groups', self::PERSISTENT_GROUPS_DEFAULT);
+            $this->bypass_groups = apply_filters('aceredis_oc_bypass_groups', self::BYPASS_GROUPS_DEFAULT);
+            $this->persistent_groups = apply_filters('aceredis_oc_persistent_groups', self::PERSISTENT_GROUPS_DEFAULT);
         }
 
         protected function is_bypass_group($group) {
@@ -559,17 +575,17 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         /**
-         * One line per slow request (ACE_OC_SLOW_LOG_MS, default 1500; 0 turns it off) in
-         * ace-requests.log beside the pool's PHP error log, or ACE_OC_SLOW_LOG. Tab-separated:
+         * One line per slow request (ACEREDIS_OC_SLOW_LOG_MS, default 1500; 0 turns it off) in
+         * ace-requests.log beside the pool's PHP error log, or ACEREDIS_OC_SLOW_LOG. Tab-separated:
          * time, ms, method, member|guest, cache mode, queries, Redis hits/misses/member reads,
          * peak memory, status, path (query string dropped except an AJAX action). The FPM slow
          * log says where a request stalled; this says who paid and whether the cache helped.
          */
         public function log_slow_request() {
-            $min = defined('ACE_OC_SLOW_LOG_MS') ? (int) ACE_OC_SLOW_LOG_MS : 1500;
+            $min = defined('ACEREDIS_OC_SLOW_LOG_MS') ? (int) ACEREDIS_OC_SLOW_LOG_MS : 1500;
             $ms  = (int) round((microtime(true) - (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000);
             if ($min <= 0 || $ms < $min) { return; }
-            $file = defined('ACE_OC_SLOW_LOG') ? (string) ACE_OC_SLOW_LOG : '';
+            $file = defined('ACEREDIS_OC_SLOW_LOG') ? (string) ACEREDIS_OC_SLOW_LOG : '';
             if ($file === '') {
                 $err = (string) ini_get('error_log');
                 if ($err === '' || !is_dir(dirname($err))) { return; }
@@ -640,7 +656,7 @@ if (!class_exists('WP_Object_Cache')) {
          * feed ingest updates every story it touches), so that meant a dozen flushes a minute,
          * every transient and count cache thrown away each time, and a day of dead generations
          * filling the shared Redis. A site whose own caches really do depend on the flush can
-         * have it back with ACE_OC_FLUSH_ON_POST_CHANGE or the `ace_oc_flush_on_post_change`
+         * have it back with ACEREDIS_OC_FLUSH_ON_POST_CHANGE or the `aceredis_oc_flush_on_post_change`
          * filter; it is then held to one flush a minute per process, with one more at shutdown
          * for anything that changed in between.
          */
@@ -672,8 +688,8 @@ if (!class_exists('WP_Object_Cache')) {
 
         /** Whether this site asked for the old whole-cache flush on post changes. */
         protected function flush_on_post_change($post_id) {
-            if (defined('ACE_OC_FLUSH_ON_POST_CHANGE')) { return (bool) ACE_OC_FLUSH_ON_POST_CHANGE; }
-            return function_exists('apply_filters') && (bool) apply_filters('ace_oc_flush_on_post_change', false, $post_id);
+            if (defined('ACEREDIS_OC_FLUSH_ON_POST_CHANGE')) { return (bool) ACEREDIS_OC_FLUSH_ON_POST_CHANGE; }
+            return function_exists('apply_filters') && (bool) apply_filters('aceredis_oc_flush_on_post_change', false, $post_id);
         }
 
         /** Shutdown: the one flush owed for post changes held back by the window above. */
@@ -720,11 +736,11 @@ if (!class_exists('WP_Object_Cache')) {
 
         /**
          * If you have *specific* transient keys to purge, provide them via:
-         *   add_filter('ace_known_query_transients', fn() => ['my_transient_key', ...]);
+         *   add_filter('aceredis_known_query_transients', fn() => ['my_transient_key', ...]);
          * We use delete_transient()/delete_site_transient() (no DB scans).
          */
         protected function maybe_delete_known_transients() {
-            $keys = (array) apply_filters('ace_known_query_transients', []);
+            $keys = (array) apply_filters('aceredis_known_query_transients', []);
             if (!$keys) { return; }
             foreach ($keys as $key) {
                 if (function_exists('delete_transient')) { delete_transient($key); }
@@ -754,13 +770,21 @@ if (!class_exists('WP_Object_Cache')) {
                         $options_table = $wpdb->prefix . 'options';
                     }
 
-                    $option_name = 'ace_redis_cache_settings';
+                    $option_name = 'aceredis_cache_settings';
                     if ($options_table !== '') {
                         try {
                             $option_value = $wpdb->get_var($wpdb->prepare(
                                 "SELECT option_value FROM {$options_table} WHERE option_name = %s",
                                 $option_name
                             ));
+                            // aceredis-source-only:start
+                            if (null === $option_value) {
+                                $option_value = $wpdb->get_var($wpdb->prepare(
+                                    "SELECT option_value FROM {$options_table} WHERE option_name = %s",
+                                    'ace_redis_cache_settings'
+                                ));
+                            }
+                            // aceredis-source-only:end
                             if ($option_value && is_string($option_value)) {
                                 $plugin_settings = json_decode($option_value, true);
                                 if (json_last_error() !== JSON_ERROR_NONE) {
@@ -781,9 +805,9 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         protected function init_redis() {
-            global $ace_redis_shared_connection;
-            if ($ace_redis_shared_connection instanceof \Redis) {
-                $this->redis = $ace_redis_shared_connection;
+            global $aceredis_shared_connection;
+            if ($aceredis_shared_connection instanceof \Redis) {
+                $this->redis = $aceredis_shared_connection;
                 $this->connected = true;
                 $this->connect_via = 'shared';
                 return;
@@ -802,13 +826,13 @@ if (!class_exists('WP_Object_Cache')) {
                 $use_tls = !empty($plugin_settings['enable_tls']);
             } else {
                 // Fallback to constants/defaults if plugin settings not available
-                $host = defined('ACE_REDIS_HOST') ? ACE_REDIS_HOST : (defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1');
-                $port = defined('ACE_REDIS_PORT') ? (int)ACE_REDIS_PORT : (defined('WP_REDIS_PORT') ? (int)WP_REDIS_PORT : 6379);
-                $pass = defined('ACE_REDIS_PASSWORD') ? ACE_REDIS_PASSWORD : (defined('WP_REDIS_PASSWORD') ? WP_REDIS_PASSWORD : '');
-                $use_tls = (defined('ACE_REDIS_USE_TLS') && ACE_REDIS_USE_TLS) || (defined('WP_REDIS_SCHEME') && WP_REDIS_SCHEME === 'tls') || (defined('WP_REDIS_USE_TLS') && WP_REDIS_USE_TLS);
+                $host = defined('ACEREDIS_HOST') ? ACEREDIS_HOST : (defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1');
+                $port = defined('ACEREDIS_PORT') ? (int)ACEREDIS_PORT : (defined('WP_REDIS_PORT') ? (int)WP_REDIS_PORT : 6379);
+                $pass = defined('ACEREDIS_PASSWORD') ? ACEREDIS_PASSWORD : (defined('WP_REDIS_PASSWORD') ? WP_REDIS_PASSWORD : '');
+                $use_tls = (defined('ACEREDIS_USE_TLS') && ACEREDIS_USE_TLS) || (defined('WP_REDIS_SCHEME') && WP_REDIS_SCHEME === 'tls') || (defined('WP_REDIS_USE_TLS') && WP_REDIS_USE_TLS);
             }
             
-            $socket = defined('ACE_REDIS_SOCKET') ? ACE_REDIS_SOCKET : '/var/run/redis/redis.sock';
+            $socket = defined('ACEREDIS_SOCKET') ? ACEREDIS_SOCKET : '/var/run/redis/redis.sock';
             $timeout = 0.5; // Reduced from 1.0s to 0.5s for faster failover
 
             $attempted_socket = false;
@@ -833,7 +857,7 @@ if (!class_exists('WP_Object_Cache')) {
 
                     if ($attempt_tls_first) {
                         try {
-                            $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
+                            $ctx = (defined('ACEREDIS_VERIFY_TLS') && ACEREDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
                             @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
@@ -850,7 +874,7 @@ if (!class_exists('WP_Object_Cache')) {
 
                     if (!$connected && !$attempt_tls_first && $use_tls_config) {
                         try {
-                            $ctx = (defined('ACE_REDIS_VERIFY_TLS') && ACE_REDIS_VERIFY_TLS)
+                            $ctx = (defined('ACEREDIS_VERIFY_TLS') && ACEREDIS_VERIFY_TLS)
                                 ? ['ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]
                                 : ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
                             @$this->redis->connect($tls_host, $port, $timeout, null, 0, 0, $ctx);
@@ -880,15 +904,15 @@ if (!class_exists('WP_Object_Cache')) {
                 if (!empty($pass)) { @ $this->redis->auth($pass); }
                 try { $this->redis->client('SETNAME', 'ace-object-cache'); } catch (\Throwable $t) {}
 
-                // Per-site logical DB. ACE_REDIS_DB (wp-config constant) keeps this object-cache
+                // Per-site logical DB. ACEREDIS_DB (wp-config constant) keeps this object-cache
                 // connection, the page-cache connection, and advanced-cache in the SAME database for
                 // this site. This IS the shared connection advanced-cache and the token-publish reuse,
                 // so selecting here means the pre-boot early-serve reads hit the right DB too.
-                $ace_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : 0;
-                if ($ace_db > 0) { try { $this->redis->select($ace_db); } catch (\Throwable $t) {} }
+                $aceredis_db = defined('ACEREDIS_DB') ? (int) ACEREDIS_DB : 0;
+                if ($aceredis_db > 0) { try { $this->redis->select($aceredis_db); } catch (\Throwable $t) {} }
 
                 $this->connected = true;
-                $ace_redis_shared_connection = $this->redis;
+                $aceredis_shared_connection = $this->redis;
             } catch (\Throwable $e) {
                 $this->connect_error = $e->getMessage();
                 $this->bypass = true; $this->redis = null;
@@ -961,7 +985,7 @@ if (!class_exists('WP_Object_Cache')) {
         /**
          * Maintenance: UNLINK keys left behind by older generations (and legacy keys
          * without one). They would expire by TTL anyway; this just frees memory sooner.
-         * Runs on the `ace_rc_purge_stale_generations` cron (soon after a flush, and daily),
+         * Runs on the `aceredis_purge_stale_generations` cron (soon after a flush, and daily),
          * never on a request path.
          *
          * The generation is read fresh from Redis, not from this process's memo: a long cron
@@ -1005,8 +1029,8 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         public function schedule_generation_purge() {
-            if (function_exists('wp_next_scheduled') && !wp_next_scheduled('ace_rc_purge_stale_generations')) {
-                wp_schedule_event(time() + 3600, 'daily', 'ace_rc_purge_stale_generations');
+            if (function_exists('wp_next_scheduled') && !wp_next_scheduled('aceredis_purge_stale_generations')) {
+                wp_schedule_event(time() + 3600, 'daily', 'aceredis_purge_stale_generations');
             }
         }
 
@@ -1019,12 +1043,12 @@ if (!class_exists('WP_Object_Cache')) {
             if (!$this->stale_purge_wanted) { return; }
             $this->stale_purge_wanted = false;
             if (function_exists('wp_schedule_single_event')) {
-                wp_schedule_single_event(time() + self::STALE_PURGE_DELAY, 'ace_rc_purge_stale_generations');
+                wp_schedule_single_event(time() + self::STALE_PURGE_DELAY, 'aceredis_purge_stale_generations');
             }
         }
 
         protected function prof_log($type, $key, $ms, $extra = '') {
-            if (!defined('ACE_OC_PROF') || !ACE_OC_PROF) { return; }
+            if (!defined('ACEREDIS_OC_PROF') || !ACEREDIS_OC_PROF) { return; }
             if ($ms < $this->slow_threshold_ms) { return; }
             error_log(sprintf('%s %s %.1fms%s', $type, $key, $ms, $extra));
         }
@@ -1060,7 +1084,7 @@ if (!class_exists('WP_Object_Cache')) {
          * transient-cached remote call it touched. On one WooCommerce site that was Jetpack's brute-force and HTTPS
          * checks, a plugin SDK's five-day rollback lookup, the cookie banner's API calls and core's
          * own update checks, each a blocking HTTP request on every admin page, 3-10 s in all.
-         * Excluded keys, oversize values and ACE_OC_SHARED_TRANSIENTS=false keep the old behaviour.
+         * Excluded keys, oversize values and ACEREDIS_OC_SHARED_TRANSIENTS=false keep the old behaviour.
          */
         protected function is_shared_transient($group, $key) {
             if ($group !== 'transient' && $group !== 'site-transient') return false;
@@ -1070,7 +1094,7 @@ if (!class_exists('WP_Object_Cache')) {
             // either: a 0.3 s connect timeout, one attempt per request, and a miss falls back to
             // whatever the caller does without a cache.
             if (!extension_loaded('redis')) return false;
-            if (defined('ACE_OC_SHARED_TRANSIENTS') && !ACE_OC_SHARED_TRANSIENTS) return false;
+            if (defined('ACEREDIS_OC_SHARED_TRANSIENTS') && !ACEREDIS_OC_SHARED_TRANSIENTS) return false;
             return !$this->is_excluded_key($group, $key);
         }
 
@@ -1172,7 +1196,7 @@ if (!class_exists('WP_Object_Cache')) {
             $found = false;
             if ($this->redis === null || !$this->connected) { return false; }
             if (!$this->is_persistent_group($group) || $this->is_bypass_group($group) || $this->is_excluded_group($group)) { return false; }
-            if ($group === 'options' && $key === 'ace_redis_cache_settings') { return false; }
+            if ($group === 'options' && isset(self::SETTINGS_KEYS[$key])) { return false; }
             try {
                 $raw = $this->redis->get($this->k($key, $group));
             } catch (\Throwable $e) {
@@ -1194,7 +1218,7 @@ if (!class_exists('WP_Object_Cache')) {
             if ($this->suspend_persistent_writes) return false;
             if (!$this->redis || !$this->connected) return false;
             $g = $group ?: 'default';
-            $list = apply_filters('ace_rc_object_cache_write_through_groups', $this->write_through_groups);
+            $list = apply_filters('aceredis_object_cache_write_through_groups', $this->write_through_groups);
             return in_array($g, (array)$list, true);
         }
 
@@ -1218,7 +1242,7 @@ if (!class_exists('WP_Object_Cache')) {
                     return false;
                 }
                 // Cache plugin settings when not bypassing
-                if ($key === 'ace_redis_cache_settings') {
+                if (isset(self::SETTINGS_KEYS[$key])) {
                     return $this->bypass; // Only exclude during bypass
                 }
                 // notoptions is per-request bookkeeping and must never be shared.
@@ -1273,7 +1297,7 @@ if (!class_exists('WP_Object_Cache')) {
              * Filter whether full WP_Post objects should be skipped when persisting to Redis.
              * Returning true avoids storing heavyweight objects and keeps Redis focused on frontend reuse.
              */
-            $skip = apply_filters('ace_rc_skip_post_object_cache', true, $value, $group);
+            $skip = apply_filters('aceredis_skip_post_object_cache', true, $value, $group);
             return (bool) $skip;
         }
 
@@ -1534,7 +1558,7 @@ if (!class_exists('WP_Object_Cache')) {
                 $this->prof_log('BYPASS', $group . ':' . $key, (microtime(true) - $start_time) * 1000);
                 return false;
             }
-            if ($group === 'options' && $key === 'ace_redis_cache_settings') { $found = false; return false; }
+            if ($group === 'options' && isset(self::SETTINGS_KEYS[$key])) { $found = false; return false; }
 
             $k = $this->k($key, $group);
             try { 
@@ -1605,11 +1629,11 @@ if (!class_exists('WP_Object_Cache')) {
 
         // Normalise an expiry: callers passing 0 / no expiry get the bounded DEFAULT_TTL
         // backstop rather than an immortal key.
-        /** The TTL cap in seconds, 0 when off: ACE_OC_MAX_TTL, then the setting, then MAX_TTL. */
+        /** The TTL cap in seconds, 0 when off: ACEREDIS_OC_MAX_TTL, then the setting, then MAX_TTL. */
         protected function max_ttl() {
             if ($this->max_ttl !== null) { return $this->max_ttl; }
-            if (defined('ACE_OC_MAX_TTL')) {
-                $cap = (int) ACE_OC_MAX_TTL;
+            if (defined('ACEREDIS_OC_MAX_TTL')) {
+                $cap = (int) ACEREDIS_OC_MAX_TTL;
             } elseif (self::$max_ttl_setting !== null) {
                 $cap = self::$max_ttl_setting;
             } else {
@@ -1694,7 +1718,7 @@ if (!class_exists('WP_Object_Cache')) {
         }
 
         /**
-         * Flush only our namespace. The legacy ACE_OC_FLUSHDB_ON_SAVE constant is ignored.
+         * Flush only our namespace. The legacy ACEREDIS_OC_FLUSHDB_ON_SAVE constant is ignored.
          * 
          * @param bool $force Force flush even during bypass mode
          */
@@ -2033,9 +2057,9 @@ if (!class_exists('WP_Object_Cache')) {
 }
 
 function wp_cache_init() {
-    global $wp_object_cache, $ace_redis_shared_connection;
+    global $wp_object_cache, $aceredis_shared_connection;
     $wp_object_cache = new WP_Object_Cache();
-    $ace_redis_shared_connection = method_exists($wp_object_cache, 'get_redis') ? $wp_object_cache->get_redis() : null;
+    $aceredis_shared_connection = method_exists($wp_object_cache, 'get_redis') ? $wp_object_cache->get_redis() : null;
 }
 
 function wp_cache_get($key, $group = '', $force = false, &$found = null) {

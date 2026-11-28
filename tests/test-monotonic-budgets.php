@@ -12,7 +12,7 @@ function get_option($key,$default=false){return $GLOBALS['fixture']['options'][$
 function update_option($key,$value,...$args){$GLOBALS['fixture']['options'][$key]=$value;}
 function delete_option($key){unset($GLOBALS['fixture']['options'][$key]);}
 function do_action(...$args){}
-function apply_filters($name,$value,...$args){return ['ace_rc_prime_time_budget'=>1,'ace_rc_cpu_count'=>4,'ace_rc_sitemap_prime_batch_size'=>10][$name]??$value;}
+function apply_filters($name,$value,...$args){return ['aceredis_prime_time_budget'=>1,'aceredis_cpu_count'=>4,'aceredis_sitemap_prime_batch_size'=>10][$name]??$value;}
 function wp_next_scheduled(...$args){return false;}
 function wp_schedule_single_event($at,$hook){$GLOBALS['fixture']['scheduled'][]=[$at,$hook];}
 function sys_getloadavg(){return [0,0,0];}
@@ -41,7 +41,7 @@ try {
  foreach ([-3600,0,3600] as $step) {
   $fixture=['wall'=>1000.0,'elapsed'=>0.0,'wall_step'=>$step,'fetches'=>0,'options'=>[],'scheduled'=>[]];
   $manager=(new \ReflectionClass(CacheManager::class))->newInstanceWithoutConstructor();$connection=new FixtureConnection;prop($manager,'redis_connection',$connection);
-  $fixture['options']['ace_redis_cache_clear_job']=['patterns'=>['fixture:*'],'status'=>'running'];
+  $fixture['options']['aceredis_cache_clear_job']=['patterns'=>['fixture:*'],'status'=>'running'];
   $result=$manager->process_clear_cache_job(1);
   check($connection->redis->scans===1,'clear batch respects elapsed budget with wall step '.$step);
   check($result['status']==='running'&&$result['cursor']===1&&$result['deleted']===1,'clear batch saves continuation cursor and count');
@@ -49,24 +49,24 @@ try {
   check(count($fixture['scheduled'])===1 && $fixture['scheduled'][0][0]===(int)$fixture['wall']+1,'clear continuation schedule remains wall-clock time');
   $manager->process_clear_cache_job(1);$complete=$manager->process_clear_cache_job(1);
   check($complete['status']==='complete'&&$complete['deleted']===3,'clear job resumes to completion without lost scans');
-  $fixture=['wall'=>1000.0,'elapsed'=>0.0,'wall_step'=>$step,'fetches'=>0,'options'=>['ace_rc_sitemap_prime_queue'=>['https://example.invalid/a/'=>1,'https://example.invalid/b/'=>1,'https://example.invalid/c/'=>1]],'scheduled'=>[]];
+  $fixture=['wall'=>1000.0,'elapsed'=>0.0,'wall_step'=>$step,'fetches'=>0,'options'=>['aceredis_sitemap_prime_queue'=>['https://example.invalid/a/'=>1,'https://example.invalid/b/'=>1,'https://example.invalid/c/'=>1]],'scheduled'=>[]];
   $plugin=(new \ReflectionClass(AceRedisCache::class))->newInstanceWithoutConstructor();prop($plugin,'settings',[]);prop($plugin,'cache_manager',null);
   $plugin->run_sitemap_prime_batch();
   check($fixture['fetches']===1,'primer stops at elapsed budget with wall step '.$step);
-  check(array_keys($fixture['options']['ace_rc_sitemap_prime_queue'])===['https://example.invalid/b/','https://example.invalid/c/'],'primer preserves remaining URLs');
+  check(array_keys($fixture['options']['aceredis_sitemap_prime_queue'])===['https://example.invalid/b/','https://example.invalid/c/'],'primer preserves remaining URLs');
   check($fixture['scheduled'][0][0]===(int)$fixture['wall']+30,'primer continuation remains wall-clock scheduled');
   $plugin->run_sitemap_prime_batch();$plugin->run_sitemap_prime_batch();
-  check($fixture['fetches']===3&&!isset($fixture['options']['ace_rc_sitemap_prime_queue']),'primer completes remaining work exactly once');
+  check($fixture['fetches']===3&&!isset($fixture['options']['aceredis_sitemap_prime_queue']),'primer completes remaining work exactly once');
  }
  foreach ([-3600,3600] as $step) {
   $fixture=['wall'=>1000.0,'elapsed'=>0.0,'elapsed_step'=>0.2,'wall_step'=>$step,'fetches'=>0,'options'=>[],'scheduled'=>[]];
   $manager=(new \ReflectionClass(CacheManager::class))->newInstanceWithoutConstructor();$connection=new FixtureConnection;prop($manager,'redis_connection',$connection);
-  $fixture['options']['ace_redis_cache_clear_job']=['patterns'=>['fixture:*'],'status'=>'running'];$result=$manager->process_clear_cache_job(1);
+  $fixture['options']['aceredis_cache_clear_job']=['patterns'=>['fixture:*'],'status'=>'running'];$result=$manager->process_clear_cache_job(1);
   check($connection->redis->scans===3&&$result['status']==='complete','fast clear finishes despite wall-clock jump '.$step);
   check($fixture['scheduled']===[],'completed clear does not schedule needless continuation');
-  $fixture=['wall'=>1000.0,'elapsed'=>0.0,'elapsed_step'=>0.2,'wall_step'=>$step,'fetches'=>0,'options'=>['ace_rc_sitemap_prime_queue'=>['https://example.invalid/a/'=>1,'https://example.invalid/b/'=>1,'https://example.invalid/c/'=>1]],'scheduled'=>[]];
+  $fixture=['wall'=>1000.0,'elapsed'=>0.0,'elapsed_step'=>0.2,'wall_step'=>$step,'fetches'=>0,'options'=>['aceredis_sitemap_prime_queue'=>['https://example.invalid/a/'=>1,'https://example.invalid/b/'=>1,'https://example.invalid/c/'=>1]],'scheduled'=>[]];
   $plugin=(new \ReflectionClass(AceRedisCache::class))->newInstanceWithoutConstructor();prop($plugin,'settings',[]);prop($plugin,'cache_manager',null);$plugin->run_sitemap_prime_batch();
-  check($fixture['fetches']===3&&!isset($fixture['options']['ace_rc_sitemap_prime_queue']),'fast primer completes despite wall-clock jump '.$step);
+  check($fixture['fetches']===3&&!isset($fixture['options']['aceredis_sitemap_prime_queue']),'fast primer completes despite wall-clock jump '.$step);
   check($fixture['scheduled']===[],'completed primer does not schedule needless continuation');
  }
  echo json_encode(['php'=>PHP_VERSION,'checks'=>$checks,'scope'=>'Actual cache-clear and primer methods with synthetic clocks, options, Redis and captured HTTP. No network, database or hosted scheduler. Wall-clock timestamps retained.']),"\n";

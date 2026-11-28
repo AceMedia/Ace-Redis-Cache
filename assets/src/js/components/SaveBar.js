@@ -29,7 +29,7 @@ class SaveBar {
         this.isSaving = false;
         // Determine auto-save preference from localStorage; default to enabled on first run
         try {
-            const stored = localStorage.getItem('ace_redis_auto_save_enabled');
+            const stored = localStorage.getItem('aceredis_auto_save_enabled');
             if (stored === null) {
                 // Allow an explicit initial option to set the first-run default
                 if (typeof this.options.autoSaveEnabled === 'boolean') {
@@ -38,7 +38,7 @@ class SaveBar {
                     this.isAutoSaveEnabled = true; // sensible default
                 }
                 // Persist the initial choice
-                localStorage.setItem('ace_redis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
+                localStorage.setItem('aceredis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
             } else {
                 this.isAutoSaveEnabled = (stored === '1');
             }
@@ -70,7 +70,7 @@ class SaveBar {
 
     setupBroadcastChannel() {
         try {
-            this.channel = new BroadcastChannel('ace_redis_settings');
+            this.channel = new BroadcastChannel('aceredis_settings');
             this.channel.onmessage = (event) => {
                 const payload = event?.data;
                 if (!payload || payload.type !== 'settings_saved' || !payload.settings) {
@@ -183,8 +183,8 @@ class SaveBar {
         const formData = {};
         
         $form.serializeArray().forEach(field => {
-            if (field.name.startsWith('ace_redis_cache_settings[')) {
-                const key = field.name.replace('ace_redis_cache_settings[', '').replace(']', '');
+            if (field.name.startsWith('aceredis_cache_settings[')) {
+                const key = field.name.replace('aceredis_cache_settings[', '').replace(']', '');
                 formData[key] = field.value;
             }
         });
@@ -192,8 +192,8 @@ class SaveBar {
         // Add checkbox values (unchecked boxes don't get serialized)
         $form.find('input[type="checkbox"]').each(function() {
             const name = $(this).attr('name');
-            if (name && name.startsWith('ace_redis_cache_settings[')) {
-                const key = name.replace('ace_redis_cache_settings[', '').replace(']', '');
+            if (name && name.startsWith('aceredis_cache_settings[')) {
+                const key = name.replace('aceredis_cache_settings[', '').replace(']', '');
                 formData[key] = $(this).is(':checked') ? '1' : '0';
             }
         });
@@ -338,14 +338,14 @@ class SaveBar {
             const formData = this.getFormDataObject($form);
 
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/settings',
                 type: 'POST',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 },
                 data: {
                     settings: formData,
-                    nonce: ace_redis_admin.nonce
+                    nonce: aceredis_admin.nonce
                 },
                 success: (response) => {
                     if (response && response.success === true) {
@@ -362,17 +362,17 @@ class SaveBar {
     }
 
     async syncFromServer() {
-        if (typeof ace_redis_admin === 'undefined' || !ace_redis_admin.rest_url) {
+        if (typeof aceredis_admin === 'undefined' || !aceredis_admin.rest_url) {
             return;
         }
 
         const preserveLocalChanges = this.hasUnsavedChanges;
 
         try {
-            const response = await fetch(`${ace_redis_admin.rest_url}ace-redis-cache/v1/settings`, {
+            const response = await fetch(`${aceredis_admin.rest_url}ace-redis-cache/v1/settings`, {
                 method: 'GET',
                 headers: {
-                    'X-WP-Nonce': ace_redis_admin.rest_nonce,
+                    'X-WP-Nonce': aceredis_admin.rest_nonce,
                 },
                 credentials: 'same-origin',
             });
@@ -402,7 +402,7 @@ class SaveBar {
         if (!preserveLocalChanges) {
             const $form = $(this.options.containerSelector);
             Object.entries(settings).forEach(([key, value]) => {
-                const fieldName = `ace_redis_cache_settings[${key}]`;
+                const fieldName = `aceredis_cache_settings[${key}]`;
                 const $fields = $form.find(`[name="${fieldName}"]`);
                 if (!$fields.length) {
                     return;
@@ -539,15 +539,15 @@ class SaveBar {
         
         // Store the preference
         try {
-            localStorage.setItem('ace_redis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
+            localStorage.setItem('aceredis_auto_save_enabled', this.isAutoSaveEnabled ? '1' : '0');
         } catch (e) { /* ignore */ }
 
         // Also persist per-user server-side so it survives devices/browsers
-        if (typeof ace_redis_admin !== 'undefined' && ace_redis_admin.ajax_url) {
+        if (typeof aceredis_admin !== 'undefined' && aceredis_admin.ajax_url) {
             try {
-                jQuery.post(ace_redis_admin.ajax_url, {
-                    action: 'ace_redis_toggle_autosave',
-                    nonce: ace_redis_admin.nonce,
+                jQuery.post(aceredis_admin.ajax_url, {
+                    action: 'aceredis_toggle_autosave',
+                    nonce: aceredis_admin.nonce,
                     enabled: this.isAutoSaveEnabled ? 1 : 0
                 });
             } catch (e) { /* ignore */ }

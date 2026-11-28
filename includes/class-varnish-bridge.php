@@ -7,9 +7,9 @@
  * behind Varnish are unaffected: a ban for a host Varnish never cached is a no-op.
  *
  * Config (wp-config.php):
- *   ACE_RC_VARNISH       true | false | 'auto' (default 'auto')
- *   ACE_RC_VARNISH_HOST  'host:port' (default '127.0.0.1:6081')
- * Filters: ace_rc_varnish_enabled, ace_rc_varnish_hosts (Host headers to ban for).
+ *   ACEREDIS_VARNISH       true | false | 'auto' (default 'auto')
+ *   ACEREDIS_VARNISH_HOST  'host:port' (default '127.0.0.1:6081')
+ * Filters: aceredis_varnish_enabled, aceredis_varnish_hosts (Host headers to ban for).
  *
  * The VCL turns `PURGE <regex>` into `ban(req.http.host == <host> && req.url ~ <regex>)`,
  * so the request-target is sent raw (an HTTP client would prefix it with "/").
@@ -37,10 +37,10 @@ class VarnishBridge {
             return;
         }
         self::$booted = true;
-        add_action('ace_rc_paths_invalidated', [__CLASS__, 'on_paths_invalidated'], 10, 1);
-        add_action('ace_rc_cache_cleared', [__CLASS__, 'ban_site'], 10, 0);
-        add_action('ace_rc_page_epoch_bumped', [__CLASS__, 'ban_site'], 10, 0);
-        add_action('ace_redis_cache_varnish_ban_site', [__CLASS__, 'ban_site'], 10, 0);
+        add_action('aceredis_paths_invalidated', [__CLASS__, 'on_paths_invalidated'], 10, 1);
+        add_action('aceredis_cache_cleared', [__CLASS__, 'ban_site'], 10, 0);
+        add_action('aceredis_page_epoch_bumped', [__CLASS__, 'ban_site'], 10, 0);
+        add_action('aceredis_cache_varnish_ban_site', [__CLASS__, 'ban_site'], 10, 0);
     }
 
     public static function on_paths_invalidated($paths) {
@@ -95,11 +95,11 @@ class VarnishBridge {
     }
 
     private static function enabled() {
-        $mode = defined('ACE_RC_VARNISH') ? ACE_RC_VARNISH : 'auto';
+        $mode = defined('ACEREDIS_VARNISH') ? ACEREDIS_VARNISH : 'auto';
         if ($mode === 'auto') {
             $mode = self::detect();
         }
-        return (bool) apply_filters('ace_rc_varnish_enabled', (bool) $mode);
+        return (bool) apply_filters('aceredis_varnish_enabled', (bool) $mode);
     }
 
     /** Is something listening on the Varnish port? Cached for 10 minutes. */
@@ -107,7 +107,7 @@ class VarnishBridge {
         if (self::$available !== null) {
             return self::$available;
         }
-        $cached = get_transient('ace_rc_varnish_present');
+        $cached = get_transient('aceredis_varnish_present');
         if ($cached !== false) {
             return self::$available = ($cached === 'yes');
         }
@@ -117,12 +117,12 @@ class VarnishBridge {
         if ($sock) {
             fclose($sock); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Varnish PURGE uses a raw regex request-target which the WordPress URL transport would normalise.
         }
-        set_transient('ace_rc_varnish_present', self::$available ? 'yes' : 'no', 10 * MINUTE_IN_SECONDS);
+        set_transient('aceredis_varnish_present', self::$available ? 'yes' : 'no', 10 * MINUTE_IN_SECONDS);
         return self::$available;
     }
 
     private static function endpoint() {
-        $hp = defined('ACE_RC_VARNISH_HOST') ? (string) ACE_RC_VARNISH_HOST : '127.0.0.1:6081';
+        $hp = defined('ACEREDIS_VARNISH_HOST') ? (string) ACEREDIS_VARNISH_HOST : '127.0.0.1:6081';
         $port = 6081;
         if (preg_match('/^(.+):(\d+)$/', $hp, $m)) {
             $hp = $m[1];
@@ -137,7 +137,7 @@ class VarnishBridge {
         if ($host !== '' && strpos($host, 'www.') !== 0) {
             $hosts[] = 'www.' . $host;
         }
-        return array_values(array_unique(array_filter((array) apply_filters('ace_rc_varnish_hosts', $hosts))));
+        return array_values(array_unique(array_filter((array) apply_filters('aceredis_varnish_hosts', $hosts))));
     }
 
     private static function send($host, $regex) {

@@ -10,8 +10,8 @@ if (!defined('ABSPATH')) exit;
 
 // Variables are passed from AdminInterface::render_settings_page()
 // Available: $settings, $cache_manager
-if (!function_exists('ace_rc_scope_traffic_light')) {
-    function ace_rc_scope_traffic_light($guest_state, $logged_state, $note = '') {
+if (!function_exists('aceredis_scope_traffic_light')) {
+    function aceredis_scope_traffic_light($guest_state, $logged_state, $note = '') {
         $map = [
             'green' => ['label' => 'Active', 'class' => 'is-green', 'icon' => 'dashicons-yes-alt'],
             'amber' => ['label' => 'Limited', 'class' => 'is-amber', 'icon' => 'dashicons-warning'],
@@ -52,8 +52,8 @@ if (!function_exists('ace_rc_scope_traffic_light')) {
     }
 }
 
-if (!function_exists('ace_rc_dropin_status_bootstrap')) {
-    function ace_rc_dropin_status_bootstrap($type, $settings = []) {
+if (!function_exists('aceredis_dropin_status_bootstrap')) {
+    function aceredis_dropin_status_bootstrap($type, $settings = []) {
         $plugin_root = dirname(dirname(__DIR__));
         $defs = [
             'object' => [
@@ -138,8 +138,8 @@ if (!function_exists('ace_rc_dropin_status_bootstrap')) {
     }
 }
 
-$ace_rc_advanced_dropin_bootstrap = ace_rc_dropin_status_bootstrap('advanced', $settings);
-$ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $settings);
+$aceredis_advanced_dropin_bootstrap = aceredis_dropin_status_bootstrap('advanced', $settings);
+$aceredis_object_dropin_bootstrap = aceredis_dropin_status_bootstrap('object', $settings);
 ?>
 
 <div class="wrap ace-redis-settings">
@@ -204,7 +204,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enabled]" id="enable_cache" value="1" <?php checked($settings['enabled']); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enabled]" id="enable_cache" value="1" <?php checked($settings['enabled']); ?> />
                                 <span class="ace-slider"></span>
                             </label>
                             <p class="description">Enable or disable Redis caching system</p>
@@ -216,7 +216,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                             <label for="redis_host">Redis Host</label>
                         </div>
                         <div class="setting-field">
-                            <input type="text" name="ace_redis_cache_settings[host]" id="redis_host" value="<?php echo esc_attr($settings['host']); ?>" class="regular-text" placeholder="127.0.0.1" />
+                            <input type="text" name="aceredis_cache_settings[host]" id="redis_host" value="<?php echo esc_attr($settings['host']); ?>" class="regular-text" placeholder="127.0.0.1" />
                             <p class="description">Redis server hostname or IP address</p>
                         </div>
                     </div>
@@ -226,7 +226,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                             <label for="redis_port">Redis Port</label>
                         </div>
                         <div class="setting-field">
-                            <input type="number" name="ace_redis_cache_settings[port]" id="redis_port" value="<?php echo esc_attr($settings['port']); ?>" min="1" max="65535" class="small-text" />
+                            <input type="number" name="aceredis_cache_settings[port]" id="redis_port" value="<?php echo esc_attr($settings['port']); ?>" min="1" max="65535" class="small-text" />
                             <p class="description">Redis server port (default: 6379)</p>
                         </div>
                     </div>
@@ -237,7 +237,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                             <label for="redis_password">Password</label>
                         </div>
                         <div class="setting-field">
-                            <input type="password" name="ace_redis_cache_settings[password]" id="redis_password" value="<?php echo esc_attr($settings['password']); ?>" class="regular-text" autocomplete="new-password" />
+                            <input type="password" name="aceredis_cache_settings[password]" id="redis_password" value="<?php echo esc_attr($settings['password']); ?>" class="regular-text" autocomplete="new-password" />
                             <p class="description">Redis AUTH password (leave empty if no authentication required)</p>
                         </div>
                     </div>
@@ -248,7 +248,7 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_tls]" id="enable_tls" value="1" <?php checked($settings['enable_tls'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_tls]" id="enable_tls" value="1" <?php checked($settings['enable_tls'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
                             <p class="description">Enable TLS encryption (recommended for AWS Valkey/ElastiCache)</p>
@@ -316,26 +316,26 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                             <div class="cache-type-group" style="margin-bottom:16px;">
                                 <div class="cache-type-toggle">
                                     <label class="ace-switch" style="margin-right:16px;">
-                                        <input type="checkbox" name="ace_redis_cache_settings[enable_page_cache]" id="enable_page_cache" value="1" <?php checked($settings['enable_page_cache'] ?? (($settings['mode'] ?? 'full') === 'full')); ?> />
+                                        <input type="checkbox" name="aceredis_cache_settings[enable_page_cache]" id="enable_page_cache" value="1" <?php checked($settings['enable_page_cache'] ?? (($settings['mode'] ?? 'full') === 'full')); ?> />
                                     <span class="ace-slider"></span>
                                     </label>
                                     <span><strong>Enable Full Page Cache</strong></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
-                                    <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Full page cache is guest/frontend only.')); ?>
+                                    <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'Full page cache is guest/frontend only.')); ?>
                                     <label for="ttl_page" style="width:140px; display:inline-block;">Page Cache TTL</label>
-                                    <input type="number" name="ace_redis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
+                                    <input type="number" name="aceredis_cache_settings[ttl_page]" id="ttl_page" value="<?php echo esc_attr($settings['ttl_page'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
                                     <br />
                                     <label for="page_cache_max_ttl" style="width:140px; display:inline-block; margin-top:6px;">Page Cache Max TTL</label>
-                                    <input type="number" name="ace_redis_cache_settings[page_cache_max_ttl]" id="page_cache_max_ttl" value="<?php echo esc_attr($settings['page_cache_max_ttl'] ?? 0); ?>" min="0" max="2592000" class="small-text" />
+                                    <input type="number" name="aceredis_cache_settings[page_cache_max_ttl]" id="page_cache_max_ttl" value="<?php echo esc_attr($settings['page_cache_max_ttl'] ?? 0); ?>" min="0" max="2592000" class="small-text" />
                                     <span>seconds</span>
                                     <p class="description" style="margin-top:4px;">Upper bound on how long a page stays in Redis, TTL plus stale-while-revalidate grace together. 0 turns it off (the default); otherwise 60 to 2592000.</p>
                                     <div id="ace-rc-advanced-dropin-box" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                         <strong>Advanced Cache Drop-in:</strong>
-                                        <span class="ace-rc-dropin-status"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['text']); ?></span>
-                                        <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="advanced" style="<?php echo !empty($ace_rc_advanced_dropin_bootstrap['button']) ? 'margin-left:8px;' : 'display:none; margin-left:8px;'; ?>"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['button_label'] ?: 'Update Drop-in'); ?></button>
-                                        <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"><?php echo esc_html($ace_rc_advanced_dropin_bootstrap['meta']); ?></div>
+                                        <span class="ace-rc-dropin-status"><?php echo esc_html($aceredis_advanced_dropin_bootstrap['text']); ?></span>
+                                        <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="advanced" style="<?php echo !empty($aceredis_advanced_dropin_bootstrap['button']) ? 'margin-left:8px;' : 'display:none; margin-left:8px;'; ?>"><?php echo esc_html($aceredis_advanced_dropin_bootstrap['button_label'] ?: 'Update Drop-in'); ?></button>
+                                        <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"><?php echo esc_html($aceredis_advanced_dropin_bootstrap['meta']); ?></div>
                                     </div>
                                 </div>
                             </div>
@@ -344,21 +344,21 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                             <div class="cache-type-group">
                                 <div class="cache-type-toggle">
                                     <label class="ace-switch" style="margin-right:16px;">
-                                        <input type="checkbox" name="ace_redis_cache_settings[enable_object_cache]" id="enable_object_cache" value="1" <?php checked($settings['enable_object_cache'] ?? (($settings['mode'] ?? 'full') === 'object')); ?> />
+                                        <input type="checkbox" name="aceredis_cache_settings[enable_object_cache]" id="enable_object_cache" value="1" <?php checked($settings['enable_object_cache'] ?? (($settings['mode'] ?? 'full') === 'object')); ?> />
                                     <span class="ace-slider"></span>
                                     </label>
                                     <span><strong>Enable Object Cache</strong> <span class="description">(transients, blocks)</span></span>
                                 </div>
                                 <div class="cache-type-options" style="margin-left:48px; margin-top:8px;">
-                                    <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'Logged-in/admin requests still use per-request runtime cache, but not Redis persistence.')); ?>
+                                    <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'amber', 'Logged-in/admin requests still use per-request runtime cache, but not Redis persistence.')); ?>
                                     <label for="ttl_object" style="width:140px; display:inline-block;">Object Cache TTL</label>
-                                    <input type="number" name="ace_redis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
+                                    <input type="number" name="aceredis_cache_settings[ttl_object]" id="ttl_object" value="<?php echo esc_attr($settings['ttl_object'] ?? $settings['ttl']); ?>" min="60" max="604800" class="small-text" />
                                     <span>seconds</span>
                                     <br />
                                     <label for="object_cache_max_ttl" style="width:140px; display:inline-block; margin-top:6px;">Object Cache Max TTL</label>
-                                    <input type="number" name="ace_redis_cache_settings[object_cache_max_ttl]" id="object_cache_max_ttl" value="<?php echo esc_attr($settings['object_cache_max_ttl'] ?? 86400); ?>" min="0" max="2592000" class="small-text" />
+                                    <input type="number" name="aceredis_cache_settings[object_cache_max_ttl]" id="object_cache_max_ttl" value="<?php echo esc_attr($settings['object_cache_max_ttl'] ?? 86400); ?>" min="0" max="2592000" class="small-text" />
                                     <span>seconds</span>
-                                    <p class="description" style="margin-top:4px;">Every object cache key, transients included, expires within this many seconds even when a plugin asks for longer (a week-long transient is stored for a day at the default 86400). 0 turns the cap off; otherwise 60 to 2592000. ACE_OC_MAX_TTL in wp-config overrides it.</p>
+                                    <p class="description" style="margin-top:4px;">Every object cache key, transients included, expires within this many seconds even when a plugin asks for longer (a week-long transient is stored for a day at the default 86400). 0 turns the cap off; otherwise 60 to 2592000. ACEREDIS_OC_MAX_TTL in wp-config overrides it.</p>
                                     <p class="description" style="margin-top:6px;">You can enable one or both cache types. Object cache controls transients and optional block caching.</p>
                                 </div>
                             </div>
@@ -370,19 +370,19 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_transient_cache]" id="enable_transient_cache" value="1" <?php checked(!empty($settings['enable_transient_cache'])); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_transient_cache]" id="enable_transient_cache" value="1" <?php checked(!empty($settings['enable_transient_cache'])); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Transient persistence is only for guest/frontend traffic.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'Transient persistence is only for guest/frontend traffic.')); ?>
                             <p class="description">Persist WordPress transients (including site transients) in Redis. Respects your transient exclusions. When enabled, we deploy an object-cache drop-in so WordPress routes transients to Redis. Ensure WP_CACHE is true.</p>
                             <div id="ace-rc-transient-tips" class="ace-rc-tips" style="margin-top:8px; font-size:12px; line-height:1.4;">
                                 <!-- Dynamic health tips injected here -->
                             </div>
                             <div id="ace-rc-object-dropin-box" style="margin-top:10px; font-size:12px; line-height:1.4;">
                                 <strong>Object Cache Drop-in:</strong>
-                                <span class="ace-rc-dropin-status"><?php echo esc_html($ace_rc_object_dropin_bootstrap['text']); ?></span>
-                                <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="object" style="<?php echo !empty($ace_rc_object_dropin_bootstrap['button']) ? 'margin-left:8px;' : 'display:none; margin-left:8px;'; ?>"><?php echo esc_html($ace_rc_object_dropin_bootstrap['button_label'] ?: 'Update Drop-in'); ?></button>
-                                <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"><?php echo esc_html($ace_rc_object_dropin_bootstrap['meta']); ?></div>
+                                <span class="ace-rc-dropin-status"><?php echo esc_html($aceredis_object_dropin_bootstrap['text']); ?></span>
+                                <button type="button" class="button button-secondary ace-rc-dropin-update" data-dropin="object" style="<?php echo !empty($aceredis_object_dropin_bootstrap['button']) ? 'margin-left:8px;' : 'display:none; margin-left:8px;'; ?>"><?php echo esc_html($aceredis_object_dropin_bootstrap['button_label'] ?: 'Update Drop-in'); ?></button>
+                                <div class="ace-rc-dropin-meta" style="margin-top:4px; color:#666;"><?php echo esc_html($aceredis_object_dropin_bootstrap['meta']); ?></div>
                             </div>
                         </div>
                     </div>
@@ -397,10 +397,10 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_minification]" id="enable_minification" value="1" <?php checked($settings['enable_minification'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_minification]" id="enable_minification" value="1" <?php checked($settings['enable_minification'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'green')); ?>
                             <p class="description">Enable HTML, CSS, and JavaScript minification where this plugin processes the response.</p>
                         </div>
                     </div>
@@ -411,10 +411,10 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_compression]" id="enable_compression" value="1" <?php checked($settings['enable_compression'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_compression]" id="enable_compression" value="1" <?php checked($settings['enable_compression'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'Compression mainly affects cached guest responses and any shared output processing.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'amber', 'Compression mainly affects cached guest responses and any shared output processing.')); ?>
                             <p class="description">Compress cached content to reduce size and bandwidth.</p>
                             <?php
                                 $brotli_available = function_exists('brotli_compress');
@@ -434,11 +434,11 @@ $ace_rc_object_dropin_bootstrap = ace_rc_dropin_status_bootstrap('object', $sett
                             ?>
                             <div class="compression-methods" style="margin-top:8px;">
                                 <label style="margin-right: 12px; opacity: <?php echo $brotli_available ? '1' : '0.5'; ?>;">
-                                    <input type="radio" name="ace_redis_cache_settings[compression_method]" value="brotli" <?php checked($method, 'brotli'); ?> <?php disabled(!$brotli_available); ?> />
+                                    <input type="radio" name="aceredis_cache_settings[compression_method]" value="brotli" <?php checked($method, 'brotli'); ?> <?php disabled(!$brotli_available); ?> />
                                     Brotli <?php if (!$brotli_available) echo '(not available)'; ?>
                                 </label>
                                 <label style="opacity: <?php echo $gzip_available ? '1' : '0.5'; ?>;">
-                                    <input type="radio" name="ace_redis_cache_settings[compression_method]" value="gzip" <?php checked($method, 'gzip'); ?> <?php disabled(!$gzip_available); ?> />
+                                    <input type="radio" name="aceredis_cache_settings[compression_method]" value="gzip" <?php checked($method, 'gzip'); ?> <?php disabled(!$gzip_available); ?> />
                                     Gzip <?php if (!$gzip_available) echo '(not available)'; ?>
                                 </label>
                             </div>
@@ -473,17 +473,17 @@ php -m | grep -i zlib</pre>
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_browser_cache_headers]" id="enable_browser_cache_headers" value="1" <?php checked($settings['enable_browser_cache_headers'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_browser_cache_headers]" id="enable_browser_cache_headers" value="1" <?php checked($settings['enable_browser_cache_headers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'This only applies on guest page-cache hits.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'This only applies on guest page-cache hits.')); ?>
                             <p class="description">Send public Cache-Control headers on page cache HITs to allow browser/proxy reuse.</p>
                             <div style="margin-top:8px;">
                                 <label for="browser_cache_max_age" style="width:140px; display:inline-block;">Max-Age</label>
-                                <input type="number" name="ace_redis_cache_settings[browser_cache_max_age]" id="browser_cache_max_age" value="<?php echo esc_attr($settings['browser_cache_max_age'] ?? ($settings['ttl_page'] ?? 3600)); ?>" min="60" max="604800" class="small-text" /> seconds
+                                <input type="number" name="aceredis_cache_settings[browser_cache_max_age]" id="browser_cache_max_age" value="<?php echo esc_attr($settings['browser_cache_max_age'] ?? ($settings['ttl_page'] ?? 3600)); ?>" min="60" max="604800" class="small-text" /> seconds
                             </div>
                             <label style="margin-top:8px; display:block;">
-                                <input type="checkbox" name="ace_redis_cache_settings[send_cache_meta_headers]" value="1" <?php checked($settings['send_cache_meta_headers'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[send_cache_meta_headers]" value="1" <?php checked($settings['send_cache_meta_headers'] ?? 0); ?> />
                                 Send diagnostic cache meta headers (X-AceRedisCache-*)
                             </label>
                             <p class="description">Includes age, expires, compression, dynamic stats to aid debugging. Disable in production for minimal overhead.</p>
@@ -495,17 +495,17 @@ php -m | grep -i zlib</pre>
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[page_cache_logged_in]" id="page_cache_logged_in" value="1" <?php checked($settings['page_cache_logged_in'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[page_cache_logged_in]" id="page_cache_logged_in" value="1" <?php checked($settings['page_cache_logged_in'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'Front end only. Never wp-admin, AJAX, REST, previews, the Customizer, POST requests or ?ace_nocache=1.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'amber', 'Front end only. Never wp-admin, AJAX, REST, previews, the Customizer, POST requests or ?aceredis_nocache=1.')); ?>
                             <p class="description">Signed-in visitors get their own cached copy of each front-end page, kept apart from the guest copy and shared only within a group. The toolbar is rendered fresh for each visitor and every nonce on the page is swapped for theirs, so nothing from one user reaches another. A copy is only served while fresh and is dropped whenever the page is purged. Authors and contributors are never served one, as their edit links differ per person.</p>
                             <div style="margin-top:8px;">
-                                <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[page_cache_li_admins]" value="1" <?php checked($settings['page_cache_li_admins'] ?? 1); ?> /> Administrators</label>
-                                <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[page_cache_li_editors]" value="1" <?php checked($settings['page_cache_li_editors'] ?? 1); ?> /> Editors (can edit everyone's posts)</label>
-                                <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[page_cache_li_readers]" value="1" <?php checked($settings['page_cache_li_readers'] ?? 1); ?> /> Subscribers and other members who cannot edit</label>
+                                <label style="display:block;"><input type="checkbox" name="aceredis_cache_settings[page_cache_li_admins]" value="1" <?php checked($settings['page_cache_li_admins'] ?? 1); ?> /> Administrators</label>
+                                <label style="display:block;"><input type="checkbox" name="aceredis_cache_settings[page_cache_li_editors]" value="1" <?php checked($settings['page_cache_li_editors'] ?? 1); ?> /> Editors (can edit everyone's posts)</label>
+                                <label style="display:block;"><input type="checkbox" name="aceredis_cache_settings[page_cache_li_readers]" value="1" <?php checked($settings['page_cache_li_readers'] ?? 1); ?> /> Subscribers and other members who cannot edit</label>
                             </div>
-                            <p class="description">Responses carry <code>X-AceRedisCache-Variant</code> (for example <code>li-editor-ab</code>). A page that still names the user (their email address, a comment form's "Logged in as") is never stored; sites can add their own checks with the <code>ace_rc_logged_in_store_block</code> filter.</p>
+                            <p class="description">Responses carry <code>X-AceRedisCache-Variant</code> (for example <code>li-editor-ab</code>). A page that still names the user (their email address, a comment form's "Logged in as") is never stored; sites can add their own checks with the <code>aceredis_logged_in_store_block</code> filter.</p>
                         </div>
                     </div>
                     <div class="setting-row">
@@ -513,9 +513,9 @@ php -m | grep -i zlib</pre>
                             <label for="member_object_cache_read">Signed-in object cache reads</label>
                         </div>
                         <div class="setting-field">
-                            <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[member_object_cache_read]" id="member_object_cache_read" value="1" <?php checked($settings['member_object_cache_read'] ?? 1); ?> /> Signed-in front-end pages read the shared object cache</label>
-                            <label style="display:block;"><input type="checkbox" name="ace_redis_cache_settings[admin_object_cache_read]" id="admin_object_cache_read" value="1" <?php checked($settings['admin_object_cache_read'] ?? 0); ?> /> wp-admin screens read the shared object cache</label>
-                            <p class="description">Signed-in requests never write to the object cache, and a change they make still clears the shared copy. Without these they skip Redis entirely and re-read every option, term and meta row from the database. The wp-admin read covers plain screen loads only; AJAX, REST, cron, updates and form posts stay uncached. Needs the object-cache drop-in. <code>ACE_OC_MEMBER_READ</code> and <code>ACE_OC_ADMIN_READ</code> in wp-config override these.</p>
+                            <label style="display:block;"><input type="checkbox" name="aceredis_cache_settings[member_object_cache_read]" id="member_object_cache_read" value="1" <?php checked($settings['member_object_cache_read'] ?? 1); ?> /> Signed-in front-end pages read the shared object cache</label>
+                            <label style="display:block;"><input type="checkbox" name="aceredis_cache_settings[admin_object_cache_read]" id="admin_object_cache_read" value="1" <?php checked($settings['admin_object_cache_read'] ?? 0); ?> /> wp-admin screens read the shared object cache</label>
+                            <p class="description">Signed-in requests never write to the object cache, and a change they make still clears the shared copy. Without these they skip Redis entirely and re-read every option, term and meta row from the database. The wp-admin read covers plain screen loads only; AJAX, REST, cron, updates and form posts stay uncached. Needs the object-cache drop-in. <code>ACEREDIS_OC_MEMBER_READ</code> and <code>ACEREDIS_OC_ADMIN_READ</code> in wp-config override these.</p>
                         </div>
                     </div>
                     <div class="setting-row">
@@ -524,14 +524,14 @@ php -m | grep -i zlib</pre>
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[admin_query_cache]" id="admin_query_cache" value="1" <?php checked($settings['admin_query_cache'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[admin_query_cache]" id="admin_query_cache" value="1" <?php checked($settings['admin_query_cache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'green', 'wp-admin only.')); ?>
-                            <p class="description">Keeps the results of slow, repeated wp-admin reads for a short time and drops them the moment the data under them changes: the posts list month filter, the media library month filter, the custom fields key list and the media modal's audio/video checks. Plugins can cache their own admin reads with <code>ace_rc_admin_cache_remember()</code> and clear them with <code>ace_rc_admin_cache_bump()</code>.</p>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('red', 'green', 'wp-admin only.')); ?>
+                            <p class="description">Keeps the results of slow, repeated wp-admin reads for a short time and drops them the moment the data under them changes: the posts list month filter, the media library month filter, the custom fields key list and the media modal's audio/video checks. Plugins can cache their own admin reads with <code>aceredis_admin_cache_remember()</code> and clear them with <code>aceredis_admin_cache_bump()</code>.</p>
                             <div style="margin-top:8px;">
                                 <label for="admin_query_cache_ttl" style="width:140px; display:inline-block;">Keep for up to</label>
-                                <input type="number" name="ace_redis_cache_settings[admin_query_cache_ttl]" id="admin_query_cache_ttl" value="<?php echo esc_attr($settings['admin_query_cache_ttl'] ?? 300); ?>" min="30" max="3600" class="small-text" /> seconds
+                                <input type="number" name="aceredis_cache_settings[admin_query_cache_ttl]" id="admin_query_cache_ttl" value="<?php echo esc_attr($settings['admin_query_cache_ttl'] ?? 300); ?>" min="30" max="3600" class="small-text" /> seconds
                             </div>
                         </div>
                     </div>
@@ -541,19 +541,19 @@ php -m | grep -i zlib</pre>
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_static_asset_cache]" id="enable_static_asset_cache" value="1" <?php checked($settings['enable_static_asset_cache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'green')); ?>
                             <p class="description">Set long-lived Cache-Control headers (public, immutable) and apply cache-busting query params to same-origin asset URLs.</p>
                             <div style="margin-top:8px;">
                                 <label for="static_asset_cache_ttl" style="width:140px; display:inline-block;">Static TTL</label>
-                                <input type="number" name="ace_redis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
+                                <input type="number" name="aceredis_cache_settings[static_asset_cache_ttl]" id="static_asset_cache_ttl" value="<?php echo esc_attr($settings['static_asset_cache_ttl'] ?? 604800); ?>" min="86400" max="31536000" class="regular-text" style="max-width:160px;" /> seconds
                                 <p class="description" style="margin-top:4px;">Recommended: 7 days (604800) – 1 year (31536000). Values outside 1d–1y are clamped.</p>
                             </div>
                             <?php $server_headers_detected = !empty($static_header_probe['checked']) && !empty($static_header_probe['detected']); ?>
                             <label style="margin-top:8px; display:block; <?php echo $server_headers_detected ? 'opacity:0.5;' : ''; ?>">
-                                <input type="checkbox" name="ace_redis_cache_settings[manage_static_cache_via_htaccess]" id="manage_static_cache_via_htaccess" value="1"
+                                <input type="checkbox" name="aceredis_cache_settings[manage_static_cache_via_htaccess]" id="manage_static_cache_via_htaccess" value="1"
                                     <?php checked($settings['manage_static_cache_via_htaccess'] ?? 0); ?>
                                     <?php disabled($server_headers_detected); ?> />
                                 Manage static cache headers via site-root .htaccess (Apache only)
@@ -565,7 +565,7 @@ php -m | grep -i zlib</pre>
                             <?php endif; ?>
 
                             <label style="margin-top:8px; display:block;">
-                                <input type="checkbox" name="ace_redis_cache_settings[prefer_existing_static_cache_headers]" id="prefer_existing_static_cache_headers" value="1" <?php checked($settings['prefer_existing_static_cache_headers'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[prefer_existing_static_cache_headers]" id="prefer_existing_static_cache_headers" value="1" <?php checked($settings['prefer_existing_static_cache_headers'] ?? 1); ?> />
                                 Prefer existing server/CDN static headers
                             </label>
                             <p class="description">If long-lived cache headers are already detected, the plugin removes its managed .htaccess block to avoid duplicate logic.</p>
@@ -675,12 +675,12 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                     </div>
                     <?php
-                    $ace_bc_on_constant = defined('ACE_RC_BLOCK_CACHE');
-                    $ace_bc_legacy = \AceMedia\RedisCache\BlockCache::legacy_module_active();
-                    $ace_bc_woo = class_exists('WooCommerce');
-                    $ace_bc = \AceMedia\RedisCache\BlockCache::instance();
-                    $ace_bc_stats = $ace_bc ? $ace_bc->get_stats(7) : null;
-                    $ace_bc_today = $ace_bc_stats ? reset($ace_bc_stats['days']) : null;
+                    $aceredis_bc_on_constant = defined('ACEREDIS_BLOCK_CACHE');
+                    $aceredis_bc_legacy = \AceMedia\RedisCache\BlockCache::legacy_module_active();
+                    $aceredis_bc_woo = class_exists('WooCommerce');
+                    $aceredis_bc = \AceMedia\RedisCache\BlockCache::instance();
+                    $aceredis_bc_stats = $aceredis_bc ? $aceredis_bc->get_stats(7) : null;
+                    $aceredis_bc_today = $aceredis_bc_stats ? reset($aceredis_bc_stats['days']) : null;
                     ?>
                     <div class="setting-row" id="ace-block-cache-row">
                         <div class="setting-label">
@@ -688,43 +688,43 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[block_cache_enabled]" id="block_cache_enabled" value="1" <?php checked($settings['block_cache_enabled'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[block_cache_enabled]" id="block_cache_enabled" value="1" <?php checked($settings['block_cache_enabled'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', empty($settings['block_cache_logged_in']) ? 'red' : 'amber', 'Visitors with items in the cart always get a live render.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', empty($settings['block_cache_logged_in']) ? 'red' : 'amber', 'Visitors with items in the cart always get a live render.')); ?>
                             <p class="description">Keeps the rendered HTML of expensive dynamic blocks in Redis and replays it, with the scripts, styles and Interactivity API state the block needs, so add to cart and other interactions keep working. Each block is refreshed when a product or post it shows changes, and the pages showing it are purged (including Varnish).</p>
-                            <?php if ($ace_bc_on_constant): ?>
-                                <p class="description" style="color:#d63638;">ACE_RC_BLOCK_CACHE is set to <?php echo ACE_RC_BLOCK_CACHE ? 'true' : 'false'; ?> in wp-config.php and overrides this toggle.</p>
+                            <?php if ($aceredis_bc_on_constant): ?>
+                                <p class="description" style="color:#d63638;">ACEREDIS_BLOCK_CACHE is set to <?php echo ACEREDIS_BLOCK_CACHE ? 'true' : 'false'; ?> in wp-config.php and overrides this toggle.</p>
                             <?php endif; ?>
-                            <?php if ($ace_bc_legacy): ?>
+                            <?php if ($aceredis_bc_legacy): ?>
                                 <p class="description" style="color:#d63638;">The ace-block-html-cache mu-plugin is active, so this module stands aside. Remove the mu-plugin to use this instead.</p>
                             <?php endif; ?>
                             <div class="ace-block-cache-options" style="margin-top:8px;">
-                                <?php if ($ace_bc_woo): ?>
-                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_woo]" value="1" <?php checked($settings['block_cache_woo'] ?? 1); ?> /> WooCommerce product blocks (Product Collection, Handpicked, Newest, On Sale, Best Sellers, Top Rated, Products by Category)</label>
+                                <?php if ($aceredis_bc_woo): ?>
+                                <p><label><input type="checkbox" name="aceredis_cache_settings[block_cache_woo]" value="1" <?php checked($settings['block_cache_woo'] ?? 1); ?> /> WooCommerce product blocks (Product Collection, Handpicked, Newest, On Sale, Best Sellers, Top Rated, Products by Category)</label>
                                 <?php if (!\AceMedia\RedisCache\BlockCache::woo_role_safe()): ?><br /><span class="description">Role, B2B or membership pricing (or tax by customer address) detected: signed-in users always get a live render of these.</span><?php endif; ?></p>
                                 <?php endif; ?>
-                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_query]" value="1" <?php checked($settings['block_cache_query'] ?? 1); ?> /> Query Loop blocks (not ones that inherit the page query)</label></p>
-                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_latest_posts]" value="1" <?php checked($settings['block_cache_latest_posts'] ?? 1); ?> /> Latest Posts</label></p>
-                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_custom]" value="1" <?php checked($settings['block_cache_custom'] ?? 1); ?> /> Custom blocks added with the <code>ace_rc_block_cache_custom_blocks</code> filter</label></p>
-                                <p><label><input type="checkbox" name="ace_redis_cache_settings[block_cache_logged_in]" value="1" <?php checked($settings['block_cache_logged_in'] ?? 0); ?> /> Cache for logged-in users too (per role, role-safe blocks only)</label></p>
+                                <p><label><input type="checkbox" name="aceredis_cache_settings[block_cache_query]" value="1" <?php checked($settings['block_cache_query'] ?? 1); ?> /> Query Loop blocks (not ones that inherit the page query)</label></p>
+                                <p><label><input type="checkbox" name="aceredis_cache_settings[block_cache_latest_posts]" value="1" <?php checked($settings['block_cache_latest_posts'] ?? 1); ?> /> Latest Posts</label></p>
+                                <p><label><input type="checkbox" name="aceredis_cache_settings[block_cache_custom]" value="1" <?php checked($settings['block_cache_custom'] ?? 1); ?> /> Custom blocks added with the <code>aceredis_block_cache_custom_blocks</code> filter</label></p>
+                                <p><label><input type="checkbox" name="aceredis_cache_settings[block_cache_logged_in]" value="1" <?php checked($settings['block_cache_logged_in'] ?? 0); ?> /> Cache for logged-in users too (per role, role-safe blocks only)</label></p>
                                 <p><label for="block_cache_ttl" style="width:140px; display:inline-block;">Block cache TTL</label>
-                                <input type="number" name="ace_redis_cache_settings[block_cache_ttl]" id="block_cache_ttl" value="<?php echo esc_attr($settings['block_cache_ttl'] ?? 43200); ?>" min="300" max="604800" class="small-text" style="width:90px;" /> seconds</p>
+                                <input type="number" name="aceredis_cache_settings[block_cache_ttl]" id="block_cache_ttl" value="<?php echo esc_attr($settings['block_cache_ttl'] ?? 43200); ?>" min="300" max="604800" class="small-text" style="width:90px;" /> seconds</p>
                             </div>
                             <div class="ace-block-cache-stats" style="margin-top:8px; font-size:12px; line-height:1.5;">
-                                <?php if ($ace_bc_stats): $t = $ace_bc_stats['totals']; ?>
-                                    <p><strong>Today:</strong> <?php echo (int) ($ace_bc_today['hits'] ?? 0); ?> hits, <?php echo esc_html(number_format(($ace_bc_today['saved_ms'] ?? 0) / 1000, 1)); ?> s render time saved, <?php echo (int) ($ace_bc_today['saved_queries'] ?? 0); ?> queries saved.
+                                <?php if ($aceredis_bc_stats): $t = $aceredis_bc_stats['totals']; ?>
+                                    <p><strong>Today:</strong> <?php echo (int) ($aceredis_bc_today['hits'] ?? 0); ?> hits, <?php echo esc_html(number_format(($aceredis_bc_today['saved_ms'] ?? 0) / 1000, 1)); ?> s render time saved, <?php echo (int) ($aceredis_bc_today['saved_queries'] ?? 0); ?> queries saved.
                                     <br /><strong>Last 7 days:</strong> <?php echo (int) $t['hits']; ?> hits, <?php echo (int) $t['misses']; ?> misses, <?php echo esc_html(number_format($t['saved_ms'] / 1000, 1)); ?> s saved, <?php echo (int) $t['saved_queries']; ?> queries saved.</p>
-                                    <?php if ($ace_bc_stats['blocks']): ?>
+                                    <?php if ($aceredis_bc_stats['blocks']): ?>
                                     <table class="widefat striped" style="max-width:640px;"><thead><tr><th>Profile / block</th><th>Hits</th><th>Misses</th><th>Avg render</th><th>Time saved</th><th>Queries saved</th></tr></thead><tbody>
-                                    <?php foreach ($ace_bc_stats['blocks'] as $b => $row): ?>
+                                    <?php foreach ($aceredis_bc_stats['blocks'] as $b => $row): ?>
                                         <tr><td><code><?php echo esc_html(str_replace('|', ' / ', $b)); ?></code></td><td><?php echo (int) $row['hits']; ?></td><td><?php echo (int) $row['misses']; ?></td><td><?php echo esc_html($row['avg_ms']); ?> ms</td><td><?php echo esc_html(number_format($row['saved_ms'] / 1000, 1)); ?> s</td><td><?php echo (int) $row['saved_queries']; ?></td></tr>
                                     <?php endforeach; ?>
                                     </tbody></table>
                                     <?php endif; ?>
                                 <?php endif; ?>
-                                <?php if (get_transient('ace_rc_varnish_present') === 'yes'): ?><p>Varnish detected: block refreshes also ban the affected pages there.</p><?php endif; ?>
-                                <p><button type="button" class="button button-secondary" id="ace-block-cache-flush-btn" <?php disabled(!$ace_bc); ?>>Flush block cache</button> <span id="ace-block-cache-flush-status" aria-live="polite"></span></p>
+                                <?php if (get_transient('aceredis_varnish_present') === 'yes'): ?><p>Varnish detected: block refreshes also ban the affected pages there.</p><?php endif; ?>
+                                <p><button type="button" class="button button-secondary" id="ace-block-cache-flush-btn" <?php disabled(!$aceredis_bc); ?>>Flush block cache</button> <span id="ace-block-cache-flush-status" aria-live="polite"></span></p>
                             </div>
                         </div>
                     </div>
@@ -734,14 +734,14 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_dynamic_microcache]" id="enable_dynamic_microcache" value="1" <?php checked($settings['enable_dynamic_microcache'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_dynamic_microcache]" id="enable_dynamic_microcache" value="1" <?php checked($settings['enable_dynamic_microcache'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Dynamic microcache only applies inside guest page-cache flows.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'Dynamic microcache only applies inside guest page-cache flows.')); ?>
                             <p class="description">Short-lived (1-60s) microcache for dynamic block HTML to reduce repeated renders under burst traffic.</p>
                             <div style="margin-top:8px;">
                                 <label for="dynamic_microcache_ttl" style="width:140px; display:inline-block;">Microcache TTL</label>
-                                <input type="number" name="ace_redis_cache_settings[dynamic_microcache_ttl]" id="dynamic_microcache_ttl" value="<?php echo esc_attr($settings['dynamic_microcache_ttl'] ?? 10); ?>" min="1" max="60" class="small-text" /> seconds
+                                <input type="number" name="aceredis_cache_settings[dynamic_microcache_ttl]" id="dynamic_microcache_ttl" value="<?php echo esc_attr($settings['dynamic_microcache_ttl'] ?? 10); ?>" min="1" max="60" class="small-text" /> seconds
                             </div>
                         </div>
                     </div>
@@ -751,10 +751,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_opcache_helpers]" id="enable_opcache_helpers" value="1" <?php checked($settings['enable_opcache_helpers'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_opcache_helpers]" id="enable_opcache_helpers" value="1" <?php checked($settings['enable_opcache_helpers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green', 'These helpers act on server-level PHP OPcache, not per-user page/object cache state.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'green', 'These helpers act on server-level PHP OPcache, not per-user page/object cache state.')); ?>
                             <p class="description">Refresh this site's private PHP files in OPcache and lightly prime hot files after deployment or settings changes. Shared code is preserved.</p>
                         </div>
                     </div>
@@ -773,7 +773,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[exclude_sitemaps]" id="exclude_sitemaps" value="1" <?php checked($settings['exclude_sitemaps'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[exclude_sitemaps]" id="exclude_sitemaps" value="1" <?php checked($settings['exclude_sitemaps'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
                             <p class="description">Exclude sitemap URLs from full page cache when they are already cached elsewhere or need fresher regeneration.</p>
@@ -784,7 +784,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                             <label for="custom_cache_exclusions">Cache Key Exclusions</label>
                         </div>
                         <div class="setting-field">
-                            <textarea name="ace_redis_cache_settings[custom_cache_exclusions]" id="custom_cache_exclusions" rows="8" class="large-text code"><?php echo esc_textarea($settings['custom_cache_exclusions'] ?? ''); ?></textarea>
+                            <textarea name="aceredis_cache_settings[custom_cache_exclusions]" id="custom_cache_exclusions" rows="8" class="large-text code"><?php echo esc_textarea($settings['custom_cache_exclusions'] ?? ''); ?></textarea>
                             <p class="description">
                                 Exclude cache keys matching these patterns (supports wildcards: *, ?).<br>
                                 Example: <code>user_meta_*</code>, <code>temporary_*</code>
@@ -797,7 +797,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                             <label for="custom_transient_exclusions">Transient Exclusions</label>
                         </div>
                         <div class="setting-field">
-                            <textarea name="ace_redis_cache_settings[custom_transient_exclusions]" id="custom_transient_exclusions" rows="6" class="large-text code"><?php echo esc_textarea($settings['custom_transient_exclusions'] ?? ''); ?></textarea>
+                            <textarea name="aceredis_cache_settings[custom_transient_exclusions]" id="custom_transient_exclusions" rows="6" class="large-text code"><?php echo esc_textarea($settings['custom_transient_exclusions'] ?? ''); ?></textarea>
                             <p class="description">
                                 Exclude WordPress transients from caching.<br>
                                 Example: <code>wc_session_*</code>, <code>_transient_feed_*</code>
@@ -810,7 +810,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                             <label for="custom_content_exclusions">Content Exclusions</label>
                         </div>
                         <div class="setting-field">
-                            <textarea name="ace_redis_cache_settings[custom_content_exclusions]" id="custom_content_exclusions" rows="6" class="large-text code"><?php echo esc_textarea($settings['custom_content_exclusions'] ?? ''); ?></textarea>
+                            <textarea name="aceredis_cache_settings[custom_content_exclusions]" id="custom_content_exclusions" rows="6" class="large-text code"><?php echo esc_textarea($settings['custom_content_exclusions'] ?? ''); ?></textarea>
                             <p class="description">
                                 Exclude pages containing these text patterns from minification.<br>
                                 Example: <code>&lt;script id="sensitive"&gt;</code>, <code>data-no-minify</code>
@@ -823,17 +823,17 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                             <label for="excluded_blocks">Block Exclusions</label>
                         </div>
                         <div class="setting-field">
-                            <textarea name="ace_redis_cache_settings[excluded_blocks]" id="excluded_blocks" rows="6" class="large-text code"><?php echo esc_textarea($settings['excluded_blocks'] ?? ''); ?></textarea>
+                            <textarea name="aceredis_cache_settings[excluded_blocks]" id="excluded_blocks" rows="6" class="large-text code"><?php echo esc_textarea($settings['excluded_blocks'] ?? ''); ?></textarea>
                             <p class="description">
                                 Exclude specific Gutenberg blocks from block-level caching.<br>
                                 Example: <code>core/html</code>, <code>custom/dynamic-*</code>
                             </p>
                             <label style="margin-top:8px; display:block;">
-                                <input type="checkbox" name="ace_redis_cache_settings[exclude_basic_blocks]" value="1" <?php checked($settings['exclude_basic_blocks'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[exclude_basic_blocks]" value="1" <?php checked($settings['exclude_basic_blocks'] ?? 0); ?> />
                                 Exclude common basic blocks (paragraph, heading, list, image, gallery)
                             </label>
                             <label style="margin-top:8px; display:block;">
-                                <input type="checkbox" name="ace_redis_cache_settings[dynamic_excluded_blocks]" value="1" <?php checked($settings['dynamic_excluded_blocks'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[dynamic_excluded_blocks]" value="1" <?php checked($settings['dynamic_excluded_blocks'] ?? 0); ?> />
                                 Treat excluded blocks as dynamic (remove them from page cache and re-render each request)
                             </label>
                             <p class="description">When enabled, every block pattern listed above (and the basic set if selected) is stripped out of the cached HTML and rendered fresh at runtime while the rest of the page remains fully cached.</p>
@@ -866,10 +866,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_page_cache_customers]" id="wc_page_cache_customers" value="1" <?php checked($settings['wc_page_cache_customers'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_page_cache_customers]" id="wc_page_cache_customers" value="1" <?php checked($settings['wc_page_cache_customers'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'amber', 'Needs "Serve cached pages to logged-in users" on the Caching tab.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('red', 'amber', 'Needs "Serve cached pages to logged-in users" on the Caching tab.')); ?>
                             <p class="description">Lets signed-in customers share one cached copy of shop, product and content pages. Anyone with something in their basket, and every basket, checkout and account page, is always rendered live. Leave this off if prices, stock or content differ per customer (trade pricing, memberships, wholesale roles).</p>
                         </div>
                     </div>
@@ -880,11 +880,11 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_object_cache_read]" id="wc_object_cache_read" value="1" <?php checked($settings['wc_object_cache_read'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_object_cache_read]" id="wc_object_cache_read" value="1" <?php checked($settings['wc_object_cache_read'] ?? 0); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green', 'Read only: basket, session and order data are never written to the shared cache.')); ?>
-                            <p class="description">Basket, checkout and Store API requests read shared product, option, term and shipping data from the object cache instead of the database. They never write to it. <code>ACE_OC_WC_READ</code> in wp-config overrides this.</p>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'green', 'Read only: basket, session and order data are never written to the shared cache.')); ?>
+                            <p class="description">Basket, checkout and Store API requests read shared product, option, term and shipping data from the object cache instead of the database. They never write to it. <code>ACEREDIS_OC_WC_READ</code> in wp-config overrides this.</p>
                         </div>
                     </div>
 
@@ -894,10 +894,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_skip_cart_cookies]" id="wc_skip_cart_cookies" value="1" <?php checked(1, $settings['wc_skip_cart_cookies'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_skip_cart_cookies]" id="wc_skip_cart_cookies" value="1" <?php checked(1, $settings['wc_skip_cart_cookies'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'This only affects guest/cacheable storefront requests.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'This only affects guest/cacheable storefront requests.')); ?>
                             <p class="description">Suppress the WooCommerce cart cookie on product, shop, and category pages so full-page cache can treat guests as shared traffic.</p>
                         </div>
                     </div>
@@ -908,10 +908,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_disable_persistent_cart]" id="wc_disable_persistent_cart" value="1" <?php checked(1, $settings['wc_disable_persistent_cart'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_disable_persistent_cart]" id="wc_disable_persistent_cart" value="1" <?php checked(1, $settings['wc_disable_persistent_cart'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'green', 'This mainly affects logged-in customers with persistent carts.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('red', 'green', 'This mainly affects logged-in customers with persistent carts.')); ?>
                             <p class="description">Disable WooCommerce persistent cart writes. Session carts still work; they just do not survive a browser restart.</p>
                         </div>
                     </div>
@@ -921,8 +921,8 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                             <label for="wc_variation_threshold">Variation AJAX Threshold</label>
                         </div>
                         <div class="setting-field">
-                            <input type="number" min="1" max="100" step="1" name="ace_redis_cache_settings[wc_variation_threshold]" id="wc_variation_threshold" value="<?php echo esc_attr($settings['wc_variation_threshold'] ?? 15); ?>" class="small-text" />
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'amber', 'This reduces large variation payloads on storefront product pages.')); ?>
+                            <input type="number" min="1" max="100" step="1" name="aceredis_cache_settings[wc_variation_threshold]" id="wc_variation_threshold" value="<?php echo esc_attr($settings['wc_variation_threshold'] ?? 15); ?>" class="small-text" />
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'amber', 'This reduces large variation payloads on storefront product pages.')); ?>
                             <p class="description">WooCommerce defaults to 30. Lower values push large variation sets onto AJAX sooner and keep product pages lighter. Recommended: 15.</p>
                         </div>
                     </div>
@@ -933,9 +933,9 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label for="wc_action_scheduler_time_limit" style="display:inline-block; min-width:150px;">Time limit (seconds)</label>
-                            <input type="number" min="5" max="120" step="1" name="ace_redis_cache_settings[wc_action_scheduler_time_limit]" id="wc_action_scheduler_time_limit" value="<?php echo esc_attr($settings['wc_action_scheduler_time_limit'] ?? 15); ?>" class="small-text" />
+                            <input type="number" min="5" max="120" step="1" name="aceredis_cache_settings[wc_action_scheduler_time_limit]" id="wc_action_scheduler_time_limit" value="<?php echo esc_attr($settings['wc_action_scheduler_time_limit'] ?? 15); ?>" class="small-text" />
                             <label for="wc_action_scheduler_batch_size" style="display:inline-block; min-width:110px; margin-left:16px;">Batch size</label>
-                            <input type="number" min="1" max="100" step="1" name="ace_redis_cache_settings[wc_action_scheduler_batch_size]" id="wc_action_scheduler_batch_size" value="<?php echo esc_attr($settings['wc_action_scheduler_batch_size'] ?? 10); ?>" class="small-text" />
+                            <input type="number" min="1" max="100" step="1" name="aceredis_cache_settings[wc_action_scheduler_batch_size]" id="wc_action_scheduler_batch_size" value="<?php echo esc_attr($settings['wc_action_scheduler_batch_size'] ?? 10); ?>" class="small-text" />
                             <p class="description">Caps Action Scheduler batches to reduce long-running cron requests and lock contention from WooCommerce background jobs.</p>
                         </div>
                     </div>
@@ -946,10 +946,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_skip_children_on_archives]" id="wc_skip_children_on_archives" value="1" <?php checked(1, $settings['wc_skip_children_on_archives'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_skip_children_on_archives]" id="wc_skip_children_on_archives" value="1" <?php checked(1, $settings['wc_skip_children_on_archives'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Archive and home pages benefit most from this.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'Archive and home pages benefit most from this.')); ?>
                             <p class="description">Return empty variation-child lists on non-product pages so WooCommerce blocks and templates do not expand every variation just to render a product grid.</p>
                         </div>
                     </div>
@@ -960,10 +960,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_skip_composite_sync_on_archives]" id="wc_skip_composite_sync_on_archives" value="1" <?php checked(1, $settings['wc_skip_composite_sync_on_archives'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_skip_composite_sync_on_archives]" id="wc_skip_composite_sync_on_archives" value="1" <?php checked(1, $settings['wc_skip_composite_sync_on_archives'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red', 'Single product pages are left untouched.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red', 'Single product pages are left untouched.')); ?>
                             <p class="description">Marks composite products as pre-synced on archive/shop pages so the Composite Products plugin does not recalculate and write prices for every grid item.</p>
                         </div>
                     </div>
@@ -974,10 +974,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_cache_url_exclusions]" id="wc_cache_url_exclusions" value="1" <?php checked(1, $settings['wc_cache_url_exclusions'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_cache_url_exclusions]" id="wc_cache_url_exclusions" value="1" <?php checked(1, $settings['wc_cache_url_exclusions'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'red')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'red')); ?>
                             <p class="description">Automatically exclude standard WooCommerce endpoints from page caching: <code>/cart</code>, <code>/checkout</code>, <code>/my-account</code>, <code>?wc-ajax=</code>, and <code>?add-to-cart=</code>.</p>
                         </div>
                     </div>
@@ -988,10 +988,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_gla_disable_notification_pill]" id="wc_gla_disable_notification_pill" value="1" <?php checked(1, $settings['wc_gla_disable_notification_pill'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_gla_disable_notification_pill]" id="wc_gla_disable_notification_pill" value="1" <?php checked(1, $settings['wc_gla_disable_notification_pill'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('red', 'green', 'This only affects wp-admin requests.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('red', 'green', 'This only affects wp-admin requests.')); ?>
                             <p class="description">Disable the Google for WooCommerce admin notification badge that triggers synchronous Google Ads lookups on routine admin page loads.</p>
                         </div>
                     </div>
@@ -1002,10 +1002,10 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
                         </div>
                         <div class="setting-field">
                             <label class="ace-switch">
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_disable_blocks_animation_translate]" id="wc_disable_blocks_animation_translate" value="1" <?php checked(1, $settings['wc_disable_blocks_animation_translate'] ?? 1); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_disable_blocks_animation_translate]" id="wc_disable_blocks_animation_translate" value="1" <?php checked(1, $settings['wc_disable_blocks_animation_translate'] ?? 1); ?> />
                                 <span class="ace-slider"></span>
                             </label>
-                            <?php echo wp_kses_post(ace_rc_scope_traffic_light('green', 'green', 'This removes a third-party translate.wordpress.org check on every page type.')); ?>
+                            <?php echo wp_kses_post(aceredis_scope_traffic_light('green', 'green', 'This removes a third-party translate.wordpress.org check on every page type.')); ?>
                             <p class="description">Disable the ThemeIsle SDK translation prompt in <code>blocks-animation</code> so it stops making synchronous translation API checks on page loads.</p>
                         </div>
                     </div>
@@ -1109,7 +1109,7 @@ location ~* \.(css|js|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|eot|otf|
 
 
                 
-                <?php wp_nonce_field('ace_redis_admin_nonce', 'ace_redis_nonce'); ?>
+                <?php wp_nonce_field('aceredis_admin_nonce', 'aceredis_nonce'); ?>
             </form>
         </div> <!-- .ace-redis-content -->
     </div> <!-- .ace-redis-container -->

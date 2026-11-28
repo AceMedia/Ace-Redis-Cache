@@ -33,7 +33,7 @@ class API_Handler {
     private $saving_settings = false; // in-flight save guard
     private $last_saved_settings = null; // holds intended new settings during request
     private $after_update_option = false; // only begin overriding reads after update_option has executed
-    private $stats_cache_key = 'ace_redis_cache_stats_snapshot_v1';
+    private $stats_cache_key = 'aceredis_cache_stats_snapshot_v1';
     private $stats_cache_ttl = 15;
     
     /**
@@ -85,8 +85,8 @@ class API_Handler {
     private function init() {
         add_action('rest_api_init', [$this, 'register_routes']);
         // Early option filters to provide freshly saved settings during the same request.
-        add_filter('option_ace_redis_cache_settings', [$this, 'override_option_during_save'], 1, 1);
-        add_filter('site_option_ace_redis_cache_settings', [$this, 'override_option_during_save'], 1, 1);
+        add_filter('option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'override_option_during_save'], 1, 1);
+        add_filter('site_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'override_option_during_save'], 1, 1);
     }
     
     /**
@@ -332,7 +332,7 @@ class API_Handler {
         }
 
         $enabled_setting = false;
-        $settings_now = get_option('ace_redis_cache_settings', []);
+        $settings_now = get_option(ACEREDIS_SETTINGS_OPTION, []);
         if ($type === 'object') {
             $enabled_setting = !empty($settings_now['enable_transient_cache']) || !empty($settings_now['enable_object_cache_dropin']);
         } elseif ($type === 'advanced') {
@@ -501,7 +501,7 @@ class API_Handler {
         if (!function_exists('opcache_compile_file')) {
             return new \WP_REST_Response(['success' => false, 'message' => 'opcache_compile_file unavailable'], 500);
         }
-        $files = apply_filters('ace_rc_opcache_prime_files', [ ABSPATH . 'index.php', get_stylesheet_directory() . '/functions.php', get_template_directory() . '/functions.php' ]);
+        $files = apply_filters('aceredis_opcache_prime_files', [ ABSPATH . 'index.php', get_stylesheet_directory() . '/functions.php', get_template_directory() . '/functions.php' ]);
         $compiled = [];
         foreach ($files as $f) {
             if (is_string($f) && file_exists($f)) {
@@ -555,7 +555,7 @@ class API_Handler {
         $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
         $dropin_connected = false; // current-request physical connection
         $dropin_active = false;    // current-request active flag from drop-in
-        $conn_details = null; $via = null; $error = null; $runtime_stats = []; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACE_OC_PROF') && ACE_OC_PROF);
+        $conn_details = null; $via = null; $error = null; $runtime_stats = []; $bypass = false; $runtime_bypass = false; $profiling = (defined('ACEREDIS_OC_PROF') && ACEREDIS_OC_PROF);
         if ($using_dropin && isset($wp_object_cache) && is_object($wp_object_cache)) {
             if (method_exists($wp_object_cache,'is_connected')) { $dropin_connected = (bool)$wp_object_cache->is_connected(); }
             if (method_exists($wp_object_cache,'connection_details')) {
@@ -575,7 +575,7 @@ class API_Handler {
                 $runtime_stats = $tmp_stats;
             }
         }
-        $const_bypass = defined('ACE_OC_BYPASS') && ACE_OC_BYPASS; $bypass = $const_bypass || $runtime_bypass;
+        $const_bypass = defined('ACEREDIS_OC_BYPASS') && ACEREDIS_OC_BYPASS; $bypass = $const_bypass || $runtime_bypass;
         $probe_guest_context = is_admin()
             || is_user_logged_in()
             || wp_doing_ajax()
@@ -628,7 +628,7 @@ class API_Handler {
         $display_active = $dropin_active || ($using_dropin && $guest_effective_mode === 'active');
         $display_bypass = !$probe_guest_context && $bypass && $bypass_reason !== 'editor_admin';
         $display_bypass_reason = $display_bypass ? $bypass_reason : null;
-        $slow_ops = get_transient('ace_rc_slow_op_count'); $slow_ops = $slow_ops!==false ? (int)$slow_ops : 0;
+        $slow_ops = get_transient('aceredis_slow_op_count'); $slow_ops = $slow_ops!==false ? (int)$slow_ops : 0;
         $autoload_size = 0; if (isset($wpdb)) { $row = $wpdb->get_row("SELECT SUM(LENGTH(option_value)) AS sz FROM {$wpdb->options} WHERE autoload='yes'"); if ($row && isset($row->sz)) { $autoload_size = (int)$row->sz; } }
         $tips = [];
         if (!$using_dropin) {
@@ -640,7 +640,7 @@ class API_Handler {
         } elseif ($bypass && $bypass_reason === 'fail_open') {
             $tips[] = 'Runtime fail-open bypass: a Redis operation failed and caching is suspended this request.';
         } elseif ($bypass && $bypass_reason === 'constant') {
-            $tips[] = 'ACE_OC_BYPASS constant forces bypass.';
+            $tips[] = 'ACEREDIS_OC_BYPASS constant forces bypass.';
         }
         if ($profiling && $slow_ops>0) { $tips[] = 'Detected ' . $slow_ops . ' slow ops (>=100ms). Consider inspecting heavy queries or raising threshold.'; }
         if ($autoload_size > 50*1024*1024) { $tips[] = 'Autoloaded options exceed 50MB (' . size_format($autoload_size) . '). This can hurt performance.'; }
@@ -707,7 +707,7 @@ class API_Handler {
         // For POST requests, verify nonce
         if ($request->get_method() === 'POST') {
             $nonce = $request->get_param('nonce');
-            if (!is_string($nonce) || !wp_verify_nonce(sanitize_text_field($nonce), 'ace_redis_admin_nonce')) {
+            if (!is_string($nonce) || !wp_verify_nonce(sanitize_text_field($nonce), 'aceredis_admin_nonce')) {
                 return false;
             }
         }
@@ -737,15 +737,15 @@ class API_Handler {
             // Clear potential negative cache (poison map) before any reads this request
             if (function_exists('wp_cache_delete')) { @wp_cache_delete('notoptions', 'options'); }
             $settings = $request->get_param('settings');
-            if (!is_array($settings)) return new \WP_Error('ace_rc_invalid_settings', 'Settings must be an object.', ['status' => 400]);
+            if (!is_array($settings)) return new \WP_Error('aceredis_invalid_settings', 'Settings must be an object.', ['status' => 400]);
             foreach ($settings as $key => $value) {
                 if ($key !== '__managed_plugins' && !is_scalar($value) && $value !== null) {
-                    return new \WP_Error('ace_rc_invalid_settings', 'Settings values must be scalar.', ['status' => 400]);
+                    return new \WP_Error('aceredis_invalid_settings', 'Settings values must be scalar.', ['status' => 400]);
                 }
             }
             // Optional flags outside settings for auxiliary actions
             $reset_slow = $request->get_param('reset_slow_ops');
-            if ($reset_slow) { delete_transient('ace_rc_slow_op_count'); }
+            if ($reset_slow) { delete_transient('aceredis_slow_op_count'); }
             // Managed plugins payload (comes in via __managed_plugins)
             if (isset($settings['__managed_plugins']) && is_array($settings['__managed_plugins'])) {
                 $mp_store = ['plugins' => []];
@@ -796,7 +796,7 @@ class API_Handler {
                 $this->saving_settings = false;
                 $this->last_saved_settings = null;
                 $this->after_update_option = false;
-                return new \WP_Error('ace_rc_htaccess_write_failed', SettingsStore::file_write_error(), ['status' => 500, 'settings_saved' => true]);
+                return new \WP_Error('aceredis_htaccess_write_failed', SettingsStore::file_write_error(), ['status' => 500, 'settings_saved' => true]);
             }
             // Purge related option caches after primary write (whether core performed a DB write or not)
             $this->purge_option_caches();
@@ -829,7 +829,7 @@ class API_Handler {
 
             // Unconditional verification (even if $result is false)
             $stored = SettingsStore::get_settings([]);
-            $raw_db = $this->raw_db_get_option('ace_redis_cache_settings');
+            $raw_db = $this->raw_db_get_option(ACEREDIS_SETTINGS_OPTION);
             $stored_flag = is_array($stored) ? ($stored['enable_transient_cache'] ?? 'MISS') : 'NA';
             $raw_flag = is_array($raw_db) ? ($raw_db['enable_transient_cache'] ?? 'MISS') : 'NA';
             if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -839,11 +839,11 @@ class API_Handler {
             // If wanted 1 but stored/raw inconsistent, drive multiple corrective strategies
             if (($sanitized_settings['enable_transient_cache'] ?? 0) == 1 && (int)$stored_flag !== 1) {
                 // Step 1: direct SQL update (in-place)
-                $forced_sql = $this->force_update_option_row('ace_redis_cache_settings', $sanitized_settings);
+                $forced_sql = $this->force_update_option_row(ACEREDIS_SETTINGS_OPTION, $sanitized_settings);
                 $this->purge_option_caches(); // After direct SQL path
                 $stored2 = SettingsStore::get_settings([]);
                 $stored2_flag = is_array($stored2) ? ($stored2['enable_transient_cache'] ?? 'MISS') : 'NA';
-                $raw2 = $this->raw_db_get_option('ace_redis_cache_settings');
+                $raw2 = $this->raw_db_get_option(ACEREDIS_SETTINGS_OPTION);
                 $raw2_flag = is_array($raw2) ? ($raw2['enable_transient_cache'] ?? 'MISS') : 'NA';
                 if (defined('WP_DEBUG') && WP_DEBUG) {
                     error_log('Ace-Redis-Cache: forced-sql transient stored=' . $stored2_flag . ' raw=' . $raw2_flag . ' forced_result=' . var_export($forced_sql, true));
@@ -853,7 +853,7 @@ class API_Handler {
     // (override_option_during_save moved to end of class)
                 if ((int)$raw2_flag === 1 && (int)$stored2_flag !== 1) {
                     if (defined('WP_DEBUG') && WP_DEBUG) error_log('Ace-Redis-Cache: rewrite fallback delete+add because stored mismatch despite raw=1');
-                    SettingsStore::delete('ace_redis_cache_settings');
+                    SettingsStore::delete(ACEREDIS_SETTINGS_OPTION);
                     SettingsStore::update_settings($raw2);
                     $this->purge_option_caches(); // After delete+add path
                     $stored3 = SettingsStore::get_settings([]);
@@ -933,21 +933,21 @@ class API_Handler {
         if (!is_object($wpdb)) return;
         $table = $wpdb->options;
         // Check current autoload status
-        $row = $wpdb->get_row( $wpdb->prepare("SELECT autoload FROM {$table} WHERE option_name = %s LIMIT 1", 'ace_redis_cache_settings') );
+        $row = $wpdb->get_row( $wpdb->prepare("SELECT autoload FROM {$table} WHERE option_name = %s LIMIT 1", ACEREDIS_SETTINGS_OPTION) );
         $before = $row ? $row->autoload : 'NA';
         if ($before !== 'no') {
             // Update autoload to no for any unexpected value (yes/on/true/empty)
-            $wpdb->query( $wpdb->prepare("UPDATE {$table} SET autoload='no' WHERE option_name=%s", 'ace_redis_cache_settings') );
+            $wpdb->query( $wpdb->prepare("UPDATE {$table} SET autoload='no' WHERE option_name=%s", ACEREDIS_SETTINGS_OPTION) );
             if (function_exists('wp_cache_delete')) {
                 @wp_cache_delete('alloptions', 'options');
-                @wp_cache_delete('ace_redis_cache_settings', 'options');
+                @wp_cache_delete(ACEREDIS_SETTINGS_OPTION, 'options');
                 @wp_cache_delete('notoptions', 'options');
             }
             if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('Ace-Redis-Cache: normalised autoload (was ' . $before . ') -> no for ace_redis_cache_settings');
+                error_log('Ace-Redis-Cache: normalised autoload (was ' . $before . ') -> no for aceredis_cache_settings');
             }
         } elseif (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log('Ace-Redis-Cache: autoload already no for ace_redis_cache_settings');
+            error_log('Ace-Redis-Cache: autoload already no for aceredis_cache_settings');
         }
     }
 
@@ -1847,11 +1847,11 @@ class API_Handler {
 
     /**
      * Purge related option/object cache keys after a settings mutation.
-     * Required keys: ace_redis_cache_settings, alloptions, notoptions.
+     * Required keys: aceredis_cache_settings, alloptions, notoptions.
      */
     private function purge_option_caches() {
         if (!function_exists('wp_cache_delete')) { return; }
-        @wp_cache_delete('ace_redis_cache_settings', 'options');
+        @wp_cache_delete(ACEREDIS_SETTINGS_OPTION, 'options');
         @wp_cache_delete('alloptions', 'options');
         @wp_cache_delete('notoptions', 'options');
     }

@@ -4,7 +4,7 @@ require __DIR__ . '/bootstrap-isolated.php';
 use AceMedia\RedisCache\AceRedisCache;
 use AceMedia\RedisCache\PagePathIndex;
 function apply_filters($name, $value, ...$args) {
-    if ($name === 'ace_redis_cache_page_cache_key_parts') $value[] = 'local-suffix';
+    if ($name === 'aceredis_cache_page_cache_key_parts') $value[] = 'local-suffix';
     return $value;
 }
 function get_permalink($id) { return home_url('/?p=' . $id); }

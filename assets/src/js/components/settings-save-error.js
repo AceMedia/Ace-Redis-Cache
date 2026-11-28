@@ -1,6 +1,6 @@
 /** Known settings-save failures, shared by the main form and standalone SaveBar. */
 export function settingsSaveError(response) {
-    const partial = response && response.code === 'ace_rc_htaccess_write_failed' &&
+    const partial = response && response.code === 'aceredis_htaccess_write_failed' &&
         response.data && response.data.settings_saved === true;
     const error = new Error(partial
         ? 'Settings were saved, but the Apache cache rules could not be updated. Your existing rules were left in place. Check file ownership and directory permissions, then save again.'

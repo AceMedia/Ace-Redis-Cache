@@ -1,22 +1,22 @@
 (function($){
-    if (!$ || typeof ace_redis_admin === 'undefined') return;
+    if (!$ || typeof aceredis_admin === 'undefined') return;
 
     function restGet(path) {
         return $.ajax({
-            url: ace_redis_admin.rest_url + path,
+            url: aceredis_admin.rest_url + path,
             type: 'GET',
             timeout: 5000,
-            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce); }
         });
     }
 
     function restPost(path, data) {
         return $.ajax({
-            url: ace_redis_admin.rest_url + path,
+            url: aceredis_admin.rest_url + path,
             type: 'POST',
             data: data,
             timeout: 8000,
-            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce); }
         });
     }
 
@@ -80,7 +80,7 @@
         $btn.prop('disabled', true).text('Updating...');
 
         restPost('ace-redis-cache/v1/dropins-update', {
-            nonce: ace_redis_admin.nonce,
+            nonce: aceredis_admin.nonce,
             type: type
         }).done(function(resp){
             if (resp && resp.success) {

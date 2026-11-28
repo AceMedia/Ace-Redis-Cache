@@ -9,7 +9,8 @@ namespace {
     $fixture_root = sys_get_temp_dir() . '/arc-report-' . bin2hex(random_bytes(6));
     mkdir($fixture_root, 0700); mkdir($fixture_root . '/site'); mkdir($fixture_root . '/site/core');
     define('ABSPATH', $fixture_root . '/site/core/');
-    define('ACE_REDIS_CACHE_PLUGIN_FILE', '/fixture/Ace-Redis-Cache/ace-redis-cache.php');
+    define('ACEREDIS_CACHE_PLUGIN_FILE', '/fixture/Ace-Redis-Cache/ace-redis-cache.php');
+    define('ACEREDIS_SETTINGS_OPTION', 'aceredis_cache_settings'); define('ACEREDIS_MANAGED_PLUGINS_OPTION', 'aceredis_managed_plugins');
     $network = false; $options = []; $site_options = []; $notices = []; $json_response = null; $writes = 0; $retry_actions = 0; $allowed = true; $valid_nonce = true;
     function is_multisite() { return $GLOBALS['network']; }
     function is_plugin_active_for_network($file) { return $GLOBALS['network']; }
@@ -29,7 +30,7 @@ namespace {
         return true;
     }
     function do_action($name) {
-        if ($name !== 'ace_rc_reconcile_static_cache_rules') throw new \RuntimeException('Unexpected synthetic hook');
+        if ($name !== 'aceredis_reconcile_static_cache_rules') throw new \RuntimeException('Unexpected synthetic hook');
         ++$GLOBALS['retry_actions']; $GLOBALS['plugin']->reconcile_static_cache_rules();
     }
     function add_settings_error($setting, $code, $message, $type) { $GLOBALS['notices'][] = compact('setting', 'code', 'message', 'type'); }
@@ -73,14 +74,14 @@ namespace {
             $notices = []; $saved = \AceMedia\RedisCache\SettingsStore::update_settings($settings);
             fixture_check($saved === true && \AceMedia\RedisCache\SettingsStore::get_settings() === $settings, 'database settings retained despite file failure');
             fixture_check(\AceMedia\RedisCache\SettingsStore::file_write_error() !== null && file_get_contents($path) === $initial, 'file failure recorded without replacing rules');
-            fixture_check(count($notices) === 1 && $notices[0]['code'] === 'ace_rc_htaccess_write_failed' && $notices[0]['type'] === 'error', 'standard settings page receives actionable error');
+            fixture_check(count($notices) === 1 && $notices[0]['code'] === 'aceredis_htaccess_write_failed' && $notices[0]['type'] === 'error', 'standard settings page receives actionable error');
             unlink($lock); $before_retries = $retry_actions;
             fixture_check(\AceMedia\RedisCache\SettingsStore::update_settings($settings) === false && $retry_actions === $before_retries + 1, 'unchanged save retries file reconciliation');
             fixture_check(\AceMedia\RedisCache\SettingsStore::file_write_error() === null && strpos(file_get_contents($path), 'max-age=86400') !== false, 'retry repairs rules and clears failure');
         }
         $network = false;
         if (file_exists($lock)) unlink($lock); symlink($foreign, $lock); file_put_contents($path, $initial);
-        $_POST = ['nonce' => 'fixture', 'form_data' => http_build_query(['ace_redis_cache_settings' => $settings])];
+        $_POST = ['nonce' => 'fixture', 'form_data' => http_build_query(['aceredis_cache_settings' => $settings])];
         $ajax = (new \ReflectionClass(\AceMedia\RedisCache\AdminAjax::class))->newInstanceWithoutConstructor();
         $json_response = null; $ajax->handle_save_settings();
         fixture_check($json_response['success'] === false && is_string($json_response['data']) && strpos($json_response['data'], 'Settings were saved, but') === 0, 'AJAX distinguishes saved settings from failed rules');
@@ -93,7 +94,7 @@ namespace {
         foreach ([false, true] as $network) {
             $api = (new \ReflectionClass(\AceMedia\RedisCache\API_Handler::class))->newInstanceWithoutConstructor();
             $result = $api->save_settings(new ArcFixtureRequest(['settings' => $settings]));
-            fixture_check($result instanceof WP_Error && $result->code === 'ace_rc_htaccess_write_failed' && $result->data['status'] === 500 && $result->data['settings_saved'] === true, 'REST reports failed rules separately from saved settings');
+            fixture_check($result instanceof WP_Error && $result->code === 'aceredis_htaccess_write_failed' && $result->data['status'] === 500 && $result->data['settings_saved'] === true, 'REST reports failed rules separately from saved settings');
             foreach (['saving_settings','last_saved_settings','after_update_option'] as $name) {
                 $property = new \ReflectionProperty($api, $name); if (PHP_VERSION_ID < 80100) $property->setAccessible(true);
                 fixture_check($property->getValue($api) === ($name === 'last_saved_settings' ? null : false), 'REST clears its in-flight state after file failure');

@@ -76,8 +76,8 @@ class AceRedisCache {
      * Constructor
      */
     public function __construct() {
-        if (defined('ACE_REDIS_CACHE_VERSION')) {
-            $this->plugin_version = ACE_REDIS_CACHE_VERSION;
+        if (defined('ACEREDIS_CACHE_VERSION')) {
+            $this->plugin_version = ACEREDIS_CACHE_VERSION;
         }
         $this->plugin_path = dirname(__DIR__);
         // Use the proper root plugin URL. The previous implementation used
@@ -91,8 +91,8 @@ class AceRedisCache {
         //
         // By switching to the constant defined in the plugin bootstrap we
         // ensure the URL always targets the plugin root.
-        if (defined('ACE_REDIS_CACHE_PLUGIN_URL')) {
-            $this->plugin_url = ACE_REDIS_CACHE_PLUGIN_URL;
+        if (defined('ACEREDIS_CACHE_PLUGIN_URL')) {
+            $this->plugin_url = ACEREDIS_CACHE_PLUGIN_URL;
         } else {
             // Fallback: compute from the main plugin file path.
             $this->plugin_url = plugin_dir_url(dirname(__DIR__) . '/ace-redis-cache.php');
@@ -402,22 +402,22 @@ class AceRedisCache {
     private function setup_hooks() {
         // Keep a Varnish in front of the site in step with page-cache purges (no-op without one).
         VarnishBridge::boot();
-        // Block HTML cache (off unless enabled in settings or by ACE_RC_BLOCK_CACHE).
+        // Block HTML cache (off unless enabled in settings or by ACEREDIS_BLOCK_CACHE).
         BlockCache::boot($this, $this->cache_manager, (array) $this->settings);
 
         // Settings update hooks (single-site + network mode).
-        add_action('update_option_ace_redis_cache_settings', [$this, 'on_settings_updated'], 10, 2);
-        add_action('update_site_option_ace_redis_cache_settings', [$this, 'on_site_settings_updated'], 10, 4);
-        add_action('ace_rc_reconcile_static_cache_rules', [$this, 'reconcile_static_cache_rules']);
+        add_action('update_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'on_settings_updated'], 10, 2);
+        add_action('update_site_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'on_site_settings_updated'], 10, 4);
+        add_action('aceredis_reconcile_static_cache_rules', [$this, 'reconcile_static_cache_rules']);
 
         // Pre-update filter (fires before DB write) to trace and preserve transient flag if it mysteriously drops.
-        add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace'], 10, 2);
-        add_filter('pre_update_option_ace_redis_cache_settings', [$this, 'pre_update_settings_trace_late'], 9999, 2);
-        add_filter('pre_update_site_option_ace_redis_cache_settings', [$this, 'pre_update_site_settings_trace'], 10, 3);
+        add_filter('pre_update_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'pre_update_settings_trace'], 10, 2);
+        add_filter('pre_update_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'pre_update_settings_trace_late'], 9999, 2);
+        add_filter('pre_update_site_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'pre_update_site_settings_trace'], 10, 3);
 
         // Trace reads to detect external mutation (low priority to run after other filters).
-        add_filter('option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
-        add_filter('site_option_ace_redis_cache_settings', [$this, 'trace_option_read'], 9999, 1);
+        add_filter('option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'trace_option_read'], 9999, 1);
+        add_filter('site_option_' . ACEREDIS_SETTINGS_OPTION, [$this, 'trace_option_read'], 9999, 1);
 
         // wp-admin query cache: invalidation hooks run everywhere, the cached reads only in wp-admin.
         AdminQueryCache::configure($this->settings);
@@ -456,15 +456,15 @@ class AceRedisCache {
             }
         }
         // Deferred invalidation runner
-        add_action('ace_rc_run_deferred_invalidation', [$this, 'run_deferred_invalidation']);
-        add_action('ace_rc_run_sitemap_prime_batch', [$this, 'run_sitemap_prime_batch']);
+        add_action('aceredis_run_deferred_invalidation', [$this, 'run_deferred_invalidation']);
+        add_action('aceredis_run_sitemap_prime_batch', [$this, 'run_sitemap_prime_batch']);
         // Smart WooCommerce caching: warm key commerce URLs after any full cache clear.
-        add_action('ace_rc_cache_cleared', [$this, 'schedule_woocommerce_warm'], 10, 1);
-        add_action('ace_rc_warm_woocommerce', [$this, 'run_woocommerce_warm'], 10, 1);
+        add_action('aceredis_cache_cleared', [$this, 'schedule_woocommerce_warm'], 10, 1);
+        add_action('aceredis_warm_woocommerce', [$this, 'run_woocommerce_warm'], 10, 1);
         add_action('init', [$this, 'maybe_serve_asset_proxy_request'], 0);
         add_action('init', [$this, 'drain_early_refresh_queue'], 20);
         // The trailing purge a coalesced soft purge asked for (see soft_purge_page_cache()).
-        add_action('ace_rc_deferred_soft_purge', function () { $this->soft_purge_page_cache(true); });
+        add_action('aceredis_deferred_soft_purge', function () { $this->soft_purge_page_cache(true); });
         // Static asset headers (apply for all requests including admin media loads)
         if (!empty($this->settings['enable_static_asset_cache'])) {
             add_filter('wp_headers', [$this, 'set_static_cache_headers']);
@@ -537,17 +537,17 @@ class AceRedisCache {
             $this->init_dynamic_placeholder_runtime();
             // Register per-post page cache invalidation hooks
             add_action('save_post', [$this, 'maybe_invalidate_post_page_cache'], 50, 3);
-            add_action('ace_redis_cache_purge_url', [$this, 'purge_url']);
+            add_action('aceredis_cache_purge_url', [$this, 'purge_url']);
             add_action('deleted_post', [$this, 'maybe_invalidate_post_page_cache_deleted'], 50, 1);
             add_action('transition_post_status', [$this, 'maybe_invalidate_post_page_cache_status'], 50, 3);
             
             // Broad page purge on post updates, for block caching compatibility: page and block
             // caches go (soft where the site has a grace window). The object cache is not flushed;
             // WordPress invalidates the post's own keys and query stamps, and the drop-in does too.
-            add_filter('ace_rc_broad_page_cache_purge_on_post_update', '__return_true');
+            add_filter('aceredis_broad_page_cache_purge_on_post_update', '__return_true');
             
             // Priming cron handler
-            add_action('ace_rc_prime_post_cache', [$this, 'prime_post_cache'], 10, 1);
+            add_action('aceredis_prime_post_cache', [$this, 'prime_post_cache'], 10, 1);
 
             // WooCommerce changes stock (orders, refunds, imports) and scheduled prices without a
             // save_post, so a product page could keep showing the old stock or price until it
@@ -584,7 +584,7 @@ class AceRedisCache {
             // reach template_include, so they were never page cached. Such a plugin fires this
             // action just before it starts output to opt the response in; nothing changes for
             // sites that never fire it. Starting twice is harmless.
-            add_action('ace_rc_start_page_cache', [$this, 'start_full_page_cache']);
+            add_action('aceredis_start_page_cache', [$this, 'start_full_page_cache']);
             
             // Post-save hooks for priming coherent option state & setting no-cache warm window.
             add_action('save_post', [$this, 'post_save_prime_schedule'], 10, 3);
@@ -610,7 +610,7 @@ class AceRedisCache {
         $this->register_transient_filters();
 
         // Optional canonical redirect debug – only active when WP_DEBUG true and filter returns true.
-        if (defined('WP_DEBUG') && WP_DEBUG && apply_filters('ace_rc_enable_canonical_debug', false)) {
+        if (defined('WP_DEBUG') && WP_DEBUG && apply_filters('aceredis_enable_canonical_debug', false)) {
             add_filter('redirect_canonical', function($redirect_url, $requested_url){
                 // Log only when redirecting to a bare ?p= form (numeric) to catch stale permalink situations.
                 if ($redirect_url && preg_match('#[?&]p=\d+#', $redirect_url) && strpos($requested_url, '?p=') === false) {
@@ -704,7 +704,7 @@ class AceRedisCache {
         $is_customer = class_exists('WooCommerce') && in_array('customer', (array) $user->roles, true);
         $group = LoggedInPageCache::group($this->settings, 'current_user_can', $is_customer);
         // A site can narrow this (null = never cache this user); only the known groups are purged.
-        $group = apply_filters('ace_rc_logged_in_cache_group', $group, $user, $this->settings);
+        $group = apply_filters('aceredis_logged_in_cache_group', $group, $user, $this->settings);
         $this->li_group = in_array($group, LoggedInPageCache::GROUPS, true) ? $group : null;
         return $this->li_group;
     }
@@ -775,11 +775,11 @@ class AceRedisCache {
 
     /**
      * The crawler bypass rule: a user-agent pattern and the path prefixes it applies to, both from
-     * the 'ace_rc_crawler_bypass' filter (['agents' => regex body, 'paths' => ['/civic/', ...]]).
+     * the 'aceredis_crawler_bypass' filter (['agents' => regex body, 'paths' => ['/civic/', ...]]).
      * Empty by default, so nothing changes for a site that never filters it.
      */
     public function crawler_bypass_rule() {
-        $rule = apply_filters('ace_rc_crawler_bypass', ['agents' => '', 'paths' => []]);
+        $rule = apply_filters('aceredis_crawler_bypass', ['agents' => '', 'paths' => []]);
         $agents = is_array($rule) ? trim((string) ($rule['agents'] ?? '')) : '';
         $paths = [];
         foreach (is_array($rule) ? (array) ($rule['paths'] ?? []) : [] as $p) {
@@ -855,7 +855,7 @@ class AceRedisCache {
         }
 
         // Allow operators to provide additional URL/query exclusions (e.g. WooCommerce endpoints).
-        $exclusions = apply_filters('ace_redis_cache_excluded_urls', []);
+        $exclusions = apply_filters('aceredis_cache_excluded_urls', []);
         if (is_array($exclusions) && !empty($exclusions)) {
             foreach ($exclusions as $pattern) {
                 $pattern = trim((string) $pattern);
@@ -1191,14 +1191,14 @@ class AceRedisCache {
             return;
         }
         // Respect no-cache warm window transient
-        if (get_transient('ace_rc_no_cache_window')) {
+        if (get_transient('aceredis_no_cache_window')) {
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 error_log('AceRedisCache: skip start_full_page_cache due to no_cache_window');
             }
             return;
         }
-        // Allow explicit bypass for benchmarking: ?ace_nocache=1
-        if (isset($_GET['ace_nocache']) && $_GET['ace_nocache'] == '1') {
+        // Allow explicit bypass for benchmarking: ?aceredis_nocache=1
+        if (isset($_GET['aceredis_nocache']) && $_GET['aceredis_nocache'] == '1') {
             if (!headers_sent()) { header('X-AceRedisCache: BYPASS param'); }
             return; // don't start buffering or touch cache
         }
@@ -1232,7 +1232,7 @@ class AceRedisCache {
             }
             $this->maybe_trigger_swr_refresh($cache_key);
             echo $direct_compressed; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated response; escaping corrupts HTML and compressed bytes.
-            if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
+            if (defined('ACEREDIS_EXIT_ON_HIT') ? ACEREDIS_EXIT_ON_HIT : true) { exit; }
             return;
         }
 
@@ -1279,7 +1279,7 @@ class AceRedisCache {
             $cached_content = $this->maybe_recompress_for_output($cached_content);
             if (!$li) $this->maybe_trigger_swr_refresh($cache_key);
             echo $cached_content; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Replay the complete site-generated response; escaping corrupts HTML and compressed bytes.
-            if (defined('ACE_RC_EXIT_ON_HIT') ? ACE_RC_EXIT_ON_HIT : true) { exit; }
+            if (defined('ACEREDIS_EXIT_ON_HIT') ? ACEREDIS_EXIT_ON_HIT : true) { exit; }
             return;
         }
         
@@ -1314,7 +1314,7 @@ class AceRedisCache {
             $do_not_cache = defined('DONOTCACHEPAGE') && DONOTCACHEPAGE;
             if ($do_not_cache) { $skip_cache_reason = 'donotcachepage'; }
             // Optional: allow override via filter
-            $skip_cache = apply_filters('ace_rc_skip_page_cache_store', ($is_ip || $host_mismatch || $do_not_cache), [
+            $skip_cache = apply_filters('aceredis_skip_page_cache_store', ($is_ip || $host_mismatch || $do_not_cache), [
                 'home_host' => $home_host,
                 'request_host' => $req_host,
                 'is_ip' => $is_ip,
@@ -1323,7 +1323,7 @@ class AceRedisCache {
             // Two-phase warm up: when transient/object cache layer is disabled, avoid storing the very first
             // render for a given path so late-emitted styles / block support attributes are stabilized by the
             // second view. This prevents capturing an incompletely styled DOM (observed when transient caching off).
-            $warm_gate_enabled = apply_filters('ace_rc_enable_first_pass_skip', empty($this->settings['enable_transient_cache']), $cache_key, $this->settings);
+            $warm_gate_enabled = apply_filters('aceredis_enable_first_pass_skip', empty($this->settings['enable_transient_cache']), $cache_key, $this->settings);
             $is_first_pass = false;
             if ($warm_gate_enabled) {
                 $path = $_SERVER['REQUEST_URI'] ?? '/';
@@ -1383,7 +1383,7 @@ class AceRedisCache {
                 $cache_version = LoggedInPageCache::to_stored($cache_version, $this->li_render->actions(), 'wp_create_nonce');
                 $content = LoggedInPageCache::strip_markers($content);
                 $li_block_reason = LoggedInPageCache::identity_block_reason($cache_version, \wp_get_current_user());
-                $li_block_reason = apply_filters('ace_rc_logged_in_store_block', $li_block_reason, $cache_version, \wp_get_current_user());
+                $li_block_reason = apply_filters('aceredis_logged_in_store_block', $li_block_reason, $cache_version, \wp_get_current_user());
             }
             $has_local_dev_refs = $this->contains_local_dev_asset_references($cache_version);
             // Only ever store a real, complete page. See page_cache_store_block_reason()
@@ -1467,7 +1467,7 @@ class AceRedisCache {
         $method = $this->settings['compression_method'] ?? 'brotli';
         // Prefer brotli if configured & accepted
         if ($method === 'brotli' && strpos($accept, 'br') !== false && function_exists('brotli_compress')) {
-            $level = (int) apply_filters('ace_rc_brotli_level_page', $this->settings['brotli_level_page'] ?? 9);
+            $level = (int) apply_filters('aceredis_brotli_level_page', $this->settings['brotli_level_page'] ?? 9);
             $compressed = @brotli_compress($html, max(0,min(11,$level)));
             if ($compressed !== false) {
                 if (!headers_sent()) {
@@ -1481,7 +1481,7 @@ class AceRedisCache {
         }
         // Fallback to gzip if accepted
         if (strpos($accept, 'gzip') !== false && (function_exists('gzencode') || function_exists('gzcompress'))) {
-            $level = (int) apply_filters('ace_rc_gzip_level_page', $this->settings['gzip_level_page'] ?? 6);
+            $level = (int) apply_filters('aceredis_gzip_level_page', $this->settings['gzip_level_page'] ?? 6);
             $level = max(0,min(9,$level));
             $compressed = false;
             if (function_exists('gzencode')) { $compressed = @gzencode($html, $level); }
@@ -1669,7 +1669,7 @@ class AceRedisCache {
         }
         // A site can insist on more before a page is kept, for instance that a single event
         // page carries its headline and its Event schema, so a half-rendered page never re-serves itself.
-        $reason = apply_filters('ace_rc_page_store_block_reason', null, $content, $query);
+        $reason = apply_filters('aceredis_page_store_block_reason', null, $content, $query);
         return is_string($reason) && $reason !== '' ? $reason : null;
     }
 
@@ -1687,8 +1687,8 @@ class AceRedisCache {
      * @return bool
      */
     private function rendered_main_is_substantive($html) {
-        $min_bytes = (int) apply_filters('ace_rc_min_main_text_bytes', 400, $html);
-        $marker = (string) apply_filters('ace_rc_main_content_marker', 'ace-shell__main', $html);
+        $min_bytes = (int) apply_filters('aceredis_min_main_text_bytes', 400, $html);
+        $marker = (string) apply_filters('aceredis_main_content_marker', 'ace-shell__main', $html);
 
         // Locate the opening <main ...> tag that carries the marker class.
         $open = false;
@@ -1782,7 +1782,7 @@ class AceRedisCache {
         $now = ($now === null) ? time() : (int) $now;
         $shared_max_age = intval($this->settings['browser_cache_max_age'] ?? ($this->settings['ttl_page'] ?? 3600));
         $shared_max_age = max(60, min(604800, $shared_max_age));
-        $browser_max_age = (int) apply_filters('ace_rc_browser_max_age', 300, $shared_max_age, $state);
+        $browser_max_age = (int) apply_filters('aceredis_browser_max_age', 300, $shared_max_age, $state);
         $browser_max_age = max(0, min($shared_max_age, $browser_max_age));
 
         $headers = ['Vary' => 'Cookie'];
@@ -1885,7 +1885,7 @@ class AceRedisCache {
     private function init_dynamic_placeholder_runtime() {
         // Setting + filter gate
         $enabled_setting = !empty($this->settings['dynamic_excluded_blocks']);
-        $enabled = apply_filters('ace_rc_enable_partial_dynamic', $enabled_setting, $this->settings);
+        $enabled = apply_filters('aceredis_enable_partial_dynamic', $enabled_setting, $this->settings);
         if (!$enabled) { return; }
         // Guest frontend, or a signed-in request the signed-in page cache covers
         if (is_admin() || (is_user_logged_in() && $this->logged_in_page_cache_group() === null) || wp_doing_ajax() || $this->is_rest_request()) { return; }
@@ -1902,10 +1902,10 @@ class AceRedisCache {
         }
         // Early exit if no patterns
         if (empty($patterns)) return;
-        $patterns = apply_filters('ace_rc_dynamic_block_patterns', array_unique($patterns), $this->settings);
+        $patterns = apply_filters('aceredis_dynamic_block_patterns', array_unique($patterns), $this->settings);
         $this->dynamic_placeholder_patterns = $patterns;
         $this->dynamic_placeholder_regexes = $this->compile_dynamic_placeholder_regexes($patterns);
-        $this->dynamic_placeholder_limit = (int) apply_filters('ace_rc_dynamic_placeholder_limit', $this->dynamic_placeholder_limit, $this->settings);
+        $this->dynamic_placeholder_limit = (int) apply_filters('aceredis_dynamic_placeholder_limit', $this->dynamic_placeholder_limit, $this->settings);
         $this->dynamic_placeholders_enabled = true; // always render mode
     }
 
@@ -2044,7 +2044,7 @@ class AceRedisCache {
                             // An older copy for advanced-cache.php: once the microcache copy has expired it
                             // serves this one and has the block rendered again in the background, so a
                             // visitor to a quiet page does not wait for WordPress to boot.
-                            $stale_ttl = (int) apply_filters('ace_rc_dynamic_stale_ttl', max(300, min(3600, $this->dynamic_microcache_ttl * 20)), $payload['name']);
+                            $stale_ttl = (int) apply_filters('aceredis_dynamic_stale_ttl', max(300, min(3600, $this->dynamic_microcache_ttl * 20)), $payload['name']);
                             if ($stale_ttl > $this->dynamic_microcache_ttl) {
                                 $this->cache_manager->set('dyn_block_st:' . $hash, $rendered, $stale_ttl);
                             }
@@ -2203,7 +2203,7 @@ class AceRedisCache {
         ];
 
         $base_count = count($key_parts);
-        $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
+        $key_parts = apply_filters('aceredis_cache_page_cache_key_parts', $key_parts, [
             'request_uri' => $request_path,
             'scheme' => \is_ssl() ? 'https' : 'http',
             'device' => \wp_is_mobile() ? 'mobile' : 'desktop',
@@ -2257,9 +2257,9 @@ class AceRedisCache {
         $done = true;
         try {
             // Publish on the PAGE-CACHE connection — the same endpoint AND the same logical database
-            // (ACE_REDIS_DB) that the cached pages themselves live in, which is exactly where
+            // (ACEREDIS_DB) that the cached pages themselves live in, which is exactly where
             // advanced-cache.php looks. The object cache's shared connection is NOT usable here: it
-            // stays on its own database (db0 on every site we run), so on any site with ACE_REDIS_DB
+            // stays on its own database (db0 on every site we run), so on any site with ACEREDIS_DB
             // set the tokens were written to db0 while the drop-in read them from the page DB and
             // every early-serve attempt died at 'MISS no-tokens'. rawCommand bypasses the
             // connection's serializer so the values land as plain strings.
@@ -2268,7 +2268,7 @@ class AceRedisCache {
                 return;
             }
             // Namespace the published tokens per host. Sites that share a logical database (any
-            // site without its own ACE_REDIS_DB sits on db0 with the rest), so an un-namespaced key
+            // site without its own ACEREDIS_DB sits on db0 with the rest), so an un-namespaced key
             // let the last site to (re)build a page clobber every other site's suffix — silently
             // breaking their early-serve the moment any site appended a non-empty filter suffix.
             // The host segment (same normalisation as the drop-in reader) keeps each site's inputs
@@ -2289,7 +2289,7 @@ class AceRedisCache {
             $bypass = array_values(array_unique(array_filter(array_map(function ($p) {
                 $p = '/' . trim((string) $p, '/');
                 return $p === '/' ? '' : $p; // never the whole site
-            }, (array) apply_filters('ace_rc_early_bypass_paths', $bypass, $host)))));
+            }, (array) apply_filters('aceredis_early_bypass_paths', $bypass, $host)))));
             if ($bypass) {
                 $redis->rawCommand('SET', $ns . 'bypass_paths', implode("\n", $bypass), 'EX', (string) DAY_IN_SECONDS);
             } else {
@@ -2376,7 +2376,7 @@ class AceRedisCache {
             'p3',
         ];
 
-        $key_parts = apply_filters('ace_redis_cache_page_cache_key_parts', $key_parts, [
+        $key_parts = apply_filters('aceredis_cache_page_cache_key_parts', $key_parts, [
             'request_uri' => $path ?: '/',
             'scheme' => $scheme,
             'device' => $device,
@@ -2398,7 +2398,7 @@ class AceRedisCache {
      */
     /**
      * Purge the page cache for one URL (every scheme/device/version variant).
-     * Public entry point behind the `ace_redis_cache_purge_url` action so other
+     * Public entry point behind the `aceredis_cache_purge_url` action so other
      * plugins (Ace Taxonomy Tools retired archives, Ace Ads Manager) can purge a
      * URL without knowing how keys are built.
      */
@@ -2442,7 +2442,7 @@ class AceRedisCache {
         $paths = PagePathIndex::expand($redis, home_url(), $paths);
         $deleted = $this->delete_page_keys(array_merge($this->page_invalidation_keys($paths), $this->logged_in_invalidation_keys($paths)), $redis, 'path invalidation');
         $deleted += $this->invalidate_early_serve_paths($paths, $redis);
-        do_action('ace_rc_paths_invalidated', $paths, $deleted);
+        do_action('aceredis_paths_invalidated', $paths, $deleted);
         return $deleted;
     }
 
@@ -2610,7 +2610,7 @@ class AceRedisCache {
             }
         }
         // Allow 3rd parties to add related URIs (archives, feeds, etc.)
-        $paths = apply_filters('ace_rc_post_invalidation_paths', array_unique($paths), $post_id, $permalink, $this->settings);
+        $paths = apply_filters('aceredis_post_invalidation_paths', array_unique($paths), $post_id, $permalink, $this->settings);
         $redis = null;
         if ($this->cache_manager && method_exists($this->cache_manager, 'get_raw_client')) {
             $redis = $this->cache_manager->get_raw_client();
@@ -2620,10 +2620,10 @@ class AceRedisCache {
             error_log("AceRedisCache invalidated page cache for post $post_id (deleted_keys=$deleted paths=" . count($paths) . ")");
         }
         if ($schedule_prime) {
-            $prime_enabled = apply_filters('ace_rc_enable_cache_priming', true, $post_id, $this->settings);
+            $prime_enabled = apply_filters('aceredis_enable_cache_priming', true, $post_id, $this->settings);
             if ($prime_enabled) {
-                if (!wp_next_scheduled('ace_rc_prime_post_cache', [$post_id])) {
-                    wp_schedule_single_event(time() + 5, 'ace_rc_prime_post_cache', [$post_id]);
+                if (!wp_next_scheduled('aceredis_prime_post_cache', [$post_id])) {
+                    wp_schedule_single_event(time() + 5, 'aceredis_prime_post_cache', [$post_id]);
                 }
             }
         }
@@ -2670,7 +2670,7 @@ class AceRedisCache {
     public function maybe_opcache_prime() {
         if (!$this->opcache_runtime_enabled) return;
         if (!function_exists('opcache_compile_file')) return;
-        $candidates = apply_filters('ace_rc_opcache_prime_files', [
+        $candidates = apply_filters('aceredis_opcache_prime_files', [
             ABSPATH . 'index.php',
             get_stylesheet_directory() . '/functions.php',
             get_template_directory() . '/functions.php',
@@ -2749,13 +2749,13 @@ class AceRedisCache {
         $post_id = (int)$post_id; if (!$post_id) return;
         if (!$post || !is_post_type_viewable($post->post_type)) return;
         // Allow broad purge override
-        $broad = apply_filters('ace_rc_broad_page_cache_purge_on_post_update', false, $post_id, $post, $this->settings);
+        $broad = apply_filters('aceredis_broad_page_cache_purge_on_post_update', false, $post_id, $post, $this->settings);
         // Opt-in: instead of wiping everything on every save (which turns an import into a
         // site-wide cold start), mark all pages stale and let the background refresher re-render
         // them while visitors keep the stored copies. The saved post's own page is purged by the
         // caller; block caches still go. Sites whose object-cache data relies on the flush must
         // not opt in. Needs a grace window (see soft_purge_page_cache()); otherwise falls through.
-        if ($broad && apply_filters('ace_rc_soft_broad_purge', false, $post_id, $post, $this->settings)) {
+        if ($broad && apply_filters('aceredis_soft_broad_purge', false, $post_id, $post, $this->settings)) {
             static $soft_done = false;
             if ($soft_done || $this->soft_purge_page_cache()) {
                 if (!$soft_done && method_exists($this->cache_manager, 'clear_block_cache')) {
@@ -2861,7 +2861,7 @@ class AceRedisCache {
         }
         $paths = array_unique(array_merge($paths, $feed_paths));
         // Allow external filters to adjust
-        $paths = apply_filters('ace_rc_post_archive_invalidation_paths', $paths, $post_id, $post, $this->settings);
+        $paths = apply_filters('aceredis_post_archive_invalidation_paths', $paths, $post_id, $post, $this->settings);
         if (empty($paths)) return;
         $this->invalidate_paths($paths);
     }
@@ -2903,7 +2903,7 @@ class AceRedisCache {
         // redirect_canonical() to send guests to a non-public draft URL (404). Force immediate purge to prevent that.
         $critical_publish_transition = (!$was_published && $is_published);
         $slug_changed = ($post_before->post_name !== $post_after->post_name);
-        $force_immediate = apply_filters('ace_rc_force_immediate_invalidation_on_critical_change', ($critical_publish_transition || $slug_changed || $privacy_changed), $post_ID, $post_after, $post_before, $this->settings);
+        $force_immediate = apply_filters('aceredis_force_immediate_invalidation_on_critical_change', ($critical_publish_transition || $slug_changed || $privacy_changed), $post_ID, $post_after, $post_before, $this->settings);
         if ($this->should_defer_post_invalidation() && !$force_immediate) {
             $this->enqueue_deferred_post($post_ID, ['page'=>true,'archives'=>true,'transients'=>true,'blocks_full'=>true]);
             $this->enqueue_sitemap_prime_for_post($post_ID, $post_after);
@@ -2917,7 +2917,7 @@ class AceRedisCache {
         }
         $deleted = $this->maybe_flush_post_transients($post_ID, $post_after->post_type);
         if ($deleted === 0 && !empty($this->settings['enable_transient_cache'])) {
-            $allow_global = apply_filters('ace_rc_transient_global_flush_on_post_change', true, $post_ID, $post_after, $post_before);
+            $allow_global = apply_filters('aceredis_transient_global_flush_on_post_change', true, $post_ID, $post_after, $post_before);
             if ($allow_global) {
                 if (defined('WP_DEBUG') && WP_DEBUG) {
                     error_log('Ace-Redis-Cache: fallback global transient flush (no targeted matches) post_id=' . $post_ID);
@@ -2928,7 +2928,7 @@ class AceRedisCache {
         // Mark this post so the next anonymous render skips page & block cache storage (style-safe warm pass)
         $this->mark_post_requires_first_pass($post_ID);
         // Set global warm window so other pages also avoid premature capture if shared aggregated styles regenerate.
-        $warm_window = (int) apply_filters('ace_rc_global_asset_warm_window', 30, $post_ID, $post_after, $post_before, $this->settings);
+        $warm_window = (int) apply_filters('aceredis_global_asset_warm_window', 30, $post_ID, $post_after, $post_before, $this->settings);
         if ($warm_window > 0) {
             $this->set_global_asset_warm_until($warm_window);
             if (defined('WP_DEBUG') && WP_DEBUG) { error_log('Ace-Redis-Cache: global asset warm window +' . $warm_window . 's'); }
@@ -2999,7 +2999,7 @@ class AceRedisCache {
         $to_delete = array_unique($to_delete);
         if (!empty($to_delete)) {
             $this->cache_manager->delete_keys_chunked($to_delete, 500);
-            do_action('ace_rc_post_transients_flushed', $post_id, $post_type, count($to_delete), $to_delete);
+            do_action('aceredis_post_transients_flushed', $post_id, $post_type, count($to_delete), $to_delete);
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 error_log(sprintf('Ace-Redis-Cache: deleted %d transient keys for post_id=%d', count($to_delete), $post_id));
             }
@@ -3039,7 +3039,7 @@ class AceRedisCache {
         $all = array_unique($all);
         if (!empty($all)) {
             $this->cache_manager->delete_keys_chunked($all, 1000);
-            do_action('ace_rc_all_transients_flushed', $reason, count($all));
+            do_action('aceredis_all_transients_flushed', $reason, count($all));
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 error_log('Ace-Redis-Cache: global transient flush reason=' . $reason . ' deleted=' . count($all));
             }
@@ -3055,7 +3055,7 @@ class AceRedisCache {
 
     private function mark_post_requires_first_pass($post_id) {
         $post_id = (int)$post_id; if ($post_id <= 0 || !$this->cache_manager) return;
-        $ttl = max(60, (int) apply_filters('ace_rc_post_first_pass_marker_ttl', 600, $post_id, $this->settings));
+        $ttl = max(60, (int) apply_filters('aceredis_post_first_pass_marker_ttl', 600, $post_id, $this->settings));
         $this->cache_manager->set($this->get_post_first_pass_marker_key($post_id), (string) time(), $ttl);
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log('Ace-Redis-Cache: mark post first-pass skip id=' . $post_id);
@@ -3083,7 +3083,7 @@ class AceRedisCache {
 
     private function get_path_first_pass_marker_ttl() {
         $default_ttl = (int) ($this->settings['ttl_page'] ?? ($this->settings['ttl'] ?? 3600));
-        return max(60, (int) apply_filters('ace_rc_path_first_pass_marker_ttl', $default_ttl, $this->settings));
+        return max(60, (int) apply_filters('aceredis_path_first_pass_marker_ttl', $default_ttl, $this->settings));
     }
 
     private function get_path_first_pass_marker_key($path) {
@@ -3129,7 +3129,7 @@ class AceRedisCache {
         $found = 0; $need = 2; // require at least two markers
         foreach ($markers as $m) { if (strpos($html, $m) !== false) { $found++; if ($found >= $need) break; } }
         $result = ($found >= $need);
-        return apply_filters('ace_rc_style_asset_complete', $result, $found, $markers, $html);
+        return apply_filters('aceredis_style_asset_complete', $result, $found, $markers, $html);
     }
 
     private function compile_batched_transient_patterns($post_id) {
@@ -3164,7 +3164,7 @@ class AceRedisCache {
             'transient:litespeed_post_%d*',
         ];
 
-        $patterns = apply_filters('ace_rc_post_transient_patterns', $default_patterns, $post_id, '', $this->settings);
+        $patterns = apply_filters('aceredis_post_transient_patterns', $default_patterns, $post_id, '', $this->settings);
         $compiled = [];
         foreach ($patterns as $pattern) {
             if (!is_string($pattern) || strpos($pattern, '%d') === false) continue;
@@ -3179,7 +3179,7 @@ class AceRedisCache {
         if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
         if (!is_admin()) return; // only run from admin-originating saves
         // Set short no-cache window (60s) to avoid storing incomplete styles
-        set_transient('ace_rc_no_cache_window', 1, 60);
+        set_transient('aceredis_no_cache_window', 1, 60);
         // Sitemaps are intentionally deferred to cron to keep editor requests light.
         $this->enqueue_sitemap_prime_for_post($post_id, $post);
     }
@@ -3193,15 +3193,15 @@ class AceRedisCache {
     }
 
     /* ============================= Deferred Invalidation ============================= */
-    private $deferred_queue_option = 'ace_rc_deferred_invalidation_queue';
+    private $deferred_queue_option = 'aceredis_deferred_invalidation_queue';
     private $deferred_processing = false;
     private $deferred_shutdown_hooked = false;
-    private $sitemap_prime_queue_option = 'ace_rc_sitemap_prime_queue';
+    private $sitemap_prime_queue_option = 'aceredis_sitemap_prime_queue';
     private $deferred_queue_ttl = 3600;
     private $sitemap_prime_queue_ttl = 21600;
 
     private function should_defer_post_invalidation() {
-        return apply_filters('ace_rc_defer_post_invalidation', true, $this->settings) && !$this->deferred_processing;
+        return apply_filters('aceredis_defer_post_invalidation', true, $this->settings) && !$this->deferred_processing;
     }
 
     /**
@@ -3261,8 +3261,8 @@ class AceRedisCache {
     }
 
     private function schedule_deferred_runner() {
-        if (!wp_next_scheduled('ace_rc_run_deferred_invalidation')) {
-            @wp_schedule_single_event(time() + 3, 'ace_rc_run_deferred_invalidation');
+        if (!wp_next_scheduled('aceredis_run_deferred_invalidation')) {
+            @wp_schedule_single_event(time() + 3, 'aceredis_run_deferred_invalidation');
         }
     }
 
@@ -3323,7 +3323,7 @@ class AceRedisCache {
             $urls[] = home_url('/wp-sitemap-posts-' . $post->post_type . '-1.xml');
         }
 
-        $urls = apply_filters('ace_rc_sitemap_prime_urls', $urls, $post_id, $post, $this->settings);
+        $urls = apply_filters('aceredis_sitemap_prime_urls', $urls, $post_id, $post, $this->settings);
 
         $urls = array_values(array_unique(array_filter(array_map(function($url) {
             return is_string($url) ? trim($url) : '';
@@ -3341,30 +3341,30 @@ class AceRedisCache {
             if (is_string($info)) {
                 $n = preg_match_all('/^processor\s*:/m', $info);
             }
-            $n = max(1, (int) apply_filters('ace_rc_cpu_count', $n ?: 2));
+            $n = max(1, (int) apply_filters('aceredis_cpu_count', $n ?: 2));
         }
         return $n;
     }
 
     private function get_sitemap_prime_delay() {
-        return max(60, (int) apply_filters('ace_rc_sitemap_prime_delay', 300, $this->settings));
+        return max(60, (int) apply_filters('aceredis_sitemap_prime_delay', 300, $this->settings));
     }
 
     private function get_sitemap_prime_batch_size() {
-        return max(1, (int) apply_filters('ace_rc_sitemap_prime_batch_size', 10, $this->settings));
+        return max(1, (int) apply_filters('aceredis_sitemap_prime_batch_size', 10, $this->settings));
     }
 
     private function schedule_sitemap_prime_runner($delay = null) {
         $delay = $delay === null ? $this->get_sitemap_prime_delay() : max(1, (int) $delay);
-        $next = wp_next_scheduled('ace_rc_run_sitemap_prime_batch');
+        $next = wp_next_scheduled('aceredis_run_sitemap_prime_batch');
         // Bring a run that is further off than this caller needs forward (an edit's recache must not
         // wait behind the five-minute sitemap delay); never push one back.
         if ($next && $next > time() + $delay + 30) {
-            wp_unschedule_event($next, 'ace_rc_run_sitemap_prime_batch');
+            wp_unschedule_event($next, 'aceredis_run_sitemap_prime_batch');
             $next = false;
         }
         if (!$next) {
-            @wp_schedule_single_event(time() + $delay, 'ace_rc_run_sitemap_prime_batch');
+            @wp_schedule_single_event(time() + $delay, 'aceredis_run_sitemap_prime_batch');
         }
     }
 
@@ -3397,7 +3397,7 @@ class AceRedisCache {
         $batch_size = $this->get_sitemap_prime_batch_size();
         // System cron (WP-CLI) has minutes to spare; a web-triggered WP-Cron request does not.
         $is_cli = defined('WP_CLI') && WP_CLI;
-        $budget = (float) apply_filters('ace_rc_prime_time_budget', $is_cli ? 120 : 20, $this->settings);
+        $budget = (float) apply_filters('aceredis_prime_time_budget', $is_cli ? 120 : 20, $this->settings);
         // Keep elapsed work independent of wall-clock corrections; stored timestamps stay real dates.
         $started = hrtime(true) / 1e9;
         $urls = array_keys($queue);
@@ -3407,7 +3407,7 @@ class AceRedisCache {
         $args = [
             // A cold render can take several seconds; giving up early only abandons a render that
             // carries on server-side, so wait for it (requests run one at a time).
-            'timeout' => (int) apply_filters('ace_rc_prime_timeout', 25, $this->settings),
+            'timeout' => (int) apply_filters('aceredis_prime_timeout', 25, $this->settings),
             'redirection' => 2,
             'user-agent' => 'AceRedisCache-SitemapPrimer/1.0',
             'headers' => [ 'X-AceRedis-Sitemap-Prime' => '1' ],
@@ -3426,7 +3426,7 @@ class AceRedisCache {
             return;
         }
         $parallel = ($is_cli && $load < $cpus / 2 && class_exists('WpOrg\\Requests\\Requests'))
-            ? max(1, (int) apply_filters('ace_rc_prime_parallel', 3, $this->settings)) : 1;
+            ? max(1, (int) apply_filters('aceredis_prime_parallel', 3, $this->settings)) : 1;
 
         foreach (array_chunk($batch, $parallel) as $chunk) {
             if ($done && (hrtime(true) / 1e9 - $started) > $budget) {
@@ -3471,7 +3471,7 @@ class AceRedisCache {
 
         if (!empty($queue)) {
             $this->set_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option, $queue, $this->sitemap_prime_queue_ttl);
-            $this->schedule_sitemap_prime_runner((int) apply_filters('ace_rc_prime_continue_delay', 30, $this->settings));
+            $this->schedule_sitemap_prime_runner((int) apply_filters('aceredis_prime_continue_delay', 30, $this->settings));
         } else {
             $this->delete_runtime_queue($this->sitemap_prime_queue_option, $this->sitemap_prime_queue_option);
         }
@@ -3625,24 +3625,24 @@ class AceRedisCache {
      * styles, classic menu items): an edit makes the whole site stale.
      */
     private function sitewide_recache_post_types() {
-        return (array) apply_filters('ace_rc_sitewide_recache_post_types', [
+        return (array) apply_filters('aceredis_sitewide_recache_post_types', [
             'wp_template', 'wp_template_part', 'wp_navigation', 'wp_global_styles', 'nav_menu_item',
         ], $this->settings);
     }
 
     private function recache_on_edit_enabled() {
         return !empty($this->settings['enable_page_cache']) && $this->cache_manager
-            && apply_filters('ace_rc_recache_on_edit', true, $this->settings);
+            && apply_filters('aceredis_recache_on_edit', true, $this->settings);
     }
 
     /**
      * Whether an edit's pages are re-rendered straight away or only marked stale (refreshed when
      * next visited). Asked when the post is saved, not when cron gets to it, because sites turn
-     * priming off for bulk imports and cron/CLI saves through ace_rc_enable_cache_priming
+     * priming off for bulk imports and cron/CLI saves through aceredis_enable_cache_priming
      * (one site: an import queued 919 primes and put the box under load 17).
      */
     private function recache_priming_allowed($post_id) {
-        return (bool) apply_filters('ace_rc_enable_cache_priming', true, (int) $post_id, $this->settings);
+        return (bool) apply_filters('aceredis_enable_cache_priming', true, (int) $post_id, $this->settings);
     }
 
     /**
@@ -3695,7 +3695,7 @@ class AceRedisCache {
             if (!$redis) {
                 return;
             }
-            $key = $this->site_scoped_key('ace_rc_recache_posts');
+            $key = $this->site_scoped_key('aceredis_recache_posts');
             $redis->rawCommand('SADD', $key, (int) $post_id . ':' . ($this->recache_priming_allowed($post_id) ? 1 : 0));
             $redis->rawCommand('EXPIRE', $key, (string) $this->deferred_queue_ttl);
         } catch (\Throwable $t) {
@@ -3709,7 +3709,7 @@ class AceRedisCache {
         $taken = [];
         try {
             $redis = $this->cache_manager ? $this->cache_manager->get_redis_connection()->get_connection() : null;
-            $members = $redis ? $redis->rawCommand('SPOP', $this->site_scoped_key('ace_rc_recache_posts'), (string) (int) $limit) : [];
+            $members = $redis ? $redis->rawCommand('SPOP', $this->site_scoped_key('aceredis_recache_posts'), (string) (int) $limit) : [];
         } catch (\Throwable $t) {
             $members = [];
         }
@@ -3726,7 +3726,7 @@ class AceRedisCache {
     private function has_queued_recache_posts() {
         try {
             $redis = $this->cache_manager ? $this->cache_manager->get_redis_connection()->get_connection() : null;
-            return $redis && (int) $redis->rawCommand('SCARD', $this->site_scoped_key('ace_rc_recache_posts')) > 0;
+            return $redis && (int) $redis->rawCommand('SCARD', $this->site_scoped_key('aceredis_recache_posts')) > 0;
         } catch (\Throwable $t) {
             return false;
         }
@@ -3899,7 +3899,7 @@ class AceRedisCache {
     /**
      * The URLs whose cached copy shows this post somewhere other than its own page: the home
      * page, the posts page, its post type archive and its term archives (the author archive
-     * only for posts). Filter: ace_rc_recache_related_urls.
+     * only for posts). Filter: aceredis_recache_related_urls.
      */
     private function related_listing_urls(\WP_Post $post) {
         $urls = [home_url('/')];
@@ -3929,7 +3929,7 @@ class AceRedisCache {
         if ($post->post_type === 'post') {
             $urls[] = get_author_posts_url((int) $post->post_author);
         }
-        return (array) apply_filters('ace_rc_recache_related_urls', array_values(array_unique(array_filter($urls))), $post, $this->settings);
+        return (array) apply_filters('aceredis_recache_related_urls', array_values(array_unique(array_filter($urls))), $post, $this->settings);
     }
 
     /**
@@ -3956,7 +3956,7 @@ class AceRedisCache {
         }
         $urls = $post->post_status === 'publish' ? [get_permalink($post)] : [];
         $urls = array_merge($urls, $this->related_listing_urls($post));
-        return [(array) apply_filters('ace_rc_recache_urls', array_values(array_unique(array_filter($urls))), $post, $this->settings), false];
+        return [(array) apply_filters('aceredis_recache_urls', array_values(array_unique(array_filter($urls))), $post, $this->settings), false];
     }
 
     private function synced_pattern_targets(\WP_Post $pattern, $depth, array &$seen) {
@@ -3997,14 +3997,14 @@ class AceRedisCache {
     }
 
     /**
-     * The broad purge an edit asks for (ace_rc_broad_page_cache_purge_on_post_update), done the
+     * The broad purge an edit asks for (aceredis_broad_page_cache_purge_on_post_update), done the
      * recache way: when the site has a grace window every page is marked stale (soft purge) and
      * refreshed in the background as it is visited, so nobody meets a cold page. A site without
      * one cannot serve stale, so it keeps the old wipe. Returns true when it wiped. The caller
-     * has already asked ace_rc_broad_page_cache_purge_on_post_update.
+     * has already asked aceredis_broad_page_cache_purge_on_post_update.
      */
     private function recache_broad_purge($post_id, $post) {
-        if (apply_filters('ace_rc_soft_broad_purge', true, $post_id, $post, $this->settings) && $this->soft_purge_page_cache()) {
+        if (apply_filters('aceredis_soft_broad_purge', true, $post_id, $post, $this->settings) && $this->soft_purge_page_cache()) {
             if (method_exists($this->cache_manager, 'clear_block_cache')) {
                 $this->cache_manager->clear_block_cache();
             }
@@ -4059,7 +4059,7 @@ class AceRedisCache {
             $variants = array_values(array_filter($variants, static function ($variant) { return strpos($variant, '?') !== false; }));
             if ($variants) $this->invalidate_paths($variants);
         }
-        $max = max(1, (int) apply_filters('ace_rc_recache_max_urls', 100, $this->settings));
+        $max = max(1, (int) apply_filters('aceredis_recache_max_urls', 100, $this->settings));
         $queue = [];
         $entries = [];
         foreach (array_values(array_unique(array_filter(array_map('strval', $urls)))) as $url) {
@@ -4225,7 +4225,7 @@ class AceRedisCache {
     /**
      * After a full cache clear, schedule a background warm of the key WooCommerce URLs so the
      * storefront never faces a cold-cache stampede (e.g. right after a deploy). Auto-active when
-     * WooCommerce is present; disable via the wc_smart_cache setting. Fired by ace_rc_cache_cleared.
+     * WooCommerce is present; disable via the wc_smart_cache setting. Fired by aceredis_cache_cleared.
      *
      * @param string $context Origin label for diagnostics.
      */
@@ -4237,8 +4237,8 @@ class AceRedisCache {
         if ($this->cache_manager && method_exists($this->cache_manager, 'add') && !$this->cache_manager->add('ace_rc:wc_warm_lock', 1, 60)) {
             return;
         }
-        if (!wp_next_scheduled('ace_rc_warm_woocommerce', [(string) $context])) {
-            wp_schedule_single_event(time() + 5, 'ace_rc_warm_woocommerce', [(string) $context]);
+        if (!wp_next_scheduled('aceredis_warm_woocommerce', [(string) $context])) {
+            wp_schedule_single_event(time() + 5, 'aceredis_warm_woocommerce', [(string) $context]);
         }
     }
 
@@ -4251,7 +4251,7 @@ class AceRedisCache {
         if (!class_exists('WooCommerce') || empty($this->settings['wc_smart_cache'])) {
             return;
         }
-        $urls = apply_filters('ace_rc_woocommerce_warm_urls', $this->get_woocommerce_warm_urls(), $context, $this->settings);
+        $urls = apply_filters('aceredis_woocommerce_warm_urls', $this->get_woocommerce_warm_urls(), $context, $this->settings);
         $this->enqueue_prime_urls((array) $urls);
         if (defined('WP_DEBUG') && WP_DEBUG) {
             error_log('Ace-Redis-Cache: WooCommerce warm queued ' . count((array) $urls) . ' urls (context=' . $context . ')');
@@ -4334,14 +4334,14 @@ class AceRedisCache {
     }
 
     /**
-     * How long this response counts as fresh. Sites set it per request through `ace_rc_page_ttl`
+     * How long this response counts as fresh. Sites set it per request through `aceredis_page_ttl`
      * (a listing that changes hourly, a single event that changes when it is edited). The URI
      * the filters see is the normalised one the entry is keyed by, so an ad click's tracking
      * parameters never give the clean page a query-string lifetime.
      */
     private function page_cache_fresh_ttl() {
         $ttl = (int) ($this->settings['ttl_page'] ?? 3600);
-        $ttl = (int) apply_filters('ace_rc_page_ttl', $ttl, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings);
+        $ttl = (int) apply_filters('aceredis_page_ttl', $ttl, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings);
         $cap = self::page_cache_max_ttl($this->settings);
         if ($cap > 0 && $ttl > $cap) { $ttl = $cap; }
         return max(60, $ttl);
@@ -4351,11 +4351,11 @@ class AceRedisCache {
      * Percentage (0 to 50) by which a page's fresh lifetime may be cut at random when it is
      * stored, so pages warmed together do not all soft-expire in the same minute and refill the
      * prime queue in one burst. Off (0) unless the `page_cache_ttl_jitter` setting or the
-     * `ace_rc_page_ttl_jitter` filter turns it on.
+     * `aceredis_page_ttl_jitter` filter turns it on.
      */
     private function page_cache_ttl_jitter() {
         $pct = (int) ($this->settings['page_cache_ttl_jitter'] ?? 0);
-        return max(0, min(50, (int) apply_filters('ace_rc_page_ttl_jitter', $pct, $this->settings)));
+        return max(0, min(50, (int) apply_filters('aceredis_page_ttl_jitter', $pct, $this->settings)));
     }
 
     /**
@@ -4371,11 +4371,11 @@ class AceRedisCache {
     /**
      * The window after freshness in which a stale copy is still served while one background
      * refresh runs. It used to need WooCommerce's smart cache; any site with `page_cache_grace`
-     * set, or the `ace_rc_page_grace` filter, gets it.
+     * set, or the `aceredis_page_grace` filter, gets it.
      */
     private function page_cache_grace() {
         $grace = (int) ($this->settings['page_cache_grace'] ?? 0);
-        return max(0, (int) apply_filters('ace_rc_page_grace', $grace, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings));
+        return max(0, (int) apply_filters('aceredis_page_grace', $grace, self::normalize_request_uri($_SERVER['REQUEST_URI'] ?? '/'), $this->settings));
     }
 
     /**
@@ -4386,7 +4386,7 @@ class AceRedisCache {
      *
      * Coalesced: every soft purge marks the whole site stale, and imports, feeds and publishing
      * can call this many times an hour, which kept the refresher re-rendering the site all day.
-     * Within ace_rc_soft_purge_min_interval (default 300s) of the last one, a call schedules a
+     * Within aceredis_soft_purge_min_interval (default 300s) of the last one, a call schedules a
      * single trailing purge at the end of the window and reports success, so nothing waits
      * longer than the window. $force (deploys: a new release renders differently) skips it.
      *
@@ -4394,16 +4394,16 @@ class AceRedisCache {
      * @return bool False when there is no cache connection (callers should fall back to a purge).
      */
     public function soft_purge_page_cache($force = false) {
-        if (!$this->cache_manager || $this->page_cache_grace_default() <= 0 && !has_filter('ace_rc_page_grace')) {
+        if (!$this->cache_manager || $this->page_cache_grace_default() <= 0 && !has_filter('aceredis_page_grace')) {
             return false;
         }
-        $min = (int) apply_filters('ace_rc_soft_purge_min_interval', 300, $this->settings);
+        $min = (int) apply_filters('aceredis_soft_purge_min_interval', 300, $this->settings);
         if (!$force && $min > 0) {
             $last = 0;
             try { $last = (int) $this->cache_manager->get($this->site_page_epoch_key()); } catch (\Throwable $t) {}
             if ($last > 0 && time() - $last < $min) {
-                if (function_exists('wp_next_scheduled') && !wp_next_scheduled('ace_rc_deferred_soft_purge')) {
-                    wp_schedule_single_event($last + $min + 5, 'ace_rc_deferred_soft_purge');
+                if (function_exists('wp_next_scheduled') && !wp_next_scheduled('aceredis_deferred_soft_purge')) {
+                    wp_schedule_single_event($last + $min + 5, 'aceredis_deferred_soft_purge');
                 }
                 return true;
             }
@@ -4423,7 +4423,7 @@ class AceRedisCache {
             }
         } catch (\Throwable $t) {}
         $this->page_epoch = time();
-        do_action('ace_rc_page_epoch_bumped');
+        do_action('aceredis_page_epoch_bumped');
         return true;
     }
 
@@ -4593,7 +4593,7 @@ class AceRedisCache {
                 // One broad purge per run, however many posts it holds (a second soft purge inside
                 // the coalescing window would only schedule another one).
                 if (!$broad_done && is_post_type_viewable($post->post_type)
-                    && apply_filters('ace_rc_broad_page_cache_purge_on_post_update', false, $pid, $post, $this->settings)) {
+                    && apply_filters('aceredis_broad_page_cache_purge_on_post_update', false, $pid, $post, $this->settings)) {
                     $broad_done = true;
                     $wiped = $this->recache_broad_purge($pid, $post);
                 }
@@ -4791,7 +4791,7 @@ class AceRedisCache {
     public function on_activation($network_wide = false) {
         // Ensure option exists in the active scope.
         $use_network_scope = is_multisite() && (bool) $network_wide;
-        $existing = $use_network_scope ? get_site_option('ace_redis_cache_settings', null) : SettingsStore::get_settings(null);
+        $existing = $use_network_scope ? get_site_option(ACEREDIS_SETTINGS_OPTION, null) : SettingsStore::get_settings(null);
         if ($existing === null) {
             // Build defaults (mirrors load_settings defaults)
             $defaults = [
@@ -4834,13 +4834,13 @@ class AceRedisCache {
                 'prefer_existing_static_cache_headers' => 1,
             ];
             if ($use_network_scope) {
-                add_site_option('ace_redis_cache_settings', $defaults);
+                add_site_option(ACEREDIS_SETTINGS_OPTION, $defaults);
             } else {
                 SettingsStore::ensure_settings_exists($defaults);
             }
             if (!SettingsStore::is_network_mode() && function_exists('wp_cache_delete')) {
                 @wp_cache_delete('notoptions', 'options');
-                @wp_cache_delete('ace_redis_cache_settings', 'options');
+                @wp_cache_delete(ACEREDIS_SETTINGS_OPTION, 'options');
                 @wp_cache_delete('alloptions', 'options');
             }
         }
@@ -4889,7 +4889,7 @@ class AceRedisCache {
 
         // Proactively clear any cached copy (defensive; our drop-in now bypasses but keep for other caches).
         if (!SettingsStore::is_network_mode() && function_exists('wp_cache_delete')) {
-            @wp_cache_delete('ace_redis_cache_settings', 'options');
+            @wp_cache_delete(ACEREDIS_SETTINGS_OPTION, 'options');
         }
 
         // Reinitialize components with new settings.
@@ -4935,13 +4935,13 @@ class AceRedisCache {
         $message = 'Settings were saved, but the Apache cache rules could not be updated. Your existing rules were left in place. Check file ownership and directory permissions, then save again.';
         SettingsStore::report_file_write_error($message);
         if (function_exists('add_settings_error')) {
-            add_settings_error('ace_redis_cache_settings', 'ace_rc_htaccess_write_failed', $message, 'error');
+            add_settings_error(ACEREDIS_SETTINGS_OPTION, 'aceredis_htaccess_write_failed', $message, 'error');
         }
         return false;
     }
 
     /**
-     * Wrapper for update_site_option_ace_redis_cache_settings action.
+     * Wrapper for update_site_option_aceredis_cache_settings action.
      */
     public function on_site_settings_updated($option, $value, $old_value, $network_id = null) {
         $this->on_settings_updated($old_value, $value);
@@ -5040,7 +5040,7 @@ class AceRedisCache {
         ]));
 
         foreach ($probe_candidates as $probe_url) {
-            $response = wp_remote_head(add_query_arg('ace_rc_probe', (string) time(), $probe_url), [
+            $response = wp_remote_head(add_query_arg('aceredis_probe', (string) time(), $probe_url), [
                 'timeout' => 4,
                 'redirection' => 2,
                 'sslverify' => true,
@@ -5072,18 +5072,18 @@ class AceRedisCache {
      */
     public function upgrade_managed_dropins() {
         if (!current_user_can(SettingsStore::is_network_mode() ? 'manage_network_options' : 'manage_options')) return;
-        if (SettingsStore::get('ace_rc_dropin_version') === ACE_REDIS_CACHE_VERSION) return;
+        if (SettingsStore::get('aceredis_dropin_version') === ACEREDIS_CACHE_VERSION) return;
         $ok = DropinManager::refresh_existing($this->plugin_path, WP_CONTENT_DIR);
         // A version-only update preserves installed state even if old saved flags drifted.
         // Failed writes are retried on the next administrator request.
-        if ($ok) SettingsStore::update('ace_rc_dropin_version', ACE_REDIS_CACHE_VERSION);
+        if ($ok) SettingsStore::update('aceredis_dropin_version', ACEREDIS_CACHE_VERSION);
     }
 
     private function maybe_manage_dropin() {
         $enabled = (bool)($this->settings['enable_object_cache_dropin'] ?? 0);
         $ok = DropinManager::manage($this->plugin_path . '/assets/dropins/object-cache.php', WP_CONTENT_DIR . '/object-cache.php', 'Ace Redis Cache Drop-In', $enabled);
-        if ($ok) delete_transient('ace_redis_dropin_error');
-        else set_transient('ace_redis_dropin_error', 'The object-cache.php file could not be updated. Check directory permissions and remove another cache plugin through its own settings first. Symlinks and foreign drop-ins are preserved.', DAY_IN_SECONDS);
+        if ($ok) delete_transient('aceredis_dropin_error');
+        else set_transient('aceredis_dropin_error', 'The object-cache.php file could not be updated. Check directory permissions and remove another cache plugin through its own settings first. Symlinks and foreign drop-ins are preserved.', DAY_IN_SECONDS);
         return $ok;
     }
 
@@ -5095,7 +5095,7 @@ class AceRedisCache {
         if (!current_user_can('manage_options')) {
             return;
         }
-        $msg = get_transient('ace_redis_dropin_error');
+        $msg = get_transient('aceredis_dropin_error');
         if (!$msg) {
             return;
         }
@@ -5142,7 +5142,7 @@ class AceRedisCache {
     }
 
     /**
-     * Wrapper for pre_update_site_option_ace_redis_cache_settings filter.
+     * Wrapper for pre_update_site_option_aceredis_cache_settings filter.
      */
     public function pre_update_site_settings_trace($new_value, $old_value, $option = null) {
         return $this->pre_update_settings_trace($new_value, $old_value);
@@ -5259,7 +5259,7 @@ class AceRedisCache {
     }
 
     public function maybe_serve_asset_proxy_request() {
-        $asset = isset($_GET['ace_rc_asset']) && is_string($_GET['ace_rc_asset']) ? sanitize_text_field(wp_unslash($_GET['ace_rc_asset'])) : '';
+        $asset = isset($_GET['aceredis_asset']) && is_string($_GET['aceredis_asset']) ? sanitize_text_field(wp_unslash($_GET['aceredis_asset'])) : '';
         if ($asset === '') {
             return;
         }
@@ -5285,12 +5285,12 @@ class AceRedisCache {
         if (empty($this->settings['optimize_lazy_images']) || !is_string($content) || $content === '') {
             return $content;
         }
-        $skip = (int) apply_filters('ace_rc_lazy_skip_first', 3);
+        $skip = (int) apply_filters('aceredis_lazy_skip_first', 3);
         // Never lazy a product's primary visuals: WooCommerce single/gallery images and
         // cover backgrounds sit above the fold, and lazying them bypasses the browser's
         // preload scanner — they visibly pop in late (worst on high-latency connections).
         $exclude = (string) apply_filters(
-            'ace_rc_lazy_exclude_pattern',
+            'aceredis_lazy_exclude_pattern',
             'woocommerce_single|woocommerce-product-gallery|wp-post-image|wp-block-cover__image|custom-logo|attachment-shop_single'
         );
         $seen = 0;
@@ -5744,9 +5744,9 @@ class AceRedisCache {
         }
         
         // Potential enhancement: maintain a registry of active transients
-        // $registry = get_option('ace_redis_cache_transient_registry', []);
+        // $registry = get_option('aceredis_cache_transient_registry', []);
         // $registry["{$group}:{$key}"] = time();
-        // update_option('ace_redis_cache_transient_registry', $registry, false);
+        // update_option('aceredis_cache_transient_registry', $registry, false);
     }
 
     /**
@@ -5766,9 +5766,9 @@ class AceRedisCache {
         }
         
         // Potential enhancement: remove from registry
-        // $registry = get_option('ace_redis_cache_transient_registry', []);
+        // $registry = get_option('aceredis_cache_transient_registry', []);
         // unset($registry["{$group}:{$key}"]);
-        // update_option('ace_redis_cache_transient_registry', $registry, false);
+        // update_option('aceredis_cache_transient_registry', $registry, false);
     }
 
     /**
@@ -5805,7 +5805,7 @@ class AceRedisCache {
      */
     private function should_force_transient_flush() {
         // Force flush when explicitly requested
-        if (defined('ACE_FORCE_TRANSIENT_FLUSH') && ACE_FORCE_TRANSIENT_FLUSH) {
+        if (defined('ACEREDIS_FORCE_TRANSIENT_FLUSH') && ACEREDIS_FORCE_TRANSIENT_FLUSH) {
             return true;
         }
         
@@ -5823,7 +5823,7 @@ class AceRedisCache {
         }
         
         // Allow filtering for custom scenarios
-        return apply_filters('ace_rc_force_transient_flush', false, $_REQUEST);
+        return apply_filters('aceredis_force_transient_flush', false, $_REQUEST);
     }
 
     /**
@@ -5848,7 +5848,7 @@ class AceRedisCache {
             'transient:rank_math_permalink_' . $post_id,
         ];
         
-        $critical_patterns = apply_filters('ace_rc_critical_transient_patterns', $critical_patterns, $post_id, $post_type);
+        $critical_patterns = apply_filters('aceredis_critical_transient_patterns', $critical_patterns, $post_id, $post_type);
         
         $deleted = 0;
         foreach ($critical_patterns as $key) {

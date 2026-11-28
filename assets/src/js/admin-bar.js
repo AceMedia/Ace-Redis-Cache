@@ -1,11 +1,11 @@
 (function () {
     'use strict';
 
-    if (!window.ace_redis_admin_bar) {
+    if (!window.aceredis_admin_bar) {
         return;
     }
 
-    var config = window.ace_redis_admin_bar;
+    var config = window.aceredis_admin_bar;
     var pollTimer = null;
 
     function getStatusElement() {

@@ -43,15 +43,15 @@ class AdminAjax {
      * Setup AJAX hooks
      */
     public function setup_hooks() {
-        add_action('wp_ajax_ace_redis_cache_status', [$this, 'handle_status_request']);
-        add_action('wp_ajax_ace_redis_cache_flush', [$this, 'handle_flush_request']);
-        add_action('wp_ajax_ace_redis_cache_flush_blocks', [$this, 'handle_flush_blocks_request']);
-        add_action('wp_ajax_ace_redis_cache_test_write', [$this, 'handle_test_write_request']);
-        add_action('wp_ajax_ace_redis_cache_diagnostics', [$this, 'handle_diagnostics_request']);
-        add_action('wp_ajax_ace_redis_cache_metrics', [$this, 'handle_metrics_request']);
-        add_action('wp_ajax_ace_redis_cache_save_settings', [$this, 'handle_save_settings']);
-        add_action('wp_ajax_ace_redis_dismiss_notice', [$this, 'handle_dismiss_notice']);
-        add_action('wp_ajax_ace_redis_toggle_autosave', [$this, 'handle_toggle_autosave']);
+        add_action('wp_ajax_aceredis_cache_status', [$this, 'handle_status_request']);
+        add_action('wp_ajax_aceredis_cache_flush', [$this, 'handle_flush_request']);
+        add_action('wp_ajax_aceredis_cache_flush_blocks', [$this, 'handle_flush_blocks_request']);
+        add_action('wp_ajax_aceredis_cache_test_write', [$this, 'handle_test_write_request']);
+        add_action('wp_ajax_aceredis_cache_diagnostics', [$this, 'handle_diagnostics_request']);
+        add_action('wp_ajax_aceredis_cache_metrics', [$this, 'handle_metrics_request']);
+        add_action('wp_ajax_aceredis_cache_save_settings', [$this, 'handle_save_settings']);
+        add_action('wp_ajax_aceredis_dismiss_notice', [$this, 'handle_dismiss_notice']);
+        add_action('wp_ajax_aceredis_toggle_autosave', [$this, 'handle_toggle_autosave']);
     }
     
     /**
@@ -72,7 +72,7 @@ class AdminAjax {
      * Handle Redis status request
      */
     public function handle_status_request() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -122,7 +122,7 @@ class AdminAjax {
      * Handle cache flush request
      */
     public function handle_flush_request() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -152,7 +152,7 @@ class AdminAjax {
      * Handle block cache flush request
      */
     public function handle_flush_blocks_request() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -182,7 +182,7 @@ class AdminAjax {
      * Handle Redis write test request
      */
     public function handle_test_write_request() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -214,7 +214,7 @@ class AdminAjax {
      * Handle diagnostics request
      */
     public function handle_diagnostics_request() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -232,7 +232,7 @@ class AdminAjax {
      * Handle save settings request
      */
     public function handle_save_settings() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -243,7 +243,7 @@ class AdminAjax {
             
             // Parse form data
             parse_str(isset($_POST['form_data']) && is_string($_POST['form_data']) ? wp_unslash($_POST['form_data']) : '', $form_data);
-            $new_settings = $form_data['ace_redis_cache_settings'] ?? [];
+            $new_settings = $form_data['aceredis_cache_settings'] ?? [];
             
             // Validate and sanitize settings
             $validated_settings = $this->validate_settings($new_settings);
@@ -427,7 +427,7 @@ class AdminAjax {
      * Handle metrics request
      */
     public function handle_metrics_request() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
@@ -498,14 +498,14 @@ class AdminAjax {
      * Handle notice dismissal
      */
     public function handle_dismiss_notice() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_dismiss') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_dismiss') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
         
         $version = sanitize_text_field(isset($_POST['version']) && is_string($_POST['version']) ? wp_unslash($_POST['version']) : '');
         if ($version) {
-            SettingsStore::update('ace_redis_cache_dismissed_version', $version);
+            SettingsStore::update('aceredis_cache_dismissed_version', $version);
             $this->send_response(['dismissed' => true]);
         } else {
             $this->send_response('Invalid version', false);
@@ -516,12 +516,12 @@ class AdminAjax {
      * Persist user auto-save preference
      */
     public function handle_toggle_autosave() {
-        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'ace_redis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
+        if (!wp_verify_nonce((isset($_POST['nonce']) && is_string($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : ''), 'aceredis_admin_nonce') || !current_user_can($this->get_manage_capability())) {
             $this->send_response('Unauthorized', false);
             return;
         }
         $enabled = isset($_POST['enabled']) ? (int) !!$_POST['enabled'] : 1;
-        update_user_meta(get_current_user_id(), 'ace_rc_auto_save_enabled', $enabled);
+        update_user_meta(get_current_user_id(), 'aceredis_auto_save_enabled', $enabled);
         $this->send_response(['enabled' => $enabled]);
     }
     

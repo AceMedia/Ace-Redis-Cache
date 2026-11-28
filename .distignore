@@ -5,6 +5,7 @@
 /node_modules
 /src
 /tests
+/compat
 /bin
 /docs
 /styles

@@ -10,6 +10,15 @@ if (!defined('ABSPATH')) {
     return;
 }
 
+// aceredis-source-only:start
+// Sites set these in wp-config.php under the names used before 0.10.0.
+foreach (array('ACE_FORCE_TRANSIENT_FLUSH', 'ACE_OC_ADMIN_CACHE_SUSPENDED', 'ACE_OC_ADMIN_READ', 'ACE_OC_BYPASS', 'ACE_OC_FLUSHDB_ON_SAVE', 'ACE_OC_FLUSH_ON_POST_CHANGE', 'ACE_OC_MAX_TTL', 'ACE_OC_MEMBER_READ', 'ACE_OC_NO_PUBLIC_AJAX', 'ACE_OC_PROF', 'ACE_OC_RUNTIME_ONLY', 'ACE_OC_SHARED_TRANSIENTS', 'ACE_OC_SLOW_LOG', 'ACE_OC_SLOW_LOG_MS', 'ACE_OC_WC_READ', 'ACE_RC_BLOCK_CACHE', 'ACE_RC_EXIT_ON_HIT', 'ACE_RC_VARNISH', 'ACE_RC_VARNISH_HOST', 'ACE_REDIS_DB', 'ACE_REDIS_EARLY_REFRESH_ADDR', 'ACE_REDIS_EARLY_SERVE', 'ACE_REDIS_EARLY_STALE', 'ACE_REDIS_EARLY_STALE_BLOCKS', 'ACE_REDIS_HOST', 'ACE_REDIS_MAX_RETRIES', 'ACE_REDIS_OP_TIMEOUT', 'ACE_REDIS_PAGE_DB', 'ACE_REDIS_PAGE_HOST', 'ACE_REDIS_PAGE_PASSWORD', 'ACE_REDIS_PAGE_PORT', 'ACE_REDIS_PASSWORD', 'ACE_REDIS_PORT', 'ACE_REDIS_READ_TIMEOUT', 'ACE_REDIS_SOCKET', 'ACE_REDIS_TIMEOUT', 'ACE_REDIS_USE_TLS', 'ACE_REDIS_VERIFY_TLS') as $aceredis_old) {
+    $aceredis_new = 'ACEREDIS_' . substr($aceredis_old, 0 === strpos($aceredis_old, 'ACE_REDIS_') ? 10 : (0 === strpos($aceredis_old, 'ACE_OC_') ? 4 : (0 === strpos($aceredis_old, 'ACE_RC_') ? 7 : 4)));
+    if (defined($aceredis_old) && !defined($aceredis_new)) { define($aceredis_new, constant($aceredis_old)); }
+}
+unset($aceredis_old, $aceredis_new);
+// aceredis-source-only:end
+
 // Older WordPress versions use live page rendering; never replay an old stored page.
 if (empty($GLOBALS['wp_version']) || version_compare($GLOBALS['wp_version'], '6.9', '<')) return;
 
@@ -146,21 +155,21 @@ $device = $mobile ? 'mobile' : 'desktop';
 $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
 $host = preg_replace('/:\d+$/', '', $host);
 
-$redis_host = defined('ACE_REDIS_HOST') ? ACE_REDIS_HOST : (defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1');
-$redis_port = defined('ACE_REDIS_PORT') ? (int) ACE_REDIS_PORT : (defined('WP_REDIS_PORT') ? (int) WP_REDIS_PORT : 6379);
-$redis_pass = defined('ACE_REDIS_PASSWORD') ? ACE_REDIS_PASSWORD : (defined('WP_REDIS_PASSWORD') ? WP_REDIS_PASSWORD : '');
-$redis_timeout = defined('ACE_REDIS_TIMEOUT') ? (float) ACE_REDIS_TIMEOUT : 0.5;
-$redis_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : 0;
-$redis_socket = defined('ACE_REDIS_SOCKET') ? ACE_REDIS_SOCKET : '/var/run/redis/redis.sock';
+$redis_host = defined('ACEREDIS_HOST') ? ACEREDIS_HOST : (defined('WP_REDIS_HOST') ? WP_REDIS_HOST : '127.0.0.1');
+$redis_port = defined('ACEREDIS_PORT') ? (int) ACEREDIS_PORT : (defined('WP_REDIS_PORT') ? (int) WP_REDIS_PORT : 6379);
+$redis_pass = defined('ACEREDIS_PASSWORD') ? ACEREDIS_PASSWORD : (defined('WP_REDIS_PASSWORD') ? WP_REDIS_PASSWORD : '');
+$redis_timeout = defined('ACEREDIS_TIMEOUT') ? (float) ACEREDIS_TIMEOUT : 0.5;
+$redis_db = defined('ACEREDIS_DB') ? (int) ACEREDIS_DB : 0;
+$redis_socket = defined('ACEREDIS_SOCKET') ? ACEREDIS_SOCKET : '/var/run/redis/redis.sock';
 // Page cache on a different Redis from the object cache (e.g. ElastiCache for pages while the object
-// cache stays on a local socket): ACE_REDIS_PAGE_* points this file at the page store only, without
-// moving object-cache.php, which also reads ACE_REDIS_HOST. Use 'tls://host' for TLS endpoints.
-if (defined('ACE_REDIS_PAGE_HOST') && ACE_REDIS_PAGE_HOST !== '') {
-    $redis_host = ACE_REDIS_PAGE_HOST;
+// cache stays on a local socket): ACEREDIS_PAGE_* points this file at the page store only, without
+// moving object-cache.php, which also reads ACEREDIS_HOST. Use 'tls://host' for TLS endpoints.
+if (defined('ACEREDIS_PAGE_HOST') && ACEREDIS_PAGE_HOST !== '') {
+    $redis_host = ACEREDIS_PAGE_HOST;
     $redis_socket = '';
-    if (defined('ACE_REDIS_PAGE_PORT')) { $redis_port = (int) ACE_REDIS_PAGE_PORT; }
-    if (defined('ACE_REDIS_PAGE_PASSWORD')) { $redis_pass = ACE_REDIS_PAGE_PASSWORD; }
-    if (defined('ACE_REDIS_PAGE_DB')) { $redis_db = (int) ACE_REDIS_PAGE_DB; }
+    if (defined('ACEREDIS_PAGE_PORT')) { $redis_port = (int) ACEREDIS_PAGE_PORT; }
+    if (defined('ACEREDIS_PAGE_PASSWORD')) { $redis_pass = ACEREDIS_PAGE_PASSWORD; }
+    if (defined('ACEREDIS_PAGE_DB')) { $redis_db = (int) ACEREDIS_PAGE_DB; }
 }
 
 if (!class_exists('Redis')) {
@@ -168,10 +177,10 @@ if (!class_exists('Redis')) {
 }
 
 // Early-serve is DARK-LAUNCHED by default: advanced-cache reconstructs the key, looks it up, and emits an
-// X-Ace-Early: HIT/MISS diagnostic header — but only short-circuits WordPress when ACE_REDIS_EARLY_SERVE is
+// X-Ace-Early: HIT/MISS diagnostic header — but only short-circuits WordPress when ACEREDIS_EARLY_SERVE is
 // defined and true. This lets the key-match rate be validated on live (and requires the page entries to be
 // raw, i.e. the SERIALIZER_NONE end-state) before any request is actually served pre-boot.
-$early_serve = defined('ACE_REDIS_EARLY_SERVE') && ACE_REDIS_EARLY_SERVE;
+$early_serve = defined('ACEREDIS_EARLY_SERVE') && ACEREDIS_EARLY_SERVE;
 $emit = function($label) use ($early_serve) {
     if (!headers_sent()) {
         header('X-Ace-Early: ' . $label . ($early_serve ? '' : '; dark-launch'));
@@ -263,7 +272,7 @@ try {
     // after every deploy or import purge the whole site lost this fast path until the one-at-a-time
     // refresher got round to each page. Now the stored copy is served here and the refresh is
     // queued in Redis (one per page per 45s); the plugin drains that queue into its refresher.
-    // Define ACE_REDIS_EARLY_STALE false to hand stale pages to WordPress as before.
+    // Define ACEREDIS_EARLY_STALE false to hand stale pages to WordPress as before.
     $stale = '';
     $fresh = $redis->get('ace:1:fresh:' . $core_key);
     $epoch = $redis->get($token_ns . 'epoch');
@@ -276,7 +285,7 @@ try {
     } elseif ($epoch !== false) {
         $stale = 'stale-unmarked';
     }
-    if ($stale !== '' && defined('ACE_REDIS_EARLY_STALE') && !ACE_REDIS_EARLY_STALE) {
+    if ($stale !== '' && defined('ACEREDIS_EARLY_STALE') && !ACEREDIS_EARLY_STALE) {
         $emit('MISS ' . $stale);
         return;
     }
@@ -308,8 +317,8 @@ try {
     // corrupt s:4294967296:"... header is an allocation request, not a cache
     // value. It took a production site down for eighty seconds.
     $unwrap = function ($value) {
-        if (preg_match('/^s:(\d{1,10}):"/', $value, $ace_rc_len) === 1
-            && (int) $ace_rc_len[1] <= strlen($value)) {
+        if (preg_match('/^s:(\d{1,10}):"/', $value, $aceredis_len) === 1
+            && (int) $aceredis_len[1] <= strlen($value)) {
             $decoded = @unserialize($value);
             if (is_string($decoded)) {
                 return $decoded;
@@ -399,18 +408,18 @@ try {
     // block and refills both copies. One such request per block per 20 seconds; with
     // no older copy either, the request goes to WordPress as before. It needs PHP-FPM
     // (to finish the response first) and curl; without them nothing changes. Define
-    // ACE_REDIS_EARLY_STALE_BLOCKS false to switch it off.
+    // ACEREDIS_EARLY_STALE_BLOCKS false to switch it off.
     $filled = '';
     $stale_blocks = [];
     $can_refresh_blocks = function_exists('fastcgi_finish_request') && function_exists('curl_init')
-        && !(defined('ACE_REDIS_EARLY_STALE_BLOCKS') && !ACE_REDIS_EARLY_STALE_BLOCKS);
+        && !(defined('ACEREDIS_EARLY_STALE_BLOCKS') && !ACEREDIS_EARLY_STALE_BLOCKS);
     if (strpos($inspect_body, '<!--ACE_BLOCK_DYNAMIC:') !== false) {
         $emit('MISS dynamic');
         return;
     }
     if (strpos($inspect_body, '<!--ACE_DYNAMIC blk:') !== false) {
-        preg_match_all('/<!--ACE_DYNAMIC blk:([a-f0-9]{32}):v1-->/', $inspect_body, $ace_rc_dyn);
-        $hashes = array_values(array_unique($ace_rc_dyn[1]));
+        preg_match_all('/<!--ACE_DYNAMIC blk:([a-f0-9]{32}):v1-->/', $inspect_body, $aceredis_dyn);
+        $hashes = array_values(array_unique($aceredis_dyn[1]));
         $keys = [];
         foreach ($hashes as $hash) {
             $keys[] = 'dyn_block:' . $hash;
@@ -554,9 +563,9 @@ try {
                 CURLOPT_SSL_VERIFYHOST => 0,
             ];
             // Behind a CDN or WAF that turns away a server's own requests, send the render
-            // straight to this web server instead (ACE_REDIS_EARLY_REFRESH_ADDR, e.g. '127.0.0.1').
-            if (defined('ACE_REDIS_EARLY_REFRESH_ADDR') && is_string(ACE_REDIS_EARLY_REFRESH_ADDR) && ACE_REDIS_EARLY_REFRESH_ADDR !== '') {
-                $refresh_opts[CURLOPT_RESOLVE] = [$host . ':' . ($scheme === 'https' ? 443 : 80) . ':' . ACE_REDIS_EARLY_REFRESH_ADDR];
+            // straight to this web server instead (ACEREDIS_EARLY_REFRESH_ADDR, e.g. '127.0.0.1').
+            if (defined('ACEREDIS_EARLY_REFRESH_ADDR') && is_string(ACEREDIS_EARLY_REFRESH_ADDR) && ACEREDIS_EARLY_REFRESH_ADDR !== '') {
+                $refresh_opts[CURLOPT_RESOLVE] = [$host . ':' . ($scheme === 'https' ? 443 : 80) . ':' . ACEREDIS_EARLY_REFRESH_ADDR];
             }
             curl_setopt_array($ch, $refresh_opts);
             curl_exec($ch);

@@ -4,7 +4,7 @@ Tags: cache, redis, performance, object cache, page cache
 Requires at least: 5.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.9.11
+Stable tag: 0.10.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -36,6 +36,10 @@ The registry is scoped to the configured site and path, with up to 256 live vari
 
 == Changelog ==
 
+= 0.10.0 =
+* Every option, hook, function, constant, scheduled event and WP-CLI command now uses the single `aceredis` prefix. Constants set in wp-config.php are now `ACEREDIS_*`, and the WP-CLI commands are `wp aceredis ...`.
+* Cached pages and objects already in Redis are unaffected.
+
 = 0.9.11 =
 * Keep cache-clear and sitemap-primer work budgets steady when the system clock changes.
 * Preserve real-date freshness, expiry and continuation schedules, queue formats and PHP 7.4 support.
@@ -54,7 +58,7 @@ The registry is scoped to the configured site and path, with up to 256 live vari
 = 0.9.8 =
 * WooCommerce catalogue edits now recache what they change. Adding, renaming or deleting a product attribute, or changing one of its terms, recaches the whole site (every product, filter and comparison shows it); before, only the pages of the products you re-saved were refreshed, so a renamed attribute stayed on every other page until the cache was cleared by hand.
 * With Composite Products, saving a product or variation (or a stock change) recaches every composite whose components offer it, including components that offer a whole category. Before, the composite's own page kept the old component options.
-* These run in every request context, so wp-admin, REST and WP-CLI saves count. `ace_rc_recache_on_edit` still turns them off.
+* These run in every request context, so wp-admin, REST and WP-CLI saves count. `aceredis_recache_on_edit` still turns them off.
 
 = 0.9.7 =
 * WP-Cron runs keep what they write to the object cache. Cron used to count as an update operation, so every cron run ignored Redis and deleted each key it wrote instead of storing it: whatever a scheduled job cached was thrown away at once and rebuilt by the next visitor. Plugin and theme updates still bypass the cache.
@@ -64,10 +68,10 @@ The registry is scoped to the configured site and path, with up to 256 live vari
 
 = 0.9.5 =
 * Pages with live blocks are served before WordPress boots on cluster-mode servers too (ElastiCache Serverless, for one). The drop-in read each block's copies with one MGET, which such a server refuses when the keys hash to different slots, and they always do, so every such page went to WordPress there. The copies are now read with one GET per key in a single pipeline.
-* `ACE_REDIS_EARLY_REFRESH_ADDR` (e.g. `'127.0.0.1'`) sends the background block render straight to this web server. Without it the render goes out by the site's public name, which a CDN or WAF in front of the site may turn away.
+* `ACEREDIS_EARLY_REFRESH_ADDR` (e.g. `'127.0.0.1'`) sends the background block render straight to this web server. Without it the render goes out by the site's public name, which a CDN or WAF in front of the site may turn away.
 
 = 0.9.4 =
-* A page with a live block no longer makes the first visitor after the block's microcache copy expires wait for WordPress to boot. WordPress keeps an older copy of each live block as well (ten minutes by default, filter `ace_rc_dynamic_stale_ttl`); when only that one is left the page is served with it before WordPress boots, and once the visitor has their response the block is rendered again in the background. At most one background render per block every 20 seconds. Needs PHP-FPM and curl; without them, or with `ACE_REDIS_EARLY_STALE_BLOCKS` defined false, such a request goes to WordPress as before.
+* A page with a live block no longer makes the first visitor after the block's microcache copy expires wait for WordPress to boot. WordPress keeps an older copy of each live block as well (ten minutes by default, filter `aceredis_dynamic_stale_ttl`); when only that one is left the page is served with it before WordPress boots, and once the visitor has their response the block is rendered again in the background. At most one background render per block every 20 seconds. Needs PHP-FPM and curl; without them, or with `ACEREDIS_EARLY_STALE_BLOCKS` defined false, such a request goes to WordPress as before.
 
 = 0.9.3 =
 * Pages with live blocks (a bet ticker in the header, say) are served before WordPress boots whenever every live block has a microcache copy. The drop-in pastes the copies in itself, which was all a hit needed WordPress for, so these pages are as fresh as before without a full WordPress start. An expired copy still goes to WordPress, which renders the block and refills the microcache. On PP News dev, where the ticker is on every page, every hit used to boot WordPress.
@@ -77,14 +81,14 @@ The registry is scoped to the configured site and path, with up to 256 live vari
 * With minification on, a page is stored once, as its minified copy. The original was also written beside it as a fallback that the read path only reached when the minified key was missing, and both expired together, so it was never served: it doubled every minifying site's page cache (half of Sheffield Events' cache, 590 MB, on a full 3 GB Redis). An older original left from before the upgrade is removed when the page is next cached.
 
 = 0.9.1 =
-* Saving a post no longer flushes the whole object cache. The drop-in invalidates that post's own keys and the posts query stamp, and the broad page purge clears page and block caches only. Importers that save posts in a loop were moving the generation a dozen times a minute, dropping every transient each time and filling a shared Redis with dead generations. Sites that need the old flush can set ACE_OC_FLUSH_ON_POST_CHANGE or the ace_oc_flush_on_post_change filter; it is then held to one flush a minute per process, plus one at shutdown.
+* Saving a post no longer flushes the whole object cache. The drop-in invalidates that post's own keys and the posts query stamp, and the broad page purge clears page and block caches only. Importers that save posts in a loop were moving the generation a dozen times a minute, dropping every transient each time and filling a shared Redis with dead generations. Sites that need the old flush can set ACEREDIS_OC_FLUSH_ON_POST_CHANGE or the aceredis_oc_flush_on_post_change filter; it is then held to one flush a minute per process, plus one at shutdown.
 * Stale generations are purged a couple of minutes after a flush (at most once every ten minutes), not only daily.
 * The stale purge reads the live generation from Redis instead of the process's memo, so a long cron run can no longer remove the current generation, and overlapping purges stand down.
 
 = 0.9.0 =
-* New setting, off by default: serve cached pages to logged-in users on the front end. Each group (administrators, editors, members who cannot edit, WooCommerce customers) has its own copy, apart from the guest copy; the toolbar is rendered fresh and every nonce is swapped for the viewer's own on each hit. Previews, the Customizer, POST requests and ?ace_nocache=1 always bypass, a copy is served only while fresh, and purges drop every variant.
+* New setting, off by default: serve cached pages to logged-in users on the front end. Each group (administrators, editors, members who cannot edit, WooCommerce customers) has its own copy, apart from the guest copy; the toolbar is rendered fresh and every nonce is swapped for the viewer's own on each hit. Previews, the Customizer, POST requests and ?aceredis_nocache=1 always bypass, a copy is served only while fresh, and purges drop every variant.
 * New settings for signed-in object cache reads: signed-in front-end pages (on, as before) and wp-admin screens (off) read the shared object cache without writing to it; on WooCommerce sites, basket and checkout reads too.
-* New wp-admin query cache, off by default: core's uncached admin reads (month filters, custom field keys, media checks) plus ace_rc_admin_cache_remember() / ace_rc_admin_cache_bump() for plugins.
+* New wp-admin query cache, off by default: core's uncached admin reads (month filters, custom field keys, media checks) plus aceredis_admin_cache_remember() / aceredis_admin_cache_bump() for plugins.
 
 = 0.8.16 =
 * Clear retained query variants when a clean page or related archive is invalidated. Exact query URLs remain targeted.
@@ -100,18 +104,18 @@ The registry is scoped to the configured site and path, with up to 256 live vari
 * Document external connections and compatibility; exclude standalone diagnostics from release packages.
 
 = 0.8.14 =
-* A maximum TTL now caps every object cache write, explicit expiries included: set, add, set_multiple, incr/decr and the shared transient path all store for at most the cap. The default is 86400 seconds, so a plugin's week-long transient lives for a day and cold keys stop crowding the working set out of a shared Redis. Set it per site with the Object Cache Max TTL setting (`object_cache_max_ttl`, 0 turns it off, otherwise 60 to 2592000) or `ACE_OC_MAX_TTL` in wp-config, which wins. The generation counter key is exempt and keeps no TTL.
+* A maximum TTL now caps every object cache write, explicit expiries included: set, add, set_multiple, incr/decr and the shared transient path all store for at most the cap. The default is 86400 seconds, so a plugin's week-long transient lives for a day and cold keys stop crowding the working set out of a shared Redis. Set it per site with the Object Cache Max TTL setting (`object_cache_max_ttl`, 0 turns it off, otherwise 60 to 2592000) or `ACEREDIS_OC_MAX_TTL` in wp-config, which wins. The generation counter key is exempt and keeps no TTL.
 * A matching Page Cache Max TTL setting (`page_cache_max_ttl`) caps a page's Redis lifetime, fresh TTL plus stale-while-revalidate grace together. It is off (0) by default, since page TTLs are already short.
 
 = 0.8.13 =
 * Object cache keys written without an expiry now get a one day backstop TTL instead of seven days, so cold entries leave Redis within a day and the shared instance holds a smaller working set under its lower maxmemory.
 
 = 0.8.12 =
-* The object cache drop-in keys every value under a per-site generation number (`<namespace>v<gen>:`), held in Redis at `<namespace>gen`. A flush, including the one on publish, is now a single INCR instead of a SCAN of the whole Redis database: old keys are unreachable at once and expire by their TTL. Keys written with no expiry get the 7 day backstop, and `wp_cache_incr()`/`wp_cache_decr()` now set it too. A daily `ace_rc_purge_stale_generations` cron UNLINKs superseded keys early. If the generation key cannot be read the drop-in falls back to the old key format and the SCAN flush. The key format changes, so the first request after the update starts from an empty object cache.
+* The object cache drop-in keys every value under a per-site generation number (`<namespace>v<gen>:`), held in Redis at `<namespace>gen`. A flush, including the one on publish, is now a single INCR instead of a SCAN of the whole Redis database: old keys are unreachable at once and expire by their TTL. Keys written with no expiry get the 7 day backstop, and `wp_cache_incr()`/`wp_cache_decr()` now set it too. A daily `aceredis_purge_stale_generations` cron UNLINKs superseded keys early. If the generation key cannot be read the drop-in falls back to the old key format and the SCAN flush. The key format changes, so the first request after the update starts from an empty object cache.
 
 = 0.8.11 =
 * The stale-while-revalidate check on a cached page hit reads the stored time, the freshness marker and the soft-purge epoch in one MGET (it falls back to separate reads if a cluster endpoint refuses MGET across slots).
-* New `page_cache_ttl_jitter` setting (percent, 0 to 50, off by default) and `ace_rc_page_ttl_jitter` filter: each stored page's fresh lifetime is cut by a random amount up to that percentage, so pages warmed together do not all refresh at once.
+* New `page_cache_ttl_jitter` setting (percent, 0 to 50, off by default) and `aceredis_page_ttl_jitter` filter: each stored page's fresh lifetime is cut by a random amount up to that percentage, so pages warmed together do not all refresh at once.
 * The object cache drop-in fingerprints values for change detection with xxh128 where PHP has it, md5 otherwise.
 
 = 0.8.10 =
@@ -124,7 +128,7 @@ The registry is scoped to the configured site and path, with up to 256 live vari
 * Render normally when a Redis page-cache read fails, and avoid further page-cache reads or writes during that request.
 
 = 0.8.6 =
-* Crawler bypass: the `ace_rc_crawler_bypass` filter names search crawler user agents and the path prefixes where they are served live rather than from the page cache, in WordPress and in the pre-boot drop-in alike. Empty by default.
+* Crawler bypass: the `aceredis_crawler_bypass` filter names search crawler user agents and the path prefixes where they are served live rather than from the page cache, in WordPress and in the pre-boot drop-in alike. Empty by default.
 
 = 0.8.5 =
 * Initial public release.
@@ -135,6 +139,6 @@ Full-page caching and standalone HTML minification require WordPress 6.9 or late
 
 Redis or Valkey is an administrator-configured cache service. ARC sends cache keys and the data being cached (which may include site content and WordPress object data) to the host and database you configure while caching is enabled. Install the PHP Redis extension before enabling a connection. No hosted Redis account is supplied or selected by this plugin. If using a hosted service, consult your chosen provider's terms and privacy policy before enabling it.
 
-Optional Varnish integration sends purge requests containing site hosts and URL patterns when cached content changes. By default it detects a local proxy at 127.0.0.1:6081; an administrator can override that address with ACE_RC_VARNISH_HOST or disable integration with ACE_RC_VARNISH=false. No remote proxy is selected automatically. Same-site warming requests public URLs on this site's configured address when enabled; it does not send content to an ARC-operated service. ARC has no telemetry and unconfigured activation does not contact an external service.
+Optional Varnish integration sends purge requests containing site hosts and URL patterns when cached content changes. By default it detects a local proxy at 127.0.0.1:6081; an administrator can override that address with ACEREDIS_VARNISH_HOST or disable integration with ACEREDIS_VARNISH=false. No remote proxy is selected automatically. Same-site warming requests public URLs on this site's configured address when enabled; it does not send content to an ARC-operated service. ARC has no telemetry and unconfigured activation does not contact an external service.
 
 JavaScript and CSS sources are included under assets/src. The source repository includes package.json and webpack.config.js for rebuilding the distributed assets with npm ci and npm run build.

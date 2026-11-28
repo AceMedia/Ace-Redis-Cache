@@ -12,7 +12,7 @@
  * bumping the tag moves every entry on it to a key nobody reads, so invalidation is one write and
  * nothing is ever served across a change.
  *
- * Plugins use it through ace_rc_admin_cache_remember() and ace_rc_admin_cache_bump(), which run
+ * Plugins use it through aceredis_admin_cache_remember() and aceredis_admin_cache_bump(), which run
  * the callback uncached when the setting is off or this plugin is missing (check function_exists).
  *
  * @package AceMedia\RedisCache
@@ -25,7 +25,7 @@ if (!defined('ABSPATH')) {
 }
 
 class AdminQueryCache {
-    const PREFIX = 'ace_rcaq_';
+    const PREFIX = 'aceredis_aq_';
 
     /** @var bool */
     private static $enabled = false;
@@ -40,7 +40,7 @@ class AdminQueryCache {
     }
 
     public static function enabled() {
-        return self::$enabled && (bool) apply_filters('ace_rc_admin_query_cache_enabled', true);
+        return self::$enabled && (bool) apply_filters('aceredis_admin_query_cache_enabled', true);
     }
 
     /**
@@ -149,16 +149,20 @@ class AdminQueryCache {
         global $wpdb;
         $post_type = (string) $post_type;
         // The query core runs in WP_List_Table::months_dropdown(), trash view included.
-        $extra = "AND post_status != 'auto-draft'";
-        if (!isset($_GET['post_status']) || 'trash' !== $_GET['post_status']) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only list filter, as in core.
-            $extra .= " AND post_status != 'trash'";
-        } else {
-            $extra = $wpdb->prepare(' AND post_status = %s', 'trash');
-        }
-        return self::remember('months:' . $post_type . ':' . md5($extra), function () use ($wpdb, $post_type, $extra) {
+        $trash = isset($_GET['post_status']) && 'trash' === $_GET['post_status']; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only list filter, as in core.
+        return self::remember('months:' . $post_type . ':' . ($trash ? 'trash' : 'live'), function () use ($wpdb, $post_type, $trash) {
+            if ($trash) {
+                return $wpdb->get_results($wpdb->prepare(
+                    "SELECT DISTINCT YEAR( post_date ) AS year, MONTH( post_date ) AS month FROM $wpdb->posts WHERE post_type = %s AND post_status = %s ORDER BY post_date DESC",
+                    $post_type,
+                    'trash'
+                ));
+            }
             return $wpdb->get_results($wpdb->prepare(
-                "SELECT DISTINCT YEAR( post_date ) AS year, MONTH( post_date ) AS month FROM $wpdb->posts WHERE post_type = %s $extra ORDER BY post_date DESC",
-                $post_type
+                "SELECT DISTINCT YEAR( post_date ) AS year, MONTH( post_date ) AS month FROM $wpdb->posts WHERE post_type = %s AND post_status != %s AND post_status != %s ORDER BY post_date DESC",
+                $post_type,
+                'auto-draft',
+                'trash'
             ));
         }, ['posts', 'attachments']);
     }

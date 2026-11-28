@@ -14,7 +14,7 @@
  * @package AceMedia\RedisCache
  */
 
-$plugin = function_exists('ace_redis_cache') ? ace_redis_cache() : null;
+$plugin = function_exists('aceredis_cache') ? aceredis_cache() : null;
 if (!$plugin || !$plugin->get_cache_manager()) {
     echo "SKIP  needs the plugin loaded with a Redis connection\n";
     return;
@@ -42,13 +42,13 @@ $call = function ($method, array $args = []) use ($reflection, $plugin) {
     return $m->invokeArgs($plugin, $args);
 };
 $redis = $plugin->get_cache_manager()->get_redis_connection()->get_connection();
-$queue_key = $call('site_scoped_key', ['ace_rc_deferred_invalidation_queue']);
-$prime_key = $call('site_scoped_key', ['ace_rc_sitemap_prime_queue']);
+$queue_key = $call('site_scoped_key', ['aceredis_deferred_invalidation_queue']);
+$prime_key = $call('site_scoped_key', ['aceredis_sitemap_prime_queue']);
 $saved_queue = $plugin->get_cache_manager()->get($queue_key);
 $saved_prime = $plugin->get_cache_manager()->get($prime_key);
 $plugin->get_cache_manager()->delete($queue_key);
 $plugin->get_cache_manager()->delete($prime_key);
-$posts_key = $call('site_scoped_key', ['ace_rc_recache_posts']);
+$posts_key = $call('site_scoped_key', ['aceredis_recache_posts']);
 $saved_posts = $redis->rawCommand('SMEMBERS', $posts_key);
 $redis->rawCommand('DEL', $posts_key);
 $queued = function () use ($plugin, $queue_key) {

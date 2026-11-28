@@ -17,7 +17,7 @@
  *   nothing). Authors and contributors see edit links for their own posts only, so they are never
  *   served a stored copy.
  * - Anything else that names the user (their email, a comment form's "Logged in as") stops the
- *   copy being stored at all; sites add their own markers with ace_rc_logged_in_store_block.
+ *   copy being stored at all; sites add their own markers with aceredis_logged_in_store_block.
  *
  * Guests and signed-in visitors never share a key: the guest key is unchanged and a signed-in copy
  * carries a trailing variant part ("li-editor-ab").

@@ -1,5 +1,5 @@
 (function($){
-    if (!$ || typeof ace_redis_admin === 'undefined') return;
+    if (!$ || typeof aceredis_admin === 'undefined') return;
 
     function setTransientBadge(label, state) {
         var $badge = $('#ace-rc-transient-status');
@@ -82,9 +82,9 @@
 
     function refreshTransientHealthOverride() {
         $.ajax({
-            url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/health',
+            url: aceredis_admin.rest_url + 'ace-redis-cache/v1/health',
             type: 'GET',
-            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce); }
+            beforeSend: function(xhr){ xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce); }
         }).done(function(resp){
             if (resp && resp.success && resp.data) {
                 renderTransientHealth(resp.data);

@@ -7,12 +7,12 @@ const root = path.join(__dirname, '..', 'assets', 'src', 'js');
 let transport;
 const jq = () => ({ ready() {}, is: () => false });
 jq.ajax = options => transport(options);
-const context = vm.createContext({ window: { jQuery: jq }, jQuery: jq, document: { visibilityState: 'visible' }, console: { log() {}, error() {} }, setTimeout() { return 1; }, clearTimeout() { context.clearedTimers = (context.clearedTimers || 0) + 1; }, ace_redis_admin: { rest_url: '/fixture/', rest_nonce: 'fixture', nonce: 'fixture' } });
+const context = vm.createContext({ window: { jQuery: jq }, jQuery: jq, document: { visibilityState: 'visible' }, console: { log() {}, error() {} }, setTimeout() { return 1; }, clearTimeout() { context.clearedTimers = (context.clearedTimers || 0) + 1; }, aceredis_admin: { rest_url: '/fixture/', rest_nonce: 'fixture', nonce: 'fixture' } });
 vm.runInContext(fs.readFileSync(path.join(root, 'components/settings-save-error.js'), 'utf8').replaceAll('export function ', 'function '), context);
 vm.runInContext(fs.readFileSync(path.join(root, 'components/SaveBar.js'), 'utf8').replace(/^import .*;$/gm, '').replace('export default SaveBar;', 'globalThis.TestSaveBar = SaveBar;'), context);
 vm.runInContext(fs.readFileSync(path.join(root, 'admin.js'), 'utf8').replace(/^import .*;$/gm, '').replace('    // Initialize when document is ready', '    globalThis.TestAdmin = AceRedisCacheAdmin;\n    // Initialize when document is ready'), context);
 let checks = 0;
-const partial = { code: 'ace_rc_htaccess_write_failed', data: { status: 500, settings_saved: true } };
+const partial = { code: 'aceredis_htaccess_write_failed', data: { status: 500, settings_saved: true } };
 const detail = 'Settings were saved, but the Apache cache rules could not be updated.';
 function admin() {
     const item = Object.create(context.TestAdmin.prototype);

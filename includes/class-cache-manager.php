@@ -22,23 +22,23 @@ class CacheManager {
     private $cache_prefix = 'page_cache:';
     private $minified_cache_prefix = 'page_cache_min:';
     private $compression_marker_prefixes = ['br:' => 'brotli', 'gz:' => 'gzip', 'raw:' => 'raw'];
-    private $clear_job_option = 'ace_redis_cache_clear_job';
-    private $clear_job_hook = 'ace_redis_cache_process_clear_job';
+    private $clear_job_option = 'aceredis_cache_clear_job';
+    private $clear_job_hook = 'aceredis_cache_process_clear_job';
 
     /**
      * Compression level filters usage examples
      *
      * Example override in theme or mu-plugin:
      *
-     * add_filter('ace_rc_brotli_level_page', function() { return 11; });
-     * add_filter('ace_rc_brotli_level_object', function() { return 6; });
-     * add_filter('ace_rc_gzip_level_page', function() { return 7; });
-     * add_filter('ace_rc_min_compress_size', function($size) { return 1024; });
+     * add_filter('aceredis_brotli_level_page', function() { return 11; });
+     * add_filter('aceredis_brotli_level_object', function() { return 6; });
+     * add_filter('aceredis_gzip_level_page', function() { return 7; });
+     * add_filter('aceredis_min_compress_size', function($size) { return 1024; });
      */
     
     /**
      * Get prefixes that represent keys managed by this plugin for reporting/cleanup.
-     * Allows customization via the 'ace_redis_cache_reporting_prefixes' filter.
+     * Allows customization via the 'aceredis_cache_reporting_prefixes' filter.
      *
      * @return array Associative array label => prefix (without wildcard)
      */
@@ -82,7 +82,7 @@ class CacheManager {
          * @param array $prefixes  Associative array of label => prefix
          * @param array $settings  Plugin settings array
          */
-        return apply_filters('ace_redis_cache_reporting_prefixes', $prefixes, $this->settings);
+        return apply_filters('aceredis_cache_reporting_prefixes', $prefixes, $this->settings);
     }
     
     /**
@@ -146,7 +146,7 @@ class CacheManager {
          * @param array $exclusions Current transient exclusion patterns.
          * @param array $settings   Plugin settings.
          */
-        $exclusions = apply_filters('ace_redis_cache_transient_exclusions', $exclusions, $this->settings);
+        $exclusions = apply_filters('aceredis_cache_transient_exclusions', $exclusions, $this->settings);
 
         return array_values(array_unique(array_filter((array) $exclusions)));
     }
@@ -485,7 +485,7 @@ class CacheManager {
         if ($pattern_index >= count($patterns)) {
             $job['status'] = 'complete';
             update_option($this->clear_job_option, $job, false);
-            do_action('ace_rc_cache_cleared', 'async_' . ($job['type'] ?? 'all'), $deleted);
+            do_action('aceredis_cache_cleared', 'async_' . ($job['type'] ?? 'all'), $deleted);
             return $job;
         }
 
@@ -1111,7 +1111,7 @@ class CacheManager {
             }
         }
 
-        $ttl = (int) apply_filters('ace_redis_cache_ttl', $ttl, $this->settings);
+        $ttl = (int) apply_filters('aceredis_cache_ttl', $ttl, $this->settings);
         $cap = max(0, (int) ($this->settings['page_cache_max_ttl'] ?? 0));
         return ($cap > 0 && $ttl > $cap) ? $cap : $ttl;
     }
@@ -1136,10 +1136,10 @@ class CacheManager {
      * Context values: 'object' or 'page'
      *
      * Filters:
-     * - ace_rc_brotli_level_object (default 5)
-     * - ace_rc_brotli_level_page (default 9)
-     * - ace_rc_gzip_level_object (default 6)
-     * - ace_rc_gzip_level_page (default 6)
+     * - aceredis_brotli_level_object (default 5)
+     * - aceredis_brotli_level_page (default 9)
+     * - aceredis_gzip_level_object (default 6)
+     * - aceredis_gzip_level_page (default 6)
      *
      * @param string $codec 'brotli'|'gzip'|'off'
      * @param string $context 'object'|'page'
@@ -1149,12 +1149,12 @@ class CacheManager {
         $context = ($context === 'page') ? 'page' : 'object';
         if ($codec === 'brotli') {
             $default = ($context === 'page') ? 9 : 5;
-            $level = (int) apply_filters('ace_rc_brotli_level_' . $context, $default);
+            $level = (int) apply_filters('aceredis_brotli_level_' . $context, $default);
             return max(0, min(11, $level));
         }
         if ($codec === 'gzip') {
             $default = 6;
-            $level = (int) apply_filters('ace_rc_gzip_level_' . $context, $default);
+            $level = (int) apply_filters('aceredis_gzip_level_' . $context, $default);
             return max(0, min(9, $level));
         }
         return 0;
@@ -1180,7 +1180,7 @@ class CacheManager {
             return $payload;
         }
         $codec = $this->get_active_compression_codec();
-        $threshold = (int) apply_filters('ace_rc_min_compress_size', $this->settings['min_compress_size'] ?? 512);
+        $threshold = (int) apply_filters('aceredis_min_compress_size', $this->settings['min_compress_size'] ?? 512);
         if ($codec === 'off' || strlen($payload) < $threshold) {
             return 'raw:' . $payload;
         }
@@ -1342,11 +1342,11 @@ class CacheManager {
      */
     public function get_compression_info() {
         $codec = $this->get_active_compression_codec();
-        $obj_br = (int) apply_filters('ace_rc_brotli_level_object', 5);
-        $pg_br = (int) apply_filters('ace_rc_brotli_level_page', 9);
-        $obj_gz = (int) apply_filters('ace_rc_gzip_level_object', 6);
-        $pg_gz = (int) apply_filters('ace_rc_gzip_level_page', 6);
-        $min = (int) apply_filters('ace_rc_min_compress_size', $this->settings['min_compress_size'] ?? 512);
+        $obj_br = (int) apply_filters('aceredis_brotli_level_object', 5);
+        $pg_br = (int) apply_filters('aceredis_brotli_level_page', 9);
+        $obj_gz = (int) apply_filters('aceredis_gzip_level_object', 6);
+        $pg_gz = (int) apply_filters('aceredis_gzip_level_page', 6);
+        $min = (int) apply_filters('aceredis_min_compress_size', $this->settings['min_compress_size'] ?? 512);
         return [
             'enabled' => !empty($this->settings['enable_compression']),
             'codec' => $codec,

@@ -97,11 +97,11 @@ class AdminInterface {
             $this->plugin_version
         );
         wp_enqueue_script($handle, $script_url, [], $this->plugin_version, true);
-        wp_localize_script($handle, 'ace_redis_admin_bar', [
+        wp_localize_script($handle, 'aceredis_admin_bar', [
             'flush_url' => rest_url('ace-redis-cache/v1/flush-cache'),
             'status_url' => rest_url('ace-redis-cache/v1/flush-cache/status'),
             'rest_nonce' => wp_create_nonce('wp_rest'),
-            'admin_nonce' => wp_create_nonce('ace_redis_admin_nonce'),
+            'admin_nonce' => wp_create_nonce('aceredis_admin_nonce'),
         ]);
     }
     
@@ -137,8 +137,8 @@ class AdminInterface {
      */
     public function register_settings() {
         register_setting(
-            'ace_redis_cache_settings',
-            'ace_redis_cache_settings',
+            'aceredis_cache_settings',
+            ACEREDIS_SETTINGS_OPTION,
             [
                 'sanitize_callback' => [$this, 'sanitize_settings']
             ]
@@ -190,11 +190,11 @@ class AdminInterface {
             );
             
             // Localize script for AJAX - use our script handle and correct variable name
-            $user_auto = get_user_meta(get_current_user_id(), 'ace_rc_auto_save_enabled', true);
-            wp_localize_script('ace-redis-cache-admin', 'ace_redis_admin', [
+            $user_auto = get_user_meta(get_current_user_id(), 'aceredis_auto_save_enabled', true);
+            wp_localize_script('ace-redis-cache-admin', 'aceredis_admin', [
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'rest_url' => rest_url(),
-                'nonce' => wp_create_nonce('ace_redis_admin_nonce'),
+                'nonce' => wp_create_nonce('aceredis_admin_nonce'),
                 'rest_nonce' => wp_create_nonce('wp_rest'),
                 'user_auto_save' => ($user_auto === '' ? null : (int) (bool) $user_auto)
             ]);
@@ -204,11 +204,11 @@ class AdminInterface {
             wp_enqueue_script('jquery');
             
             // Localize script for fallback too
-            $user_auto = get_user_meta(get_current_user_id(), 'ace_rc_auto_save_enabled', true);
-            wp_localize_script('jquery', 'ace_redis_admin', [
+            $user_auto = get_user_meta(get_current_user_id(), 'aceredis_auto_save_enabled', true);
+            wp_localize_script('jquery', 'aceredis_admin', [
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'rest_url' => rest_url(),
-                'nonce' => wp_create_nonce('ace_redis_admin_nonce'),
+                'nonce' => wp_create_nonce('aceredis_admin_nonce'),
                 'rest_nonce' => wp_create_nonce('wp_rest'),
                 'user_auto_save' => ($user_auto === '' ? null : (int) (bool) $user_auto)
             ]);
@@ -235,16 +235,16 @@ class AdminInterface {
      */
     private function get_compression_autoselect_script() {
         return "jQuery(function($){\n"
-            . "  function aceAutoSelectSingleCompressionMethod(){\n"
+            . "  function aceredisAutoSelectSingleCompressionMethod(){\n"
             . "    var enabled = $('#enable_compression').is(':checked');\n"
             . "    if (!enabled) { return; }\n"
-            . "    var radios = $('input[name=\\\"ace_redis_cache_settings[compression_method]\\\"]');\n"
+            . "    var radios = $('input[name=\\\"aceredis_cache_settings[compression_method]\\\"]');\n"
             . "    if (!radios.length) { return; }\n"
             . "    var available = radios.filter(function(){ return !this.disabled; });\n"
             . "    if (available.length === 1) { available.prop('checked', true).trigger('change'); }\n"
             . "  }\n"
-            . "  aceAutoSelectSingleCompressionMethod();\n"
-            . "  $(document).on('change', '#enable_compression', aceAutoSelectSingleCompressionMethod);\n"
+            . "  aceredisAutoSelectSingleCompressionMethod();\n"
+            . "  $(document).on('change', '#enable_compression', aceredisAutoSelectSingleCompressionMethod);\n"
             . "});";
     }
     
@@ -309,7 +309,7 @@ class AdminInterface {
         }
 
         foreach ($probe_candidates as $probe_url) {
-            $response = wp_remote_head(add_query_arg('ace_rc_probe', (string) time(), $probe_url), [
+            $response = wp_remote_head(add_query_arg('aceredis_probe', (string) time(), $probe_url), [
                 'timeout' => 4,
                 'redirection' => 2,
                 'sslverify' => false,
@@ -359,14 +359,14 @@ class AdminInterface {
             </div>
             
             <form method="post" action="options.php">
-                <?php settings_fields('ace_redis_cache_settings'); ?>
+                <?php settings_fields('aceredis_cache_settings'); ?>
                 
                 <table class="form-table">
                     <tr>
                         <th scope="row">Enable Cache</th>
                         <td>
                             <label>
-                                <input type="checkbox" name="ace_redis_cache_settings[enabled]" value="1" <?php checked($this->settings['enabled']); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enabled]" value="1" <?php checked($this->settings['enabled']); ?> />
                                 Enable Redis caching
                             </label>
                         </td>
@@ -375,7 +375,7 @@ class AdminInterface {
                     <tr>
                         <th scope="row">Cache Mode</th>
                         <td>
-                            <select name="ace_redis_cache_settings[mode]" id="cache-mode-select">
+                            <select name="aceredis_cache_settings[mode]" id="cache-mode-select">
                                 <option value="full" <?php selected($this->settings['mode'], 'full'); ?>>Full Page Cache</option>
                                 <option value="object" <?php selected($this->settings['mode'], 'object'); ?>>Object Cache Only</option>
                             </select>
@@ -386,28 +386,28 @@ class AdminInterface {
                     <tr>
                         <th scope="row">Redis Host</th>
                         <td>
-                            <input type="text" name="ace_redis_cache_settings[host]" value="<?php echo esc_attr($this->settings['host']); ?>" class="regular-text" />
+                            <input type="text" name="aceredis_cache_settings[host]" value="<?php echo esc_attr($this->settings['host']); ?>" class="regular-text" />
                         </td>
                     </tr>
                     
                     <tr>
                         <th scope="row">Redis Port</th>
                         <td>
-                            <input type="number" name="ace_redis_cache_settings[port]" value="<?php echo esc_attr($this->settings['port']); ?>" min="1" max="65535" />
+                            <input type="number" name="aceredis_cache_settings[port]" value="<?php echo esc_attr($this->settings['port']); ?>" min="1" max="65535" />
                         </td>
                     </tr>
                     
                     <tr>
                         <th scope="row">Password</th>
                         <td>
-                            <input type="password" name="ace_redis_cache_settings[password]" value="<?php echo esc_attr($this->settings['password']); ?>" class="regular-text" />
+                            <input type="password" name="aceredis_cache_settings[password]" value="<?php echo esc_attr($this->settings['password']); ?>" class="regular-text" />
                         </td>
                     </tr>
                     
                     <tr>
                         <th scope="row">Cache TTL (seconds)</th>
                         <td>
-                            <input type="number" name="ace_redis_cache_settings[ttl]" value="<?php echo esc_attr($this->settings['ttl']); ?>" min="60" max="604800" />
+                            <input type="number" name="aceredis_cache_settings[ttl]" value="<?php echo esc_attr($this->settings['ttl']); ?>" min="60" max="604800" />
                             <p class="description">Default: 3600 seconds (1 hour)</p>
                         </td>
                     </tr>
@@ -416,14 +416,14 @@ class AdminInterface {
                         <th scope="row">Block Caching</th>
                         <td>
                             <label>
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_block_caching]" value="1" <?php checked($this->settings['enable_block_caching'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_block_caching]" value="1" <?php checked($this->settings['enable_block_caching'] ?? 0); ?> />
                                 Enable WordPress Block API caching
                             </label>
                             <p class="description">Cache individual Gutenberg blocks for improved performance (Object Cache mode only)</p>
                             <fieldset style="margin-top:8px;padding:8px 10px;border:1px solid #ccd0d4;background:#f9f9f9;max-width:640px;">
                                 <legend style="padding:0 6px;font-weight:600;">Advanced</legend>
                                 <label style="display:block;margin-bottom:4px;">
-                                    <input type="checkbox" name="ace_redis_cache_settings[include_rendered_block_hash]" value="1" <?php checked($this->settings['include_rendered_block_hash'] ?? 0); ?> />
+                                    <input type="checkbox" name="aceredis_cache_settings[include_rendered_block_hash]" value="1" <?php checked($this->settings['include_rendered_block_hash'] ?? 0); ?> />
                                     Include rendered content hash in block cache key
                                 </label>
                                 <p class="description" style="margin:4px 0 0;">Off (recommended) reduces duplicate keys. Turn on only if filters/theme logic produce different final HTML for identical blocks and you observe collisions.</p>
@@ -435,7 +435,7 @@ class AdminInterface {
                         <th scope="row">Minification</th>
                         <td>
                             <label>
-                                <input type="checkbox" name="ace_redis_cache_settings[enable_minification]" value="1" <?php checked($this->settings['enable_minification'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[enable_minification]" value="1" <?php checked($this->settings['enable_minification'] ?? 0); ?> />
                                 Enable HTML/CSS/JS minification
                             </label>
                         </td>
@@ -445,7 +445,7 @@ class AdminInterface {
                         <th scope="row">Smart WooCommerce Caching</th>
                         <td>
                             <label>
-                                <input type="checkbox" name="ace_redis_cache_settings[wc_smart_cache]" value="1" <?php checked($this->settings['wc_smart_cache'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[wc_smart_cache]" value="1" <?php checked($this->settings['wc_smart_cache'] ?? 0); ?> />
                                 Warm the storefront &amp; serve stale-while-revalidate
                             </label>
                             <p class="description">Auto-active when WooCommerce is present. After any full cache clear, background-warm home, shop, the busiest product categories and best-selling products; and serve a soft-expired page instantly while it refreshes in the background.</p>
@@ -453,15 +453,15 @@ class AdminInterface {
                                 <legend style="padding:0 6px;font-weight:600;">Advanced</legend>
                                 <label style="display:block;margin-bottom:6px;">
                                     Best-selling products to warm:
-                                    <input type="number" name="ace_redis_cache_settings[wc_warm_count]" value="<?php echo esc_attr($this->settings['wc_warm_count'] ?? 20); ?>" min="0" max="100" style="width:80px;" />
+                                    <input type="number" name="aceredis_cache_settings[wc_warm_count]" value="<?php echo esc_attr($this->settings['wc_warm_count'] ?? 20); ?>" min="0" max="100" style="width:80px;" />
                                 </label>
                                 <label style="display:block;">
                                     Stale-while-revalidate grace (seconds past TTL):
-                                    <input type="number" name="ace_redis_cache_settings[page_cache_grace]" value="<?php echo esc_attr($this->settings['page_cache_grace'] ?? 3600); ?>" min="0" max="86400" style="width:100px;" />
+                                    <input type="number" name="aceredis_cache_settings[page_cache_grace]" value="<?php echo esc_attr($this->settings['page_cache_grace'] ?? 3600); ?>" min="0" max="86400" style="width:100px;" />
                                 </label>
                                 <label style="display:block;margin-top:6px;">
                                     Fresh TTL jitter (percent, 0 to 50):
-                                    <input type="number" name="ace_redis_cache_settings[page_cache_ttl_jitter]" value="<?php echo esc_attr($this->settings['page_cache_ttl_jitter'] ?? 0); ?>" min="0" max="50" style="width:80px;" />
+                                    <input type="number" name="aceredis_cache_settings[page_cache_ttl_jitter]" value="<?php echo esc_attr($this->settings['page_cache_ttl_jitter'] ?? 0); ?>" min="0" max="50" style="width:80px;" />
                                 </label>
                                 <p class="description" style="margin:6px 0 0;">Jitter cuts each page's fresh lifetime by a random amount up to this percentage, so pages warmed together refresh spread out instead of all at once. 0 turns it off. Grace 0 disables stale-while-revalidate (pages expire hard at TTL). Warm count 0 disables product warming.</p>
                             </fieldset>
@@ -472,7 +472,7 @@ class AdminInterface {
                         <th scope="row">Lazy-load Images</th>
                         <td>
                             <label>
-                                <input type="checkbox" name="ace_redis_cache_settings[optimize_lazy_images]" value="1" <?php checked($this->settings['optimize_lazy_images'] ?? 0); ?> />
+                                <input type="checkbox" name="aceredis_cache_settings[optimize_lazy_images]" value="1" <?php checked($this->settings['optimize_lazy_images'] ?? 0); ?> />
                                 Add <code>loading="lazy"</code> to images at page-cache store time
                             </label>
                             <p class="description">Applies to cached pages only, skips the first few (above-fold) images and any image that already sets <code>loading</code>. Zero per-request cost.</p>
@@ -525,19 +525,19 @@ class AdminInterface {
         }
 
         // Check if this version notice has been dismissed
-        $dismissed_version = SettingsStore::get('ace_redis_cache_dismissed_version', '');
+        $dismissed_version = SettingsStore::get('aceredis_cache_dismissed_version', '');
         if ($dismissed_version === $this->plugin_version) {
             return;
         }
 
         // Only show the notice once per version, and only if it's a significant update (0.5.0)
-        $shown_version = SettingsStore::get('ace_redis_cache_shown_version', '');
+        $shown_version = SettingsStore::get('aceredis_cache_shown_version', '');
         if ($shown_version === $this->plugin_version) {
             return;
         }
 
         // Mark this version as shown
-        SettingsStore::update('ace_redis_cache_shown_version', $this->plugin_version);
+        SettingsStore::update('aceredis_cache_shown_version', $this->plugin_version);
 
         ?>
         <div class="notice notice-info is-dismissible ace-redis-update-notice" data-notice="ace-redis-version">
@@ -550,9 +550,9 @@ class AdminInterface {
         <?php ob_start(); ?>jQuery(document).ready(function($) {
             $('.ace-redis-update-notice .notice-dismiss').on('click', function() {
                 $.post(ajaxurl, {
-                    action: 'ace_redis_dismiss_notice',
+                    action: 'aceredis_dismiss_notice',
                     version: <?php echo wp_json_encode($this->plugin_version); ?>,
-                    nonce: <?php echo wp_json_encode(wp_create_nonce("ace_redis_dismiss")); ?>
+                    nonce: <?php echo wp_json_encode(wp_create_nonce("aceredis_dismiss")); ?>
                 });
             });
         });
@@ -581,10 +581,10 @@ class AdminInterface {
         
         $sanitized['enabled'] = !empty($input['enabled']) ? 1 : 0;
     $sanitized['mode'] = in_array($input['mode'] ?? 'full', ['full', 'object']) ? ($input['mode'] ?? 'full') : 'full';
-        $sanitized['host'] = sanitize_text_field($input['host']);
-        $sanitized['port'] = intval($input['port']);
-        $sanitized['password'] = sanitize_text_field($input['password']);
-    $sanitized['ttl'] = max(60, intval($input['ttl']));
+        $sanitized['host'] = sanitize_text_field($input['host'] ?? '');
+        $sanitized['port'] = intval($input['port'] ?? 6379);
+        $sanitized['password'] = sanitize_text_field($input['password'] ?? '');
+    $sanitized['ttl'] = max(60, intval($input['ttl'] ?? 3600));
     // New dual-cache toggles and TTLs
     $sanitized['enable_page_cache'] = !empty($input['enable_page_cache']) ? 1 : 0;
     $sanitized['enable_object_cache'] = !empty($input['enable_object_cache']) ? 1 : 0;
@@ -814,11 +814,11 @@ class AdminInterface {
         if (!$this->current_user_can_manage()) { wp_die('Insufficient permissions'); }
         $health = [ 'connected' => null, 'status' => 'unknown' ];
         $stats = [];
-        $slow_ops = get_transient('ace_rc_slow_op_count');
+        $slow_ops = get_transient('aceredis_slow_op_count');
         $slow_ops = $slow_ops !== false ? (int)$slow_ops : 0;
     $runtime_bypass = (isset($wp_object_cache) && method_exists($wp_object_cache,'is_bypassed') && $wp_object_cache->is_bypassed());
-    $bypass = (defined('ACE_OC_BYPASS') && ACE_OC_BYPASS) || $runtime_bypass;
-        $prof = defined('ACE_OC_PROF') && ACE_OC_PROF;
+    $bypass = (defined('ACEREDIS_OC_BYPASS') && ACEREDIS_OC_BYPASS) || $runtime_bypass;
+        $prof = defined('ACEREDIS_OC_PROF') && ACEREDIS_OC_PROF;
         // Attempt to derive connection info from global object cache
         global $wp_object_cache; $using_dropin = function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
         $dropin_connected = false;
@@ -862,7 +862,7 @@ class AdminInterface {
                     <tr><th>Object Cache Drop-In</th><td><?php echo $using_dropin ? 'Present' : 'Not Detected'; ?></td></tr>
                     <tr><th>Drop-In Connected</th><td><?php echo $dropin_connected ? '<span style="color:green">YES</span>' : '<span style="color:#cc0000">NO</span>'; ?></td></tr>
                     <tr><th>Transport</th><td><?php echo esc_html($transport); ?></td></tr>
-                    <tr><th>Bypass Flag</th><td><?php echo $bypass ? '<span style="color:#cc0000">ACTIVE</span>' : 'off'; ?><?php if($runtime_bypass && !(defined('ACE_OC_BYPASS') && ACE_OC_BYPASS)) { echo ' <span style="color:#666;">(auto fail-open)</span>'; } ?></td></tr>
+                    <tr><th>Bypass Flag</th><td><?php echo $bypass ? '<span style="color:#cc0000">ACTIVE</span>' : 'off'; ?><?php if($runtime_bypass && !(defined('ACEREDIS_OC_BYPASS') && ACEREDIS_OC_BYPASS)) { echo ' <span style="color:#666;">(auto fail-open)</span>'; } ?></td></tr>
                     <?php if(isset($wp_object_cache) && method_exists($wp_object_cache,'connection_details')) { $cd = $wp_object_cache->connection_details(); if(!$cd['connected'] && !empty($cd['error'])) { ?>
                     <tr><th>Connection Error</th><td><code style="font-size:11px;"><?php echo esc_html($cd['error']); ?></code></td></tr>
                     <?php } elseif($cd['connected']) { ?>
@@ -879,7 +879,7 @@ class AdminInterface {
                     <tr><th>Autoload Option Size (approx)</th><td><?php echo esc_html(size_format($autoload_size)); ?></td></tr>
                 </tbody>
             </table>
-            <p class="description">Slow op counter increments when ACE_OC_PROF is enabled and an op exceeds threshold; stored transiently for visibility.</p>
+            <p class="description">Slow op counter increments when ACEREDIS_OC_PROF is enabled and an op exceeds threshold; stored transiently for visibility.</p>
         </div>
         <?php
     }

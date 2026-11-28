@@ -37,7 +37,7 @@ class RedeliveryConnection {
     public function retry_operation($callback) { return $callback($this->redis); }
 }
 function setup_job($job,$step=0) {
-    $GLOBALS['fixture']=['options'=>['ace_redis_cache_clear_job'=>$job],'writes'=>0,'deletes'=>0,'actions'=>[],'schedules'=>[],'elapsed'=>0,'step'=>$step];
+    $GLOBALS['fixture']=['options'=>['aceredis_cache_clear_job'=>$job],'writes'=>0,'deletes'=>0,'actions'=>[],'schedules'=>[],'elapsed'=>0,'step'=>$step];
     $connection=new RedeliveryConnection;
     return [new CacheManager($connection,[]),$connection];
 }
@@ -61,7 +61,7 @@ try {
         $fixture['elapsed']=0;
         $finished=$manager->process_clear_cache_job(1);
         check($finished['status']==='complete' && $finished['deleted']===2 && $finished['runs']===2,$state.' continuation completes normally');
-        check(count($fixture['actions'])===1 && $fixture['actions'][0]===['ace_rc_cache_cleared','async_all',2],$state.' completion publishes once');
+        check(count($fixture['actions'])===1 && $fixture['actions'][0]===['aceredis_cache_cleared','async_all',2],$state.' completion publishes once');
         $connections=$connection->connections;$writes=$fixture['writes'];$schedules=count($fixture['schedules']);
         check($manager->process_clear_cache_job(1)===$finished,$state.' completed redelivery preserves result');
         check($connection->connections===$connections && $fixture['writes']===$writes,$state.' completed redelivery has no Redis or storage I/O');

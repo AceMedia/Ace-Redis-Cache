@@ -10,8 +10,8 @@ if (PHP_SAPI !== 'cli') {
 }
 
 define('ABSPATH', __DIR__ . '/');
-define('ACE_OC_BYPASS', true);
-define('ACE_OC_WC_READ', true);
+define('ACEREDIS_OC_BYPASS', true);
+define('ACEREDIS_OC_WC_READ', true);
 
 function apply_filters($name, $value) { return $value; }
 function add_action() {}

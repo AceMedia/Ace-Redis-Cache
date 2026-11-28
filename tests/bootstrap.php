@@ -1,4 +1,5 @@
 <?php
+if (!defined('ACEREDIS_SETTINGS_OPTION')) { define('ACEREDIS_SETTINGS_OPTION', 'aceredis_cache_settings'); define('ACEREDIS_MANAGED_PLUGINS_OPTION', 'aceredis_managed_plugins'); }
 /**
  * PHPUnit Test Bootstrap
  *

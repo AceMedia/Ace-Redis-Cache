@@ -22,8 +22,8 @@ class RedisConnection {
     
     private $redis;
     private $settings;
-    private $persistent_id = 'ace_redis_cache';
-    private $circuit_breaker_key = 'ace_redis_circuit_breaker';
+    private $persistent_id = 'aceredis_cache';
+    private $circuit_breaker_key = 'aceredis_circuit_breaker';
     private $circuit_breaker_window = 60; // Seconds to keep circuit open
     
     /**
@@ -45,15 +45,15 @@ class RedisConnection {
     public function get_connection($force_reconnect = false, $bypass_circuit_breaker = false) {
         // Use a DEDICATED page-cache connection — NOT the object cache's shared connection. The object
         // cache drop-in sets its connection to the igbinary serializer and publishes it to
-        // $ace_redis_shared_connection; reusing it made the page cache write igbinary-wrapped values while
+        // $aceredis_shared_connection; reusing it made the page cache write igbinary-wrapped values while
         // advanced-cache.php reads them raw, so binary blobs reached the browser. Page-cache values are
         // self-describing strings (gz6:/br:/raw:) that this plugin serializes itself, so this connection is
         // pinned to SERIALIZER_NONE below. The global is shared only among this plugin's RedisConnection
         // instances.
-        global $ace_redis_page_connection;
+        global $aceredis_page_connection;
 
-        if (!$force_reconnect && $ace_redis_page_connection instanceof \Redis) {
-            $this->redis = $ace_redis_page_connection;
+        if (!$force_reconnect && $aceredis_page_connection instanceof \Redis) {
+            $this->redis = $aceredis_page_connection;
             return $this->redis;
         }
 
@@ -74,13 +74,13 @@ class RedisConnection {
                 // Keep timeouts short so a slow/unreachable Redis can't hang a PHP-FPM
                 // worker. read_timeout = 0 (unbounded) previously let ping()/reads stall
                 // for seconds; bound it. Defaults (0.5s) match the drop-ins
-                // (advanced-cache.php uses ACE_REDIS_TIMEOUT=0.5; object-cache.php uses
-                // 0.5s connect / 0.3s read). Override per-site via the same ACE_REDIS_*
+                // (advanced-cache.php uses ACEREDIS_TIMEOUT=0.5; object-cache.php uses
+                // 0.5s connect / 0.3s read). Override per-site via the same ACEREDIS_*
                 // constants the drop-ins honor.
-                $timeout = defined('ACE_REDIS_TIMEOUT') ? (float) ACE_REDIS_TIMEOUT : 0.5;
+                $timeout = defined('ACEREDIS_TIMEOUT') ? (float) ACEREDIS_TIMEOUT : 0.5;
                 $reserved = null;
                 $retry_interval = 0;
-                $read_timeout = defined('ACE_REDIS_READ_TIMEOUT') ? (float) ACE_REDIS_READ_TIMEOUT : 0.5;
+                $read_timeout = defined('ACEREDIS_READ_TIMEOUT') ? (float) ACEREDIS_READ_TIMEOUT : 0.5;
                 
                 // Configure TLS context options if TLS is enabled
                 $context_options = [];
@@ -148,13 +148,13 @@ class RedisConnection {
                     }
                 }
 
-                // Select the per-site logical DB. ACE_REDIS_DB (a wp-config constant, read pre-boot)
+                // Select the per-site logical DB. ACEREDIS_DB (a wp-config constant, read pre-boot)
                 // is canonical so this page-cache connection, the object-cache drop-in, and
                 // advanced-cache all land in the SAME database for this site; the settings value is a
                 // fallback for admin/CLI contexts. DB 0 = shared default (no SELECT needed).
-                $ace_db = defined('ACE_REDIS_DB') ? (int) ACE_REDIS_DB : (int) ($this->settings['database'] ?? 0);
-                if ($ace_db > 0) {
-                    try { $this->redis->select($ace_db); } catch (\Throwable $t) { /* stays on db0 */ }
+                $aceredis_db = defined('ACEREDIS_DB') ? (int) ACEREDIS_DB : (int) ($this->settings['database'] ?? 0);
+                if ($aceredis_db > 0) {
+                    try { $this->redis->select($aceredis_db); } catch (\Throwable $t) { /* stays on db0 */ }
                 }
 
                 // Test the connection
@@ -177,8 +177,8 @@ class RedisConnection {
             }
 
             // Populate the page-cache global so other RedisConnection instances skip reconnect this request.
-            // Deliberately a different global from the object cache's $ace_redis_shared_connection.
-            $ace_redis_page_connection = $this->redis;
+            // Deliberately a different global from the object cache's $aceredis_shared_connection.
+            $aceredis_page_connection = $this->redis;
         }
         
         return $this->redis;
@@ -214,10 +214,10 @@ class RedisConnection {
         // Bound the worst case. Previously 3 retries x 1.0s timeout (+ backoff) could reach
         // ~3.1s for a single cache op — enough on its own to trip the 3s PHP-FPM slow-log
         // threshold when Redis is flaky. 2 retries x 0.5s caps it near ~1s before failing
-        // open to the DB. Override per-site via ACE_REDIS_* constants (same convention as
+        // open to the DB. Override per-site via ACEREDIS_* constants (same convention as
         // the connection timeouts and the drop-ins).
-        $max_retries = defined('ACE_REDIS_MAX_RETRIES') ? max(1, (int) ACE_REDIS_MAX_RETRIES) : 2;
-        $op_timeout  = defined('ACE_REDIS_OP_TIMEOUT') ? (float) ACE_REDIS_OP_TIMEOUT : 0.5;
+        $max_retries = defined('ACEREDIS_MAX_RETRIES') ? max(1, (int) ACEREDIS_MAX_RETRIES) : 2;
+        $op_timeout  = defined('ACEREDIS_OP_TIMEOUT') ? (float) ACEREDIS_OP_TIMEOUT : 0.5;
         $attempt = 0;
         
         while ($attempt < $max_retries) {
@@ -325,7 +325,7 @@ class RedisConnection {
         // Check for admin AJAX requests
         if (defined('DOING_AJAX') && DOING_AJAX) {
             // Check if it's an admin AJAX request
-            if (isset($_POST['action']) && is_string($_POST['action']) && strpos(sanitize_key(wp_unslash($_POST['action'])), 'ace_redis_') === 0) {
+            if (isset($_POST['action']) && is_string($_POST['action']) && strpos(sanitize_key(wp_unslash($_POST['action'])), 'aceredis_') === 0) {
                 return true;
             }
         }
@@ -457,7 +457,7 @@ class RedisConnection {
      * @return bool True if there have been recent issues
      */
     private function has_recent_redis_issues() {
-        $recent_issues = get_transient('ace_redis_recent_issues');
+        $recent_issues = get_transient('aceredis_recent_issues');
         if (!$recent_issues) {
             return false;
         }
@@ -481,13 +481,13 @@ class RedisConnection {
      * @param string $issue_type Type of issue encountered
      */
     private function record_redis_issue($issue_type = 'connection_failure') {
-        $recent_issues = get_transient('ace_redis_recent_issues') ?: [];
+        $recent_issues = get_transient('aceredis_recent_issues') ?: [];
         $recent_issues[] = time();
         
         // Keep only last 10 issues
         $recent_issues = array_slice($recent_issues, -10);
         
-        set_transient('ace_redis_recent_issues', $recent_issues, 600); // 10 minutes
+        set_transient('aceredis_recent_issues', $recent_issues, 600); // 10 minutes
     }
     
     /**
@@ -704,7 +704,7 @@ class RedisConnection {
      * @return array Test results
      */
     public function test_operations() {
-        $test_key = 'ace_redis_test_' . uniqid();
+        $test_key = 'aceredis_test_' . uniqid();
         $test_value = 'test_value_' . time();
         
         try {

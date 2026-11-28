@@ -1,7 +1,8 @@
 <?php
+if (!defined('ACEREDIS_SETTINGS_OPTION')) { define('ACEREDIS_SETTINGS_OPTION', 'aceredis_cache_settings'); define('ACEREDIS_MANAGED_PLUGINS_OPTION', 'aceredis_managed_plugins'); }
 // Isolated unit suite: load classes without bootstrapping a live site.
 define('ABSPATH', dirname(__DIR__) . '/');
-define('ACE_REDIS_CACHE_PLUGIN_FILE', dirname(__DIR__) . '/ace-redis-cache.php');
+define('ACEREDIS_CACHE_PLUGIN_FILE', dirname(__DIR__) . '/ace-redis-cache.php');
 spl_autoload_register(function ($class) {
     $prefix = 'AceMedia\\RedisCache\\';
     if (strpos($class, $prefix) !== 0) return;
@@ -15,9 +16,9 @@ spl_autoload_register(function ($class) {
     }
 });
 function plugin_basename($file) { return basename(dirname($file)) . '/' . basename($file); }
-define('ACE_OC_FLUSHDB_ON_SAVE', true);
+define('ACEREDIS_OC_FLUSHDB_ON_SAVE', true);
 
-define('ACE_REDIS_CACHE_VERSION', '0.9.0');
+define('ACEREDIS_CACHE_VERSION', '0.9.0');
 
 function wp_parse_url($url, $component = -1) { return parse_url($url, $component); }
 function wp_rand($min = 0, $max = 0) { return $max ? random_int($min, $max) : random_int(0, PHP_INT_MAX); }

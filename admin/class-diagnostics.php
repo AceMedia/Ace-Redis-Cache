@@ -155,7 +155,7 @@ class Diagnostics {
         $diagnostics[] = "";
         
         // Recent issues
-        $recent_issues = get_transient('ace_redis_recent_issues');
+        $recent_issues = get_transient('aceredis_recent_issues');
         if ($recent_issues && is_array($recent_issues)) {
             $diagnostics[] = "=== Recent Issues ===";
             $diagnostics[] = "Issue Count (last 10 minutes): " . count($recent_issues);
@@ -297,7 +297,7 @@ class Diagnostics {
         }
         
         // Check for recent Redis issues
-        $recent_issues = get_transient('ace_redis_recent_issues');
+        $recent_issues = get_transient('aceredis_recent_issues');
         if ($recent_issues && count($recent_issues) > 5) {
             $health['issues'][] = 'Multiple Redis connection issues detected recently (' . count($recent_issues) . ' issues)';
             $health['overall'] = $health['overall'] === 'critical' ? 'critical' : 'warning';

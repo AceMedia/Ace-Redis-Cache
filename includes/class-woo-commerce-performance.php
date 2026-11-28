@@ -155,7 +155,7 @@ class WooCommercePerformance {
         }
 
         if ($this->setting('wc_cache_url_exclusions', true)) {
-            add_filter('ace_redis_cache_excluded_urls', function ($exclusions) {
+            add_filter('aceredis_cache_excluded_urls', function ($exclusions) {
                 return array_merge((array) $exclusions, [
                     '/cart',
                     '/checkout',
@@ -198,7 +198,7 @@ class WooCommercePerformance {
             }
         }, 20);
 
-        add_filter('ace_redis_cache_transient_exclusions', function ($exclusions) {
+        add_filter('aceredis_cache_transient_exclusions', function ($exclusions) {
             $exclusions[] = 'customtaxorder_get_settings';
             return $exclusions;
         }, 20);

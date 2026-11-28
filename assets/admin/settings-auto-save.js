@@ -3,7 +3,7 @@
     var btn = document.getElementById('ace-rc-scope-panel-toggle-btn');
     if (!panel || !btn) return;
 
-    var key = 'ace_rc_scope_panel_collapsed';
+    var key = 'aceredis_scope_panel_collapsed';
     var textEl = btn.querySelector('.ace-rc-scope-panel-toggle-text');
     var iconEl = btn.querySelector('.dashicons');
 

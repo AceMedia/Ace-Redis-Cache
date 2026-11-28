@@ -3,7 +3,7 @@ jQuery(function($) {
             function toggleBasedOnToggles() {
                 const objectOn = $('#enable_object_cache').is(':checked');
                 const $blockCachingRow = $('#block-caching-row');
-                const $blockCachingCheckbox = $('input[name="ace_redis_cache_settings[enable_block_caching]"]');
+                const $blockCachingCheckbox = $('input[name="aceredis_cache_settings[enable_block_caching]"]');
                 const $transientRow = $('#transient-cache-row');
                 $blockCachingRow.toggle(!!objectOn);
                 $transientRow.toggle(!!objectOn);

@@ -4,10 +4,10 @@ namespace AceMedia\RedisCache;
 if (!defined('ABSPATH')) { exit; }
 
 /**
- * Manages activation / deactivation of dependent plugins listed in the ace_managed_plugins option.
+ * Manages activation / deactivation of dependent plugins listed in the aceredis_managed_plugins option.
  */
 class Plugin_Manager {
-    const OPTION = 'ace_managed_plugins';
+    const OPTION = \ACEREDIS_MANAGED_PLUGINS_OPTION;
 
     /**
      * Ensure option exists.

@@ -7,7 +7,7 @@ if (!defined('ABSPATH')) { exit; }
  * Centralized option storage for single-site and multisite network mode.
  */
 class SettingsStore {
-    const SETTINGS_OPTION = 'ace_redis_cache_settings';
+    const SETTINGS_OPTION = \ACEREDIS_SETTINGS_OPTION;
     private static $file_write_error = null;
 
     public static function file_write_error() { return self::$file_write_error; }
@@ -20,8 +20,8 @@ class SettingsStore {
      * @return string
      */
     public static function plugin_basename() {
-        if (defined('ACE_REDIS_CACHE_PLUGIN_FILE')) {
-            return plugin_basename(ACE_REDIS_CACHE_PLUGIN_FILE);
+        if (defined('ACEREDIS_CACHE_PLUGIN_FILE')) {
+            return plugin_basename(ACEREDIS_CACHE_PLUGIN_FILE);
         }
         return 'ace-redis-cache/ace-redis-cache.php';
     }
@@ -72,7 +72,7 @@ class SettingsStore {
             : update_option(self::SETTINGS_OPTION, $value);
         // A retry with unchanged settings still needs to repair a previously failed rules write.
         if (!$saved && self::get_settings(null) === $value && function_exists('do_action')) {
-            do_action('ace_rc_reconcile_static_cache_rules');
+            do_action('aceredis_reconcile_static_cache_rules');
         }
         return $saved;
     }

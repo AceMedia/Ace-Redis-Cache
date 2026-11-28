@@ -3,7 +3,8 @@
 from pathlib import Path
 import fnmatch, hashlib, json, re, subprocess, zipfile
 root = Path(__file__).resolve().parents[1]
-version = re.search(r"define\('ACE_REDIS_CACHE_VERSION', '([^']+)'", (root / 'ace-redis-cache.php').read_text()).group(1)
+SOURCE_ONLY = re.compile(r'^[ \t]*// aceredis-source-only:start\n.*?^[ \t]*// aceredis-source-only:end\n', re.S | re.M)
+version = re.search(r"define\('ACEREDIS_CACHE_VERSION', '([^']+)'", (root / 'ace-redis-cache.php').read_text()).group(1)
 files = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
 patterns = [line.strip().lstrip('/') for line in (root / '.distignore').read_text().splitlines() if line.strip() and not line.startswith('#')]
 files = sorted(p for p in files if p and not any(fnmatch.fnmatch(p, pat) or p.startswith(pat.rstrip('/') + '/') or fnmatch.fnmatch(Path(p).name, pat) for pat in patterns))
@@ -14,6 +15,12 @@ manifest = {}
 with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
     for name in files:
         data = (root / name).read_bytes()
+        if name.endswith('.php'):
+            # Blocks kept only for sites that deploy from source never reach a release.
+            text = SOURCE_ONLY.sub('', data.decode())
+            if 'aceredis-source-only' in text:
+                raise SystemExit('unbalanced source-only markers in ' + name)
+            data = text.encode()
         info = zipfile.ZipInfo('ace-redis-cache/' + name, (2026, 10, 30, 0, 0, 0))
         info.compress_type = zipfile.ZIP_DEFLATED
         info.external_attr = 0o100644 << 16

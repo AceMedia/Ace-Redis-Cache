@@ -3,7 +3,7 @@
 [![WordPress Plugin](https://img.shields.io/badge/WordPress-6.0%2B-blue.svg)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-purple.svg)](https://php.net/)
 [![License](https://img.shields.io/badge/License-GPLv2%2B-green.svg)](https://www.gnu.org/licenses/gpl-2.0.html)
-[![Version](https://img.shields.io/badge/Version-0.9.11-orange.svg)](https://github.com/AceMedia/Ace-Redis-Cache)
+[![Version](https://img.shields.io/badge/Version-0.10.0-orange.svg)](https://github.com/AceMedia/Ace-Redis-Cache)
 
 High-performance full-page, block-aware, and object caching layer for WordPress with dynamic placeholder expansion, micro-caching, intelligent minification, and Brotli/Gzip compression. Designed for edge-grade throughput while preserving dynamic user-facing fragments safely.
 
@@ -17,7 +17,7 @@ High-performance full-page, block-aware, and object caching layer for WordPress 
 - **Requires at least:** 5.0  
 - **Tested up to:** 7.1  
 - **Requires PHP:** 7.4 (8.x recommended)  
-- **Stable tag:** 0.9.11
+- **Stable tag:** 0.10.0
 - **License:** GPLv2 or later  
 - **License URI:** https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,7 +120,7 @@ Any matching exclusion triggers bypass or block-level freshness:
 
 Dynamic blocks always freshly rendered (or micro-cached) then substituted.
 
-**Tracking parameters** never split the page cache: campaign and click IDs (`utm_*`, `gclid`, `gclsrc`, `gbraid`, `wbraid`, `gad_source`, `gad_campaignid`, `dclid`, `srsltid`, `fbclid`, `msclkid`, `twclid`, `ttclid`, `igshid`, `li_fat_id`, `epik`, `yclid`, `hsa_*`, `_hsenc`, `_hsmi`, `_kx`, `mc_cid`, `mc_eid`, `_ga`, `_gl`, `ref`, `v`) are dropped from the key and the rest sorted, so a paid landing is served the same entry as the clean URL. The list lives in `normalize_request_uri()` and its copy in `assets/dropins/advanced-cache.php`; a unit test keeps the two in step. `ace_rc_page_ttl` and `ace_rc_page_grace` receive this normalised URI (0.8.3).
+**Tracking parameters** never split the page cache: campaign and click IDs (`utm_*`, `gclid`, `gclsrc`, `gbraid`, `wbraid`, `gad_source`, `gad_campaignid`, `dclid`, `srsltid`, `fbclid`, `msclkid`, `twclid`, `ttclid`, `igshid`, `li_fat_id`, `epik`, `yclid`, `hsa_*`, `_hsenc`, `_hsmi`, `_kx`, `mc_cid`, `mc_eid`, `_ga`, `_gl`, `ref`, `v`) are dropped from the key and the rest sorted, so a paid landing is served the same entry as the clean URL. The list lives in `normalize_request_uri()` and its copy in `assets/dropins/advanced-cache.php`; a unit test keeps the two in step. `aceredis_page_ttl` and `aceredis_page_grace` receive this normalised URI (0.8.3).
 
 ---
 ## Reliability & Fallbacks
@@ -138,63 +138,63 @@ Dynamic blocks always freshly rendered (or micro-cached) then substituted.
 ---
 ## Developer Hooks (Representative)
 Filters:
-- `ace_redis_cache_enable_page_cache`
-- `ace_redis_cache_page_cache_key_parts`
-- `ace_redis_cache_page_ttl`
-- `ace_redis_cache_dynamic_blocks`
-- `ace_redis_cache_excluded_urls`
-- `ace_redis_cache_should_minify`
-- `ace_redis_cache_should_compress`
-- `ace_redis_cache_block_microcache_ttl`
-- `ace_redis_cache_headers`
-- `ace_redis_cache_placeholder_html`
+- `aceredis_cache_enable_page_cache`
+- `aceredis_cache_page_cache_key_parts`
+- `aceredis_cache_page_ttl`
+- `aceredis_cache_dynamic_blocks`
+- `aceredis_cache_excluded_urls`
+- `aceredis_cache_should_minify`
+- `aceredis_cache_should_compress`
+- `aceredis_cache_block_microcache_ttl`
+- `aceredis_cache_headers`
+- `aceredis_cache_placeholder_html`
 
 Actions:
-- `ace_redis_cache_purge_post`
-- `ace_redis_cache_miss`
-- `ace_redis_cache_hit`
-- `ace_redis_cache_bypass`
-- `ace_redis_cache_purge_all`
-- `ace_redis_cache_connection_failed`
+- `aceredis_cache_purge_post`
+- `aceredis_cache_miss`
+- `aceredis_cache_hit`
+- `aceredis_cache_bypass`
+- `aceredis_cache_purge_all`
+- `aceredis_cache_connection_failed`
 
 See source for additional key derivation, compression and diagnostics hooks.
 
-`ace_redis_cache_page_cache_key_parts` receives both key-part array and context (`request_uri`, `scheme`, `device`, `host`, `version`) and can be used to customize key derivation without forking.
+`aceredis_cache_page_cache_key_parts` receives both key-part array and context (`request_uri`, `scheme`, `device`, `host`, `version`) and can be used to customize key derivation without forking.
 
 ---
 ## Page cache on a separate Redis
-`advanced-cache.php` (early serve) normally reads the same Redis as the object cache. When pages live elsewhere, for example ElastiCache over TLS while the object cache stays on a local socket, define `ACE_REDIS_PAGE_HOST` (`'tls://host'` for TLS) and optionally `ACE_REDIS_PAGE_PORT`, `ACE_REDIS_PAGE_PASSWORD` and `ACE_REDIS_PAGE_DB`. Only the early-serve drop-in uses them, so the object cache doesn't move.
+`advanced-cache.php` (early serve) normally reads the same Redis as the object cache. When pages live elsewhere, for example ElastiCache over TLS while the object cache stays on a local socket, define `ACEREDIS_PAGE_HOST` (`'tls://host'` for TLS) and optionally `ACEREDIS_PAGE_PORT`, `ACEREDIS_PAGE_PASSWORD` and `ACEREDIS_PAGE_DB`. Only the early-serve drop-in uses them, so the object cache doesn't move.
 
 ## Purging one page
-`do_action('ace_redis_cache_purge_url', $url)` deletes that page's stored copies, including the ones the early-serve drop-in (`advanced-cache.php`) reads, which are keyed from the published `ace:1:pagekey:<host>:*` inputs. Keys are deleted one per command, so it also works on Redis/Valkey clusters.
+`do_action('aceredis_cache_purge_url', $url)` deletes that page's stored copies, including the ones the early-serve drop-in (`advanced-cache.php`) reads, which are keyed from the published `ace:1:pagekey:<host>:*` inputs. Keys are deleted one per command, so it also works on Redis/Valkey clusters.
 
 ## Varnish
 If Varnish sits in front of the site, every page-cache purge is mirrored as a Varnish ban for the same pages, so the two layers never disagree. A full or soft purge bans the whole host.
 
 - Auto-detected on `127.0.0.1:6081` (CloudPanel default), checked at most every 10 minutes. Sites not behind Varnish are unaffected.
-- `ACE_RC_VARNISH` (`true`, `false` or `'auto'`) and `ACE_RC_VARNISH_HOST` (`'host:port'`) override detection.
-- Filters: `ace_rc_varnish_enabled`, `ace_rc_varnish_hosts`. Action: `ace_redis_cache_varnish_ban_site`.
+- `ACEREDIS_VARNISH` (`true`, `false` or `'auto'`) and `ACEREDIS_VARNISH_HOST` (`'host:port'`) override detection.
+- Filters: `aceredis_varnish_enabled`, `aceredis_varnish_hosts`. Action: `aceredis_cache_varnish_ban_site`.
 - Expects a VCL that turns `PURGE <regex>` into `ban(req.http.host == ... && req.url ~ <regex>)` and accepts PURGE from localhost (CloudPanel's stock VCL does both).
 - Recommended VCL additions: `return (pass)` for requests carrying `X-AceRedis-Prime`, so background refreshes reach PHP, and a short TTL (e.g. 10s) when `X-AceRedisCache` contains `stale`.
 
 ## Block cache
 Since 0.8.0 the plugin can keep the rendered HTML of expensive dynamic blocks in Redis and replay it on later renders. It is **off by default**; turn it on under Settings > Ace Redis Cache > Caching > Block Cache.
 
-- **What it caches:** WooCommerce product blocks (Product Collection, Handpicked, Newest, On Sale, Best Sellers, Top Rated, Products by Category and A.C.E. Product Variations; the WooCommerce options only show when WooCommerce is active), Query Loop blocks, Latest Posts, and any block you add with the `ace_rc_block_cache_custom_blocks` filter. Each group has its own toggle.
+- **What it caches:** WooCommerce product blocks (Product Collection, Handpicked, Newest, On Sale, Best Sellers, Top Rated, Products by Category and A.C.E. Product Variations; the WooCommerce options only show when WooCommerce is active), Query Loop blocks, Latest Posts, and any block you add with the `aceredis_block_cache_custom_blocks` filter. Each group has its own toggle.
 - **What it never caches:** blocks that read the page or URL (Query Loops that inherit the page query, related/upsells/cross-sells, filterable collections, the product catalogue, anything containing a mini-cart, filters, sorting or comment form), and any render that put a nonce in its HTML or state.
 - **Who gets cached HTML:** anonymous visitors with an empty cart on plain GET requests. Visitors with anything in the cart (cart cookies or a WooCommerce session) and signed-in users get a live render. "Cache for logged-in users" (off by default) caches per role, and only for blocks whose output can only vary by role: WooCommerce blocks are treated as per-user when role, B2B, wholesale or membership pricing plugins are active, or tax is based on the customer's address.
 - **Replay:** on a hit the plugin replays what the render added outside its own HTML (Interactivity API state and config, styles, scripts, script modules, wcSettings data, block-supports CSS, inline CSS such as block style variations, id counters and analytics product trackers), and loads the visitor's cart state fresh, so add to cart, quantities, variations and the mini-cart keep working.
 - **Invalidation:** every post or product read during a render is recorded in a reverse index (one Redis set per post). Saving, restocking or repricing it deletes just the blocks that used it. Changes that can alter which posts a block shows (publish/unpublish, trash, terms, title/date/order, featured, visibility, sale dates, settings) retire that block group. Entries also expire after the TTL (12 hours by default). The pages that showed the affected blocks are purged through the page cache, which also bans them in Varnish when it is detected.
-- **Savings:** hits, misses, average render time on a miss and database queries on a miss are counted per block in one Redis hash per site per day (written once per request). The settings panel shows today and the last 7 days, including the estimated render time and queries saved. Also at `GET /wp-json/ace-redis-cache/v1/block-cache/stats` and `wp ace block-cache stats [--days=7] [--format=json]`.
-- **Flush:** the "Flush block cache" button, `POST /wp-json/ace-redis-cache/v1/block-cache/flush` or `wp ace block-cache flush`. A full cache clear also retires every block entry. Since 0.8.4, saving the settings retires block entries only when a `block_cache_*` setting changed, and a save that only changes `block_cache_*` settings no longer clears the page cache (other settings still clear everything).
-- **Off switches:** `define('ACE_RC_BLOCK_CACHE', false)` (or `true`) overrides the setting; filters `ace_rc_block_cache_enabled`, `ace_rc_block_cache_cacheable` (per block), `ace_rc_block_cache_woo_blocks`, `ace_rc_block_cache_profiles`, `ace_rc_block_cache_context_blocks`, `ace_rc_block_cache_vary`, `ace_rc_block_cache_woo_role_safe`.
+- **Savings:** hits, misses, average render time on a miss and database queries on a miss are counted per block in one Redis hash per site per day (written once per request). The settings panel shows today and the last 7 days, including the estimated render time and queries saved. Also at `GET /wp-json/ace-redis-cache/v1/block-cache/stats` and `wp aceredis block-cache stats [--days=7] [--format=json]`.
+- **Flush:** the "Flush block cache" button, `POST /wp-json/ace-redis-cache/v1/block-cache/flush` or `wp aceredis block-cache flush`. A full cache clear also retires every block entry. Since 0.8.4, saving the settings retires block entries only when a `block_cache_*` setting changed, and a save that only changes `block_cache_*` settings no longer clears the page cache (other settings still clear everything).
+- **Off switches:** `define('ACEREDIS_BLOCK_CACHE', false)` (or `true`) overrides the setting; filters `aceredis_block_cache_enabled`, `aceredis_block_cache_cacheable` (per block), `aceredis_block_cache_woo_blocks`, `aceredis_block_cache_profiles`, `aceredis_block_cache_context_blocks`, `aceredis_block_cache_vary`, `aceredis_block_cache_woo_role_safe`.
 - **Debugging:** the `X-Ace-Block-Cache` response header lists `hit`, `miss`, `skip` or `live-<reason>` for each cached block type on the page; send `X-Ace-Block-Cache-Debug: 1` to include the block names.
 - **Class numbers:** stored copies rename the per-request sequential classes (`wp-elements-N`, `wp-container-N`, `is-style-<variation>--N`) to `...-bc<hash>-N` in the HTML and its CSS, so a cached block can never share a number (and pick up the colours) of another block on the page.
-- **Site profiles (0.8.2):** a site can add its own profile with `ace_rc_block_cache_profiles`. Besides `label`, `setting`, `blocks`, `dep_types`, `role_safe` and `bump_on_update`, a profile can set `ttl` (seconds, capped at the global TTL) and `vary_page` => true for blocks that read the page (key adds the queried object, the post in the loop, the page number and whether the post body is rendering), or `vary` (a callable given the parsed block). Scripts and styles a block both registers and enqueues inside its render are now re-registered on a hit.
+- **Site profiles (0.8.2):** a site can add its own profile with `aceredis_block_cache_profiles`. Besides `label`, `setting`, `blocks`, `dep_types`, `role_safe` and `bump_on_update`, a profile can set `ttl` (seconds, capped at the global TTL) and `vary_page` => true for blocks that read the page (key adds the queried object, the post in the loop, the page number and whether the post body is rendering), or `vary` (a callable given the parsed block). Scripts and styles a block both registers and enqueues inside its render are now re-registered on a hit.
 - **TTL-only profiles (0.8.4):** by default publish, unpublish, trash, term and order changes retire every post profile. Set `retire_on_publish` => false and the profile relies on its `ttl`, the per-post reverse index (editing a post it showed still refreshes it) and any `BlockCache::instance()->bump('<profile>')` calls of your own. Use it for listings on busy sites where a few minutes' lag is fine, for example a news hub publishing ten stories an hour:
 
 ```php
-add_filter('ace_rc_block_cache_profiles', function ($profiles) {
+add_filter('aceredis_block_cache_profiles', function ($profiles) {
     $profiles['hub'] = [
         'label' => 'News hub',
         'setting' => 'block_cache_custom',
@@ -267,7 +267,7 @@ Fresh installations start with caching disabled. Configure a Redis/Valkey servic
 
 Page caching and standalone HTML minification require WordPress 6.9's template enhancement output buffer. Older WordPress versions render pages live while object and transient caches remain available. Block HTML caching requires the WordPress 6.5 Interactivity API; earlier versions render blocks live. Custom routes that exit before WordPress renders a template also render live. Fresh response compression is delegated to the web server so the core HTML filter always receives HTML.
 
-Automatic drop-in upgrades only replace ARC-owned regular files. Foreign files and symlinks are left untouched; a failed write can be retried after correcting directory permissions. OPcache controls invalidate only real files inside this site's content directory; symlinks resolving to shared code are excluded. The legacy ACE_OC_FLUSHDB_ON_SAVE constant no longer enables a database-wide flush.
+Automatic drop-in upgrades only replace ARC-owned regular files. Foreign files and symlinks are left untouched; a failed write can be retried after correcting directory permissions. OPcache controls invalidate only real files inside this site's content directory; symlinks resolving to shared code are excluded. The legacy ACEREDIS_OC_FLUSHDB_ON_SAVE constant no longer enables a database-wide flush.
 
 The source-only diagnostics require CLI and are excluded from the public ZIP. See readme.txt for external connection disclosures and the build command.
 

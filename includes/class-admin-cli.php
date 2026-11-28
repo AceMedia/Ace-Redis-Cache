@@ -9,9 +9,9 @@ if (!defined('ABSPATH')) { exit; }
 class Admin_CLI {
     public static function register() {
         if (defined('WP_CLI') && WP_CLI) {
-            \WP_CLI::add_command('ace autoload-top', [__CLASS__, 'cmd_top']);
-            \WP_CLI::add_command('ace trim-autoload', [__CLASS__, 'cmd_trim']);
-            \WP_CLI::add_command('ace block-cache', [__CLASS__, 'cmd_block_cache']);
+            \WP_CLI::add_command('aceredis autoload-top', [__CLASS__, 'cmd_top']);
+            \WP_CLI::add_command('aceredis trim-autoload', [__CLASS__, 'cmd_trim']);
+            \WP_CLI::add_command('aceredis block-cache', [__CLASS__, 'cmd_block_cache']);
         }
     }
 
@@ -47,7 +47,7 @@ class Admin_CLI {
     }
 
     /**
-     * Block cache: `wp ace block-cache stats [--days=7] [--format=table|json]` or `wp ace block-cache flush`.
+     * Block cache: `wp aceredis block-cache stats [--days=7] [--format=table|json]` or `wp aceredis block-cache flush`.
      */
     public static function cmd_block_cache($args, $assoc) {
         $bc = BlockCache::instance();

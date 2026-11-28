@@ -78,11 +78,11 @@ import { settingsSaveError } from './components/settings-save-error.js';
                 // Read any prior preference to seed the component correctly
                 // Default: auto-save OFF unless user explicitly enabled before
                 let initialAuto = false;
-                if (typeof ace_redis_admin !== 'undefined' && ace_redis_admin.user_auto_save !== null) {
-                    initialAuto = !!ace_redis_admin.user_auto_save;
+                if (typeof aceredis_admin !== 'undefined' && aceredis_admin.user_auto_save !== null) {
+                    initialAuto = !!aceredis_admin.user_auto_save;
                 } else {
                     try {
-                        const stored = localStorage.getItem('ace_redis_auto_save_enabled');
+                        const stored = localStorage.getItem('aceredis_auto_save_enabled');
                         if (stored !== null) initialAuto = (stored === '1');
                     } catch (e) { /* ignore */ }
                 }
@@ -133,14 +133,14 @@ import { settingsSaveError } from './components/settings-save-error.js';
                 formData.__managed_plugins = this.collectManagedPlugins();
 
                 $.ajax({
-                    url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
+                    url: aceredis_admin.rest_url + 'ace-redis-cache/v1/settings',
                     type: 'POST',
                     beforeSend: function(xhr) {
-                        xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                        xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                     },
                     data: {
                         settings: formData,
-                        nonce: ace_redis_admin.nonce
+                        nonce: aceredis_admin.nonce
                     },
                     success: (response) => {
                         if (response && response.success === true) {
@@ -204,9 +204,9 @@ import { settingsSaveError } from './components/settings-save-error.js';
             $badge.text('checking').css({background:'#ddd', color:'#333'});
             if ($tips.length && !$tips.data('populated')) { $tips.html('Loading cache health…'); }
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/health',
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/health',
                 type: 'GET',
-                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce)
+                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce)
             }).done((resp) => {
                 if (!resp || !resp.success || !resp.data) {
                     this.setTransientStatus('error', 'error');
@@ -292,10 +292,10 @@ import { settingsSaveError } from './components/settings-save-error.js';
                 $reset.on('click', () => {
                     // Simple REST shim via existing settings endpoint: send flag to reset
                     $.ajax({
-                        url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
+                        url: aceredis_admin.rest_url + 'ace-redis-cache/v1/settings',
                         type: 'POST',
-                        beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce),
-                        data: { reset_slow_ops: 1, nonce: ace_redis_admin.nonce },
+                        beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce),
+                        data: { reset_slow_ops: 1, nonce: aceredis_admin.nonce },
                         success: () => {
                             $('#ace-rc-slow-ops-val').text('0');
                         }
@@ -470,10 +470,10 @@ import { settingsSaveError } from './components/settings-save-error.js';
             const original = $btn.text();
             $btn.prop('disabled', true).text('Working...');
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/' + endpoint,
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/' + endpoint,
                 method: 'POST',
-                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce),
-                data: { nonce: ace_redis_admin.nonce }
+                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce),
+                data: { nonce: aceredis_admin.nonce }
             }).done((resp) => {
                 if (resp && resp.success) {
                     let message = '✅ ' + (resp.message || 'Success');
@@ -494,9 +494,9 @@ import { settingsSaveError } from './components/settings-save-error.js';
 
         fetchOpcacheStatus() {
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/opcache-status',
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/opcache-status',
                 method: 'GET',
-                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce)
+                beforeSend: (xhr) => xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce)
             }).done((resp) => {
                 if (resp && resp.success && resp.data) {
                     const d = resp.data;
@@ -539,13 +539,13 @@ import { settingsSaveError } from './components/settings-save-error.js';
             $btn.text('Testing...').prop('disabled', true);
 
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/test-connection",
+                url: aceredis_admin.rest_url + "ace-redis-cache/v1/test-connection",
                 type: 'POST',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 },
                 data: {
-                    nonce: ace_redis_admin.nonce
+                    nonce: aceredis_admin.nonce
                 }
             })
                 .done((response) => {
@@ -571,13 +571,13 @@ import { settingsSaveError } from './components/settings-save-error.js';
             $btn.text('Testing...').prop('disabled', true);
 
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/test-write-read",
+                url: aceredis_admin.rest_url + "ace-redis-cache/v1/test-write-read",
                 type: 'POST',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 },
                 data: {
-                    nonce: ace_redis_admin.nonce
+                    nonce: aceredis_admin.nonce
                 }
             })
                 .done((response) => {
@@ -733,10 +733,10 @@ import { settingsSaveError } from './components/settings-save-error.js';
 
         loadCachePurgeStatus(continuePolling = false) {
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache/status",
+                url: aceredis_admin.rest_url + "ace-redis-cache/v1/flush-cache/status",
                 type: 'GET',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 }
             })
                 .done((response) => {
@@ -770,13 +770,13 @@ import { settingsSaveError } from './components/settings-save-error.js';
             $btn.text('Clearing...').prop('disabled', true);
 
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
+                url: aceredis_admin.rest_url + "ace-redis-cache/v1/flush-cache",
                 type: 'POST',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 },
                 data: {
-                    nonce: ace_redis_admin.nonce,
+                    nonce: aceredis_admin.nonce,
                     type: 'all'
                 }
             })
@@ -817,13 +817,13 @@ import { settingsSaveError } from './components/settings-save-error.js';
             $results.html('<p>⏳ Running comprehensive diagnostics...</p>');
 
             $.ajax({
-                url: ace_redis_admin.rest_url + "ace-redis-cache/v1/diagnostics",
+                url: aceredis_admin.rest_url + "ace-redis-cache/v1/diagnostics",
                 type: 'POST',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 },
                 data: {
-                    nonce: ace_redis_admin.nonce
+                    nonce: aceredis_admin.nonce
                 }
             })
                 .done((response) => {
@@ -1021,8 +1021,8 @@ import { settingsSaveError } from './components/settings-save-error.js';
             const formData = {};
             
             $form.serializeArray().forEach(field => {
-                if (field.name.startsWith('ace_redis_cache_settings[')) {
-                    const key = field.name.replace('ace_redis_cache_settings[', '').replace(']', '');
+                if (field.name.startsWith('aceredis_cache_settings[')) {
+                    const key = field.name.replace('aceredis_cache_settings[', '').replace(']', '');
                     formData[key] = field.value;
                 }
             });
@@ -1030,8 +1030,8 @@ import { settingsSaveError } from './components/settings-save-error.js';
             // Add checkbox values (unchecked boxes don't get serialized)
             $form.find('input[type="checkbox"]').each(function() {
                 const name = $(this).attr('name');
-                if (name && name.startsWith('ace_redis_cache_settings[')) {
-                    const key = name.replace('ace_redis_cache_settings[', '').replace(']', '');
+                if (name && name.startsWith('aceredis_cache_settings[')) {
+                    const key = name.replace('aceredis_cache_settings[', '').replace(']', '');
                     formData[key] = $(this).is(':checked') ? '1' : '0';
                 }
             });
@@ -1075,18 +1075,18 @@ import { settingsSaveError } from './components/settings-save-error.js';
             const formData = this.getFormDataObject();
 
             console.log('Sending data:', formData);
-            console.log('REST URL:', ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings');
+            console.log('REST URL:', aceredis_admin.rest_url + 'ace-redis-cache/v1/settings');
 
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/settings',
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/settings',
                 type: 'POST',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
-                    console.log('Set REST nonce:', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
+                    console.log('Set REST nonce:', aceredis_admin.rest_nonce);
                 },
                 data: {
                     settings: formData,
-                    nonce: ace_redis_admin.nonce
+                    nonce: aceredis_admin.nonce
                 },
                 success: (response) => {
                     console.log('Success response:', response);
@@ -1290,10 +1290,10 @@ import { settingsSaveError } from './components/settings-save-error.js';
             }
             const scope = options.scope || 'basic';
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/metrics',
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/metrics',
                 type: 'GET',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 },
                 data: { scope },
                 success: (response) => {
@@ -1503,10 +1503,10 @@ import { settingsSaveError } from './components/settings-save-error.js';
 
             this.pluginMemoryFetching = true;
             $.ajax({
-                url: ace_redis_admin.rest_url + 'ace-redis-cache/v1/plugin-memory',
+                url: aceredis_admin.rest_url + 'ace-redis-cache/v1/plugin-memory',
                 type: 'GET',
                 beforeSend: function(xhr) {
-                    xhr.setRequestHeader('X-WP-Nonce', ace_redis_admin.rest_nonce);
+                    xhr.setRequestHeader('X-WP-Nonce', aceredis_admin.rest_nonce);
                 }
             })
             .done((resp) => {

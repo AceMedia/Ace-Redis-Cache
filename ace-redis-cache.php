@@ -2,10 +2,9 @@
 /**
  * Plugin Name: Ace Redis Cache
  * Description: Smart Redis-powered caching with WordPress Block API support and configurable exclusions for any plugins.
- * Version: 0.9.11
+ * Version: 0.10.0
  * Author: Ace Media
  * Requires at least: 5.0
- * Tested up to: 7.1
  * Requires PHP: 7.4
  * Network: true
  * License: GPL v2 or later
@@ -18,11 +17,42 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// aceredis-source-only:start
+// Sites set these in wp-config.php under the names used before 0.10.0.
+foreach (array('ACE_FORCE_TRANSIENT_FLUSH', 'ACE_OC_ADMIN_CACHE_SUSPENDED', 'ACE_OC_ADMIN_READ', 'ACE_OC_BYPASS', 'ACE_OC_FLUSHDB_ON_SAVE', 'ACE_OC_FLUSH_ON_POST_CHANGE', 'ACE_OC_MAX_TTL', 'ACE_OC_MEMBER_READ', 'ACE_OC_NO_PUBLIC_AJAX', 'ACE_OC_PROF', 'ACE_OC_RUNTIME_ONLY', 'ACE_OC_SHARED_TRANSIENTS', 'ACE_OC_SLOW_LOG', 'ACE_OC_SLOW_LOG_MS', 'ACE_OC_WC_READ', 'ACE_RC_BLOCK_CACHE', 'ACE_RC_EXIT_ON_HIT', 'ACE_RC_VARNISH', 'ACE_RC_VARNISH_HOST', 'ACE_REDIS_DB', 'ACE_REDIS_EARLY_REFRESH_ADDR', 'ACE_REDIS_EARLY_SERVE', 'ACE_REDIS_EARLY_STALE', 'ACE_REDIS_EARLY_STALE_BLOCKS', 'ACE_REDIS_HOST', 'ACE_REDIS_MAX_RETRIES', 'ACE_REDIS_OP_TIMEOUT', 'ACE_REDIS_PAGE_DB', 'ACE_REDIS_PAGE_HOST', 'ACE_REDIS_PAGE_PASSWORD', 'ACE_REDIS_PAGE_PORT', 'ACE_REDIS_PASSWORD', 'ACE_REDIS_PORT', 'ACE_REDIS_READ_TIMEOUT', 'ACE_REDIS_SOCKET', 'ACE_REDIS_TIMEOUT', 'ACE_REDIS_USE_TLS', 'ACE_REDIS_VERIFY_TLS') as $aceredis_old) {
+    $aceredis_new = 'ACEREDIS_' . substr($aceredis_old, 0 === strpos($aceredis_old, 'ACE_REDIS_') ? 10 : (0 === strpos($aceredis_old, 'ACE_OC_') ? 4 : (0 === strpos($aceredis_old, 'ACE_RC_') ? 7 : 4)));
+    if (defined($aceredis_old) && !defined($aceredis_new)) { define($aceredis_new, constant($aceredis_old)); }
+}
+unset($aceredis_old, $aceredis_new);
+// aceredis-source-only:end
+
 // Define plugin constants
-define('ACE_REDIS_CACHE_VERSION', '0.9.11');
-define('ACE_REDIS_CACHE_PLUGIN_FILE', __FILE__);
-define('ACE_REDIS_CACHE_PLUGIN_PATH', plugin_dir_path(__FILE__));
-define('ACE_REDIS_CACHE_PLUGIN_URL', plugin_dir_url(__FILE__));
+define('ACEREDIS_CACHE_VERSION', '0.10.0');
+define('ACEREDIS_CACHE_PLUGIN_FILE', __FILE__);
+define('ACEREDIS_CACHE_PLUGIN_PATH', plugin_dir_path(__FILE__));
+define('ACEREDIS_CACHE_PLUGIN_URL', plugin_dir_url(__FILE__));
+
+// The option rows that hold the settings and the managed plugin list.
+$aceredis_settings_option = 'aceredis_cache_settings';
+$aceredis_managed_option  = 'aceredis_managed_plugins';
+// aceredis-source-only:start
+// A site that still has its settings under the old row name keeps using it until
+// `wp aceredis convert-names` moves the row.
+if (null === get_option('aceredis_cache_settings', null) && null === get_site_option('aceredis_cache_settings', null)
+    && (null !== get_option('ace_redis_cache_settings', null) || null !== get_site_option('ace_redis_cache_settings', null))) {
+    $aceredis_settings_option = 'ace_redis_cache_settings';
+    $aceredis_managed_option  = 'ace_managed_plugins';
+}
+// aceredis-source-only:end
+define('ACEREDIS_SETTINGS_OPTION', $aceredis_settings_option);
+define('ACEREDIS_MANAGED_PLUGINS_OPTION', $aceredis_managed_option);
+unset($aceredis_settings_option, $aceredis_managed_option);
+
+// aceredis-source-only:start
+if (is_readable(__DIR__ . '/compat/legacy-names.php')) {
+    require_once __DIR__ . '/compat/legacy-names.php';
+}
+// aceredis-source-only:end
 
 /**
  * Main plugin bootstrap class
@@ -140,12 +170,12 @@ class AceRedisCacheBootstrap {
             
             // Try includes directory first
             foreach ([$class_file, $alt_file] as $candidate) {
-                $includes_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'includes/' . $candidate;
+                $includes_file = ACEREDIS_CACHE_PLUGIN_PATH . 'includes/' . $candidate;
                 if (file_exists($includes_file)) {
                     require_once $includes_file;
                     return;
                 }
-                $admin_file = ACE_REDIS_CACHE_PLUGIN_PATH . 'admin/' . $candidate;
+                $admin_file = ACEREDIS_CACHE_PLUGIN_PATH . 'admin/' . $candidate;
                 if (file_exists($admin_file)) {
                     require_once $admin_file;
                     return;
@@ -233,18 +263,18 @@ class AceRedisCacheBootstrap {
     public static function on_uninstall() {
         // Clean up options in the active storage scope.
         if (class_exists('AceMedia\\RedisCache\\SettingsStore')) {
-            \AceMedia\RedisCache\SettingsStore::delete('ace_redis_cache_settings');
-            \AceMedia\RedisCache\SettingsStore::delete('ace_redis_cache_dismissed_version');
+            \AceMedia\RedisCache\SettingsStore::delete(ACEREDIS_SETTINGS_OPTION);
+            \AceMedia\RedisCache\SettingsStore::delete('aceredis_cache_dismissed_version');
         } else {
-            delete_option('ace_redis_cache_settings');
-            delete_site_option('ace_redis_cache_settings');
-            delete_option('ace_redis_cache_dismissed_version');
-            delete_site_option('ace_redis_cache_dismissed_version');
+            delete_option(ACEREDIS_SETTINGS_OPTION);
+            delete_site_option(ACEREDIS_SETTINGS_OPTION);
+            delete_option('aceredis_cache_dismissed_version');
+            delete_site_option('aceredis_cache_dismissed_version');
         }
         
         // Clean up transients
-        delete_transient('ace_redis_circuit_breaker');
-        delete_transient('ace_redis_recent_issues');
+        delete_transient('aceredis_circuit_breaker');
+        delete_transient('aceredis_recent_issues');
         
         // Note: We don't clear Redis cache data as it might be used by other applications
     }
@@ -267,20 +297,20 @@ AceRedisCacheBootstrap::getInstance();
  *
  * @return \AceMedia\RedisCache\AceRedisCache|null
  */
-function ace_redis_cache() {
+function aceredis_cache() {
     return AceRedisCacheBootstrap::getInstance()->get_plugin();
 }
 
 /**
  * Mark every cached page stale without deleting it (see AceRedisCache::soft_purge_page_cache()).
- * For deploy hooks and imports. Calls within ace_rc_soft_purge_min_interval of the last soft
+ * For deploy hooks and imports. Calls within aceredis_soft_purge_min_interval of the last soft
  * purge are coalesced into one trailing purge; pass $force = true (deploys) to purge at once.
  *
  * @param bool $force Skip the coalescing window.
  * @return bool False when soft purging is not possible here; the caller should purge instead.
  */
-function ace_rc_soft_purge_page_cache($force = false) {
-    $plugin = ace_redis_cache();
+function aceredis_soft_purge_page_cache($force = false) {
+    $plugin = aceredis_cache();
     return $plugin && method_exists($plugin, 'soft_purge_page_cache') && $plugin->soft_purge_page_cache((bool) $force);
 }
 
@@ -294,7 +324,7 @@ function ace_rc_soft_purge_page_cache($force = false) {
  * @param int|null $ttl     Seconds, else the setting's TTL.
  * @return mixed
  */
-function ace_rc_admin_cache_remember($key, callable $compute, array $tags = [], $ttl = null) {
+function aceredis_admin_cache_remember($key, callable $compute, array $tags = [], $ttl = null) {
     if (!class_exists('AceMedia\\RedisCache\\AdminQueryCache')) {
         return $compute();
     }
@@ -306,7 +336,7 @@ function ace_rc_admin_cache_remember($key, callable $compute, array $tags = [], 
  *
  * @param string $tag
  */
-function ace_rc_admin_cache_bump($tag) {
+function aceredis_admin_cache_bump($tag) {
     if (class_exists('AceMedia\\RedisCache\\AdminQueryCache')) {
         \AceMedia\RedisCache\AdminQueryCache::bump($tag);
     }
